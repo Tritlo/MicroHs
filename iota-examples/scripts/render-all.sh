@@ -62,14 +62,16 @@ radial Quicksort Quicksort.ex312 qs312_iota "quicksort [3,1,2] -> iota"
 # combinator's reduction rule to S/K/I, then to iota), and tiled into one montage.
 : > "$WORK/empty.dump"
 ZOO="S K I B C A U Z P R O J S' B' C' C'B K2 K3 K4 Y"
-# definition shown under each: iota form for S/K/I, combinator algebra for the
-# rest (all verified by reduction).  P in Y = S P P is the SK form of \x.f(x x).
+ZFONT=DejaVu-Sans-Mono   # has a clear Greek iota, distinct from I
+# definition under each: iota form for S/K/I, combinator algebra for the rest
+# (all verified by reduction).  The P in Y=SPP is the SK form of \x.f(x x) (an
+# open term), NOT the pairing combinator P listed in the zoo.
 declare -A DEF=(
   [S]='ι(ι(ι(ιι)))' [K]='ι(ι(ιι))' [I]='ιι'
   [B]='S(KS)K' [C]='S(BBS)(KK)' [A]='KI' [U]='CI' [Z]='BK'
   [P]='BC(CI)' [R]='CC' [O]='B(BK)(BC(CI))' [J]='BK(CI)'
-  ["S'"]='B(BS)B' ["B'"]='BB' ["C'"]='B(BC)B' ["C'B"]="C' B"
-  [K2]='BKK' [K3]='B K2 K' [K4]='B K3 K' [Y]='S P P'
+  ["S'"]='B(BS)B' ["B'"]='BB' ["C'"]='B(BC)B' ["C'B"]='C'"'"'B'
+  [K2]='BKK' [K3]='BK2K' [K4]='BK3K' [Y]='SPP'
 )
 radial_tiles=()
 for c in $ZOO; do
@@ -81,9 +83,15 @@ for c in $ZOO; do
 ${DEF[$c]}" "$WORK/zr_$safe.png" )
 done
 montage "${radial_tiles[@]}" -tile 5x4 -geometry 360x396+8+10 -background '#0b0f17' \
-  -fill '#dbe2ee' -pointsize 30 -title "MicroHs combinators in iota  —  defn under each   (P = \\x. f (x x))" \
-  "$PIC/zoo_iota.png"
-convert "$PIC/zoo_iota.png" -depth 8 "$PIC/zoo_iota.png"
+  -fill '#dbe2ee' -font "$ZFONT" -pointsize 28 "$WORK/zgrid.png"
+ZW="$(identify -format '%w' "$WORK/zgrid.png")"
+convert -background '#0b0f17' -fill '#e8edf5' -font "$ZFONT" -pointsize 40 -size "${ZW}x" \
+  -gravity center caption:"MicroHs combinators as iota trees (symbol counts)" "$WORK/zh1.png"
+convert -background '#0b0f17' -fill '#9fb0c8' -font "$ZFONT" -pointsize 30 -size "${ZW}x" \
+  -gravity center caption:"ι = λf.((fλa.λb.λc.((ac)(bc)))λd.λe.d)" "$WORK/zh2.png"
+convert -size "${ZW}x18" xc:'#0b0f17' "$WORK/zpad.png"
+convert "$WORK/zpad.png" "$WORK/zh1.png" "$WORK/zh2.png" "$WORK/zpad.png" "$WORK/zgrid.png" \
+  -background '#0b0f17' -append -depth 8 "$PIC/zoo_iota.png"
 echo "  $PIC/zoo_iota.png"
 
 small_tiles=()       # the small ones are legible top-down
