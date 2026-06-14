@@ -1,0 +1,5 @@
+# compiled tool binaries and GHC intermediates
+/iota
+/check
+*.o
+*.hi
