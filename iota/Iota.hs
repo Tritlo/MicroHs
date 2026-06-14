@@ -119,6 +119,7 @@ zoo = M.fromList
   , ("K2",  lam ["x","y","z"] (v"x"))
   , ("K3",  lam ["x","y","z","w"] (v"x"))
   , ("K4",  lam ["x","y","z","w","u"] (v"x"))
+  , ("J",   lam ["x","y","z"] (v"z" # v"x"))
     -- Curry's fixed-point combinator; finite lambda -> finite SK term.
   , ("Y",   Lam "f" (App yh yh))
   ]
@@ -195,12 +196,28 @@ encodeIota (Ap a b)  = '0' : encodeIota a ++ encodeIota b
 ------------------------------------------------------------------------
 -- Inlining references from a root.
 
+-- does leaf `x` occur in the term?
+occurs :: String -> Tm -> Bool
+occurs x (Lf s)   = s == x
+occurs x (Ap a b) = occurs x a || occurs x b
+
+-- naive bracket abstraction over a leaf variable: \x. t  in S/K/I
+absTm :: String -> Tm -> Tm
+absTm x (Lf s) | s == x    = Lf "I"
+               | otherwise = Ap (Lf "K") (Lf s)
+absTm x (Ap a b)           = Ap (Ap (Lf "S") (absTm x a)) (absTm x b)
+
 inline :: M.Map String Tm -> String -> Tm
-inline defs root = go [] (Lf root)
+inline defs0 root = go [] (Lf root)
   where
+    -- MicroHs leaves top-level recursion as self-referential defs (f = ...f...).
+    -- Rewrite each into a finite Y-term so the result is a tree, not a cycle.
+    defs = M.mapWithKey ywrap defs0
+    ywrap name body | occurs name body = Ap (Lf "Y") (absTm name body)
+                    | otherwise        = body
     go stack (Ap a b) = Ap (go stack a) (go stack b)
     go stack (Lf s)
-      | s `elem` stack             = Lf ("<rec:" ++ s ++ ">")  -- cycle guard
+      | s `elem` stack             = Lf ("<rec:" ++ s ++ ">")  -- mutual-cycle guard
       | Just t <- M.lookup s defs  = go (s:stack) t
       | otherwise                  = Lf s                       -- comb / prim / lit
 
