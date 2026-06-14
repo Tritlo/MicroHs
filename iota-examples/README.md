@@ -1,0 +1,54 @@
+# iota-examples
+
+Worked examples of compiling MicroHs programs down to [Barker's Iota](https://en.wikipedia.org/wiki/Iota_and_Jot)
+and rendering them as binary trees, using the tool in [`../iota`](../iota).
+
+Each program is **primitive-free** (no `Int`, `Char`, `IO`, or literals), so it
+compiles to *pure* combinators and has a real iota encoding (`iota = "1" | "0" iota iota`,
+`1` = `ι = λf.fSK`, `0 a b` = apply). The pictures are the iota terms drawn as
+trees: tidy top-down for the small combinator structure, radial for the large
+ι-expansions ("mandalas").
+
+```
+layout    of           dir
+programs/   the source modules
+pictures/   the rendered PNGs
+scripts/    render-all.sh — regenerates every picture from the programs
+```
+
+## Regenerate
+
+Needs `bin/gmhs` (`make bin/gmhs`), `ghc`, `python3`, and ImageMagick `convert`.
+
+```sh
+bash iota-examples/scripts/render-all.sh
+```
+
+## The examples
+
+| program | definition | MicroHs combinators | iota | picture |
+|---|---|---|---|---|
+| `Demo.tw` | `\f x -> f (f x)` (Church 2) | `S B I` | 581 | `tw_comb.png`, `tw_iota.png` |
+| `Church6.six` | `\f x -> f^6 x` | `(S B)^5 ∘ I` | 2 806 | `six_iota.png` |
+| `ChurchLt.lt` | `<` on Church numerals (Kleene `pred`) | `B leq suc`, 45 nodes | 15 403 | `lt_comb.png`, `lt_iota.png` |
+| `ChurchList.cons` | `\h t c n -> c h (t c n)` | `(B (S' B)) U` | 3 983 | `cons_comb.png` |
+| `ChurchList.l3` | the list `[a,b,c]` | 33 nodes | 19 323 | `l3_iota.png` |
+| `Prim.mix` | combinators around `(+)` | has `<+>` box | — (impure) | `mix_comb.png` |
+| `Quicksort.qs3` | `quicksort [a,b,c]` | 291 nodes | 83 007 | `qs3_iota.png` |
+| `Quicksort.ex312` | `quicksort [3,1,2]` | 295 nodes | 75 927 | `qs312_iota.png` |
+
+### Notes
+
+- **Booleans / data are free.** MicroHs Scott-encodes algebraic data to pure
+  combinators (`False=K`, `True=A`, `Z=K`, `S=J`, `Nil=K`, `Cons=O`), so
+  `Quicksort` uses ordinary `data` types yet stays primitive-free. Hand-rolled
+  Church/Scott lambdas would also work but trip Hindley-Milner's occurs check.
+- **Recursion.** MicroHs leaves top-level recursion as self-referential defs
+  (`quicksort = …quicksort…`), which is a *cycle* with no finite tree. The
+  renderer rewrites each into `Y (\f. …f…)` to get a finite iota term.
+- **Primitives** (`Prim.mix`) have no combinatory form, so they render as opaque
+  `<...>` leaf boxes and the iota string is suppressed for that term.
+- **Quicksort terms are unreduced** — the algorithm *applied to* its input, not
+  the sorted result (which would reduce to a tiny `[1,2,3]`).
+
+See [`../iota/README.md`](../iota/README.md) for the tool and pipeline.
