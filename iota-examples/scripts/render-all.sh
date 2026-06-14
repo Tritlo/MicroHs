@@ -56,5 +56,37 @@ dump Quicksort
 radial Quicksort Quicksort.qs3   qs3_iota   "quicksort [a,b,c] -> iota (83007 symbols)"
 radial Quicksort Quicksort.ex312 qs312_iota "quicksort [3,1,2] -> iota (75927 symbols)"
 
+# --- the combinator zoo: every MicroHs combinator as its own iota tree ---
+# Each combinator is rendered straight from an empty dump (the tool expands the
+# combinator's reduction rule to S/K, then to iota), and tiled into one montage.
+: > "$WORK/empty.dump"
+ZOO="S K I B C A U Z P R O J S' B' C' C'B K2 K3 K4 Y"
+radial_tiles=()
+for c in $ZOO; do
+  s="$("$IOTA" iota "$WORK/empty.dump" "$c")"
+  safe="$(printf '%s' "$c" | tr "'" p)"
+  printf '%s' "$s" | python3 iota/treedraw.py radial iota "$WORK/zr_$safe.svg" "" >/dev/null
+  convert -density 60 -depth 8 -background '#0b0f17' "$WORK/zr_$safe.svg" "$WORK/zr_$safe.png"
+  radial_tiles+=( -label "$c  (${#s})" "$WORK/zr_$safe.png" )
+done
+montage "${radial_tiles[@]}" -tile 5x4 -geometry 360x360+8+8 -background '#0b0f17' \
+  -fill '#cdd6e6' -pointsize 30 -title "MicroHs combinators as iota trees (symbol counts)" \
+  "$PIC/zoo_iota.png"
+convert "$PIC/zoo_iota.png" -depth 8 "$PIC/zoo_iota.png"
+echo "  $PIC/zoo_iota.png"
+
+small_tiles=()       # the small ones are legible top-down
+for c in S K I A; do
+  s="$("$IOTA" iota "$WORK/empty.dump" "$c")"
+  printf '%s' "$s" | python3 iota/treedraw.py topdown iota "$WORK/zt_$c.svg" "" >/dev/null
+  convert -density 90 -background white "$WORK/zt_$c.svg" "$WORK/zt_$c.png"
+  small_tiles+=( -label "$c  (${#s})" "$WORK/zt_$c.png" )
+done
+montage "${small_tiles[@]}" -tile 2x2 -geometry 640x470+14+16 -background white \
+  -fill '#222' -pointsize 26 -title "Small combinators as iota trees (top-down)" \
+  "$PIC/zoo_topdown.png"
+convert "$PIC/zoo_topdown.png" -depth 8 "$PIC/zoo_topdown.png"
+echo "  $PIC/zoo_topdown.png"
+
 rm -rf "$WORK"
 echo "done."
