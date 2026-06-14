@@ -9,8 +9,8 @@ to [Barker's Iota](https://en.wikipedia.org/wiki/Iota_and_Jot)
 
 ```
 MicroHs source ──gmhs -ddump-combinator──► combinator term (S K I B C S' … Y)
-               ──bracket-abstract each combinator's rule──► pure S/K
-               ──S → 010101011, K → 0101011, app → 0──────► iota 0/1 string
+               ──bracket-abstract each combinator's rule──► pure S/K/I
+               ──I → 011, K → 0101011, S → 010101011, app → 0──► iota 0/1 string
                ──layout──────────────────────────────────► ASCII / SVG / PNG
 ```
 
@@ -39,7 +39,7 @@ gmhs -i. -ilib -ddump-combinator MyModule 2>/dev/null | grep ' = ' > my.dump
 ```sh
 iota my.dump  Mod.name [maxIotaTreeNodes]   # ASCII trees + iota string (default)
 iota sexp  my.dump Mod.name                 # combinator tree as an s-expression
-iota sk    my.dump Mod.name                 # the pure S/K term
+iota sk    my.dump Mod.name                 # the pure S/K/I term
 iota iota  my.dump Mod.name                 # just the 0/1 iota string
 ```
 

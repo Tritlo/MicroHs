@@ -30,35 +30,36 @@ topdown () {  # topdown <Module> <root> <out> <title>
   echo "  $PIC/$3.png"
 }
 
-radial () {   # radial <Module> <root> <out> <title>
-  "$IOTA" iota "$WORK/$1.dump" "$2" | python3 iota/treedraw.py radial iota "$WORK/$3.svg" "$4"
+radial () {   # radial <Module> <root> <out> <title> ; symbol count is appended
+  local s; s="$("$IOTA" iota "$WORK/$1.dump" "$2")"
+  printf '%s' "$s" | python3 iota/treedraw.py radial iota "$WORK/$3.svg" "$4 (${#s} symbols)"
   convert -density 70 -depth 8 -background black "$WORK/$3.svg" "$PIC/$3.png"
-  echo "  $PIC/$3.png"
+  echo "  $PIC/$3.png  (${#s} symbols)"
 }
 
 echo "rendering:"
 dump Demo
 topdown Demo Demo.tw  tw_comb  "tw = f (f x)  ->  S B I"
-radial  Demo Demo.tw  tw_iota  "tw -> iota (581 symbols)"
+radial  Demo Demo.tw  tw_iota  "tw -> iota"
 
 dump Church6
-radial  Church6 Church6.six six_iota "Church 6 -> iota (2806 symbols)"
+radial  Church6 Church6.six six_iota "Church 6 -> iota"
 
 dump ChurchLt
 topdown ChurchLt ChurchLt.lt lt_comb  "Church-numeral (<) -- combinator tree"
-radial  ChurchLt ChurchLt.lt lt_iota  "Church-numeral (<) -> iota (15403 symbols)"
+radial  ChurchLt ChurchLt.lt lt_iota  "Church-numeral (<) -> iota"
 
 dump ChurchList
 topdown ChurchList ChurchList.cons cons_comb "cons = \\h t c n -> c h (t c n)"
-radial  ChurchList ChurchList.l3   l3_iota   "Church list [a,b,c] -> iota (19323 symbols)"
+radial  ChurchList ChurchList.l3   l3_iota   "Church list [a,b,c] -> iota"
 
 dump Quicksort
-radial Quicksort Quicksort.qs3   qs3_iota   "quicksort [a,b,c] -> iota (83007 symbols)"
-radial Quicksort Quicksort.ex312 qs312_iota "quicksort [3,1,2] -> iota (75927 symbols)"
+radial Quicksort Quicksort.qs3   qs3_iota   "quicksort [a,b,c] -> iota"
+radial Quicksort Quicksort.ex312 qs312_iota "quicksort [3,1,2] -> iota"
 
 # --- the combinator zoo: every MicroHs combinator as its own iota tree ---
 # Each combinator is rendered straight from an empty dump (the tool expands the
-# combinator's reduction rule to S/K, then to iota), and tiled into one montage.
+# combinator's reduction rule to S/K/I, then to iota), and tiled into one montage.
 : > "$WORK/empty.dump"
 ZOO="S K I B C A U Z P R O J S' B' C' C'B K2 K3 K4 Y"
 radial_tiles=()

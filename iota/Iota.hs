@@ -6,8 +6,9 @@
 --   1. parse a @-ddump-combinator@ dump (fully-parenthesized applications),
 --   2. inline top-level references from a chosen root into one term,
 --   3. classify leaves: structural combinator | opaque primitive box,
---   4. for primitive-free terms, expand every combinator to pure S/K via
---      bracket abstraction of its reduction rule, then S/K -> their iota trees,
+--   4. for primitive-free terms, expand every combinator to pure S/K/I via
+--      bracket abstraction of its reduction rule, then S/K/I -> their iota trees
+--      (I = ii, K = i(i(ii)), S = i(i(i(ii)))),
 --   5. ASCII-render the trees and emit the 0/1 iota string.
 module Main (main) where
 
@@ -152,39 +153,38 @@ lamToTm (App a b) = Ap (lamToTm a) (lamToTm b)
 lamToTm (Lam _ _) = error "lamToTm: residual lambda"
 
 ------------------------------------------------------------------------
--- Expand a combinator term to pure S/K, then to an iota tree.
+-- Expand a combinator term to pure S/K/I, then to an iota tree.
 
--- SK(I) form of a single combinator (S,K atomic; I -> S K K).
+-- S/K/I form of a single combinator (S,K,I kept as leaves; the iota basis
+-- has a direct form for each, incl. I = ii, so we do NOT expand I to S K K).
 combSK :: String -> Tm
 combSK "S" = Lf "S"
 combSK "K" = Lf "K"
-combSK "I" = Ap (Ap (Lf "S") (Lf "K")) (Lf "K")
+combSK "I" = Lf "I"
 combSK n   = case M.lookup n zoo of
-  Just l  -> elimI (lamToTm (compileLam l))
+  Just l  -> lamToTm (compileLam l)
   Nothing -> error ("combSK: unknown combinator " ++ n)
 
-elimI :: Tm -> Tm
-elimI (Lf "I")  = Ap (Ap (Lf "S") (Lf "K")) (Lf "K")
-elimI (Lf s)    = Lf s
-elimI (Ap a b)  = Ap (elimI a) (elimI b)
-
--- Whole term -> pure S/K term.  Fails on any non-combinator leaf.
+-- Whole term -> pure S/K/I term.  Fails on any non-combinator leaf.
 toSK :: Tm -> Either String Tm
 toSK (Ap a b) = Ap <$> toSK a <*> toSK b
 toSK (Lf s)
   | isComb s  = Right (combSK s)
   | otherwise = Left s
 
--- iota trees for S and K (leaves are the iota combinator, "1").
-iK, iS :: Tm
-iK = ap [iI, iI, iI, iI]          -- K = i(i(i i))
-  where ap = foldr1 Ap; iI = Lf "1"
-iS = Ap (Lf "1") iK               -- S = i K
+-- Canonical iota forms (leaves are the iota combinator, "1"):
+--   I = i i ;  K = i(i(i i)) ;  S = i K
+i1, iI, iK, iS :: Tm
+i1 = Lf "1"                       -- the iota combinator
+iI = Ap i1 i1                     -- I = i i
+iK = foldr1 Ap [i1, i1, i1, i1]   -- K = i(i(i i))
+iS = Ap i1 iK                     -- S = i K
 
 skToIota :: Tm -> Tm
 skToIota (Lf "S") = iS
 skToIota (Lf "K") = iK
-skToIota (Lf s)   = error ("skToIota: not S/K: " ++ s)
+skToIota (Lf "I") = iI
+skToIota (Lf s)   = error ("skToIota: not S/K/I: " ++ s)
 skToIota (Ap a b) = Ap (skToIota a) (skToIota b)
 
 -- 0/1 prefix encoding: Ap -> '0', leaf "1" -> '1'.
