@@ -52,9 +52,6 @@ dump ChurchList
 topdown ChurchList ChurchList.cons cons_comb "cons = \\h t c n -> c h (t c n)"
 radial  ChurchList ChurchList.l3   l3_iota   "Church list [a,b,c] -> iota (19323 symbols)"
 
-dump Prim
-topdown Prim Prim.mix mix_comb "mix -- primitive (+) boxed amongst combinators"
-
 dump Quicksort
 radial Quicksort Quicksort.qs3   qs3_iota   "quicksort [a,b,c] -> iota (83007 symbols)"
 radial Quicksort Quicksort.ex312 qs312_iota "quicksort [3,1,2] -> iota (75927 symbols)"
