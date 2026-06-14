@@ -62,16 +62,26 @@ radial Quicksort Quicksort.ex312 qs312_iota "quicksort [3,1,2] -> iota"
 # combinator's reduction rule to S/K/I, then to iota), and tiled into one montage.
 : > "$WORK/empty.dump"
 ZOO="S K I B C A U Z P R O J S' B' C' C'B K2 K3 K4 Y"
+# definition shown under each: iota form for S/K/I, combinator algebra for the
+# rest (all verified by reduction).  P in Y = S P P is the SK form of \x.f(x x).
+declare -A DEF=(
+  [S]='ι(ι(ι(ιι)))' [K]='ι(ι(ιι))' [I]='ιι'
+  [B]='S(KS)K' [C]='S(BBS)(KK)' [A]='KI' [U]='CI' [Z]='BK'
+  [P]='BC(CI)' [R]='CC' [O]='B(BK)(BC(CI))' [J]='BK(CI)'
+  ["S'"]='B(BS)B' ["B'"]='BB' ["C'"]='B(BC)B' ["C'B"]="C' B"
+  [K2]='BKK' [K3]='B K2 K' [K4]='B K3 K' [Y]='S P P'
+)
 radial_tiles=()
 for c in $ZOO; do
   s="$("$IOTA" iota "$WORK/empty.dump" "$c")"
   safe="$(printf '%s' "$c" | tr "'" p)"
   printf '%s' "$s" | python3 iota/treedraw.py radial iota "$WORK/zr_$safe.svg" "" >/dev/null
-  convert -density 60 -depth 8 -background '#0b0f17' "$WORK/zr_$safe.svg" "$WORK/zr_$safe.png"
-  radial_tiles+=( -label "$c  (${#s})" "$WORK/zr_$safe.png" )
+  convert -density 55 -depth 8 -background '#0b0f17' "$WORK/zr_$safe.svg" "$WORK/zr_$safe.png"
+  radial_tiles+=( -label "$c  (${#s})
+${DEF[$c]}" "$WORK/zr_$safe.png" )
 done
-montage "${radial_tiles[@]}" -tile 5x4 -geometry 360x360+8+8 -background '#0b0f17' \
-  -fill '#cdd6e6' -pointsize 30 -title "MicroHs combinators as iota trees (symbol counts)" \
+montage "${radial_tiles[@]}" -tile 5x4 -geometry 360x396+8+10 -background '#0b0f17' \
+  -fill '#dbe2ee' -pointsize 30 -title "MicroHs combinators in iota  —  defn under each   (P = \\x. f (x x))" \
   "$PIC/zoo_iota.png"
 convert "$PIC/zoo_iota.png" -depth 8 "$PIC/zoo_iota.png"
 echo "  $PIC/zoo_iota.png"
