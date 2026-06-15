@@ -11,7 +11,12 @@ Modes:
 
 Usage:  treedraw.py {topdown|radial} {sexp|iota} OUT.svg [TITLE]
 """
-import sys
+import sys, os
+
+# radial colours, overridable via env so the render script can drive colorschemes
+_BG = os.environ.get("IOTA_BG", "#0b0f17")        # canvas
+_LEAF = os.environ.get("IOTA_LEAF", "#ffe08a")    # iota leaf dots
+_EDGE_L = float(os.environ.get("IOTA_EDGE_L", "0.60"))  # edge HSL lightness
 
 # ----------------------------------------------------------------- parsing
 class Node:
@@ -152,11 +157,11 @@ def svg_radial(root, title):
         return cx + rr * math.cos(nd.y), cy + rr * math.sin(nd.y)
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{SZ:.0f}" height="{SZ:.0f}" '
            f'viewBox="0 0 {SZ:.0f} {SZ:.0f}" font-family="monospace">']
-    out.append(f'<rect width="{SZ:.0f}" height="{SZ:.0f}" fill="#0b0f17"/>')
+    out.append(f'<rect width="{SZ:.0f}" height="{SZ:.0f}" fill="{_BG}"/>')
     for nd in each(root):
         if not nd.is_leaf():
             x0, y0 = pos(nd)
-            col = hsl_hex(360.0 * nd.depth / max(1, maxd), 0.85, 0.60)
+            col = hsl_hex(360.0 * nd.depth / max(1, maxd), 0.85, _EDGE_L)
             for c in (nd.l, nd.r):
                 x1, y1 = pos(c)
                 out.append(f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" '
@@ -164,7 +169,7 @@ def svg_radial(root, title):
     for nd in each(root):
         if nd.is_leaf():
             x, y = pos(nd)
-            out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.2" fill="#ffe08a"/>')
+            out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.2" fill="{_LEAF}"/>')
     if title:
         out.append(f'<text x="16" y="28" font-size="16" fill="#cdd6e6">{esc(title)}</text>')
     out.append("</svg>")

@@ -62,7 +62,6 @@ radial Quicksort Quicksort.ex312 qs312_iota "quicksort [3,1,2] -> iota"
 # combinator's reduction rule to S/K/I, then to iota), and tiled into one montage.
 : > "$WORK/empty.dump"
 ZOO="S K I B C A U Z P R O J S' B' C' C'B K2 K3 K4 Y"
-ZBG='#0b0f17'
 ZFONT="DejaVu Sans Mono"   # fallback; prefer Berkeley Mono if installed
 if fc-match 'BerkeleyMono Nerd Font' 2>/dev/null | grep -qi berkeley; then
   ZFONT="BerkeleyMono Nerd Font"
@@ -77,32 +76,60 @@ declare -A DEF=(
   ["S'"]='B(BS)B' ["B'"]='BB' ["C'"]='B(BC)B' ["C'B"]='C'"'"'B'
   [K2]='BKK' [K3]='BK2K' [K4]='BK3K' [Y]='SPP'
 )
-# Pango renders labels so Berkeley Mono can carry the combinator algebra while
-# the iota/lambda glyphs fall back to DejaVu automatically.
-zoo_tiles=()
-for c in $ZOO; do
-  s="$("$IOTA" iota "$WORK/empty.dump" "$c")"
-  safe="$(printf '%s' "$c" | tr "'" p)"
-  printf '%s' "$s" | python3 iota/treedraw.py radial iota "$WORK/zr_$safe.svg" "" >/dev/null
-  convert -density 55 -background "$ZBG" "$WORK/zr_$safe.svg" \
-    -resize 330x290 -gravity center -extent 360x300 "$WORK/zi_$safe.png"
-  convert -background "$ZBG" pango:"<span font='$ZFONT 25' foreground='#e3e9f2'>$c  (${#s})</span>" "$WORK/zn_$safe.png"
-  convert -background "$ZBG" pango:"<span font='$ZFONT 25' foreground='#9fb0c8'>${DEF[$c]}</span>" "$WORK/zd_$safe.png"
-  convert "$WORK/zn_$safe.png" "$WORK/zd_$safe.png" -background "$ZBG" \
-    -gravity center -append -extent 360x96 "$WORK/zlbl_$safe.png"
-  convert "$WORK/zi_$safe.png" "$WORK/zlbl_$safe.png" -background "$ZBG" -append "$WORK/zfull_$safe.png"
-  zoo_tiles+=( "$WORK/zfull_$safe.png" )
+
+# Colour scheme: sets ZBG (canvas), ZFG (title/labels), ZFG2 (subtitle/defs) and
+# exports IOTA_BG/IOTA_LEAF/IOTA_EDGE_L, which treedraw.py reads for the trees.
+zoo_scheme () {
+  case "$1" in
+    default)         ZBG='#0b0f17'; ZFG='#eef2f8'; ZFG2='#9fb0c8'; ZLEAF='#ffe08a'; ZEL=0.60 ;;
+    github-dark)     ZBG='#0d1117'; ZFG='#e6edf3'; ZFG2='#8b949e'; ZLEAF='#ffe08a'; ZEL=0.62 ;;
+    github-light)    ZBG='#ffffff'; ZFG='#1f2328'; ZFG2='#59636e'; ZLEAF='#3d444d'; ZEL=0.42 ;;
+    github-dark-hc)  ZBG='#010409'; ZFG='#f0f3f6'; ZFG2='#9ea7b3'; ZLEAF='#ffe9b3'; ZEL=0.68 ;;
+    github-light-hc) ZBG='#ffffff'; ZFG='#0e1116'; ZFG2='#4b535d'; ZLEAF='#24292f'; ZEL=0.36 ;;
+    *) echo "unknown colorscheme: $1 (default|github-{light,dark}[-hc])" >&2; exit 1 ;;
+  esac
+  export IOTA_BG="$ZBG" IOTA_LEAF="$ZLEAF" IOTA_EDGE_L="$ZEL"
+}
+
+# Build the whole zoo montage (current scheme) into $1.  Pango lets Berkeley Mono
+# carry the combinator algebra while iota/lambda glyphs fall back to DejaVu.
+build_zoo () {
+  local out="$1" tiles=() s safe ZW
+  for c in $ZOO; do
+    s="$("$IOTA" iota "$WORK/empty.dump" "$c")"
+    safe="$(printf '%s' "$c" | tr "'" p)"
+    printf '%s' "$s" | python3 iota/treedraw.py radial iota "$WORK/zr_$safe.svg" "" >/dev/null
+    convert -density 55 -background "$ZBG" "$WORK/zr_$safe.svg" \
+      -resize 330x290 -gravity center -extent 360x300 "$WORK/zi_$safe.png"
+    convert -background "$ZBG" pango:"<span font='$ZFONT 25' foreground='$ZFG'>$c  (${#s})</span>" "$WORK/zn_$safe.png"
+    convert -background "$ZBG" pango:"<span font='$ZFONT 25' foreground='$ZFG2'>${DEF[$c]}</span>" "$WORK/zd_$safe.png"
+    convert "$WORK/zn_$safe.png" "$WORK/zd_$safe.png" -background "$ZBG" \
+      -gravity center -append -extent 360x96 "$WORK/zlbl_$safe.png"
+    convert "$WORK/zi_$safe.png" "$WORK/zlbl_$safe.png" -background "$ZBG" -append "$WORK/zfull_$safe.png"
+    tiles+=( "$WORK/zfull_$safe.png" )
+  done
+  montage "${tiles[@]}" -tile 5x4 -geometry +6+6 -background "$ZBG" "$WORK/zgrid.png"
+  ZW="$(identify -format '%w' "$WORK/zgrid.png")"
+  convert -background "$ZBG" -size "${ZW}x" -gravity center \
+    pango:"<span font='$ZFONT 42' foreground='$ZFG'>MicroHs combinators as iota trees (symbol counts)</span>" "$WORK/zh1.png"
+  convert -background "$ZBG" -size "${ZW}x" -gravity center \
+    pango:"<span font='$ZFONT 30' foreground='$ZFG2'>ι = λf.((fλa.λb.λc.((ac)(bc)))λd.λe.d)</span>" "$WORK/zh2.png"
+  convert -size "${ZW}x16" xc:"$ZBG" "$WORK/zpad.png"
+  convert "$WORK/zpad.png" "$WORK/zh1.png" "$WORK/zh2.png" "$WORK/zpad.png" "$WORK/zgrid.png" \
+    -background "$ZBG" -append -depth 8 "$out"
+  echo "  $out"
+}
+
+# main zoo (override its scheme with e.g. SCHEME=github-light), then the variations
+zoo_scheme "${SCHEME:-default}"
+build_zoo "$PIC/zoo_iota.png"
+VAR=iota-examples/zoo/variations
+mkdir -p "$VAR"
+for sc in github-light github-dark github-light-hc github-dark-hc; do
+  zoo_scheme "$sc"
+  build_zoo "$VAR/$sc.png"
 done
-montage "${zoo_tiles[@]}" -tile 5x4 -geometry +6+6 -background "$ZBG" "$WORK/zgrid.png"
-ZW="$(identify -format '%w' "$WORK/zgrid.png")"
-convert -background "$ZBG" -size "${ZW}x" -gravity center \
-  pango:"<span font='$ZFONT 42' foreground='#eef2f8'>MicroHs combinators as iota trees (symbol counts)</span>" "$WORK/zh1.png"
-convert -background "$ZBG" -size "${ZW}x" -gravity center \
-  pango:"<span font='$ZFONT 30' foreground='#9fb0c8'>ι = λf.((fλa.λb.λc.((ac)(bc)))λd.λe.d)</span>" "$WORK/zh2.png"
-convert -size "${ZW}x16" xc:"$ZBG" "$WORK/zpad.png"
-convert "$WORK/zpad.png" "$WORK/zh1.png" "$WORK/zh2.png" "$WORK/zpad.png" "$WORK/zgrid.png" \
-  -background "$ZBG" -append -depth 8 "$PIC/zoo_iota.png"
-echo "  $PIC/zoo_iota.png"
+zoo_scheme "${SCHEME:-default}"   # restore for any later steps
 
 small_tiles=()       # the small ones are legible top-down
 for c in S K I A; do
