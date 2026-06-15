@@ -9,7 +9,7 @@
 #     e.g. tarpit-film.sh iota-examples/tarpit/programs.dump Tarpit.grow out.mp4 40 55 30 comb
 #   TARPIT_AO=1  -> applicative (eager / call-by-value) order instead of normal order
 #
-# Same streaming pipeline as scripts/morph-film.sh (no gmhs -- the program is given
+# Same streaming pipeline as iota/morph_film.py (no gmhs -- the program is given
 # directly as a combinator dump).  Needs ghc, python3 (numpy), ffmpeg.
 set -uo pipefail
 
