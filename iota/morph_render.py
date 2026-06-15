@@ -120,8 +120,8 @@ def esc(s): return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"
 
 RSTEP=22.0; CAPTOP=150; LEAF="#ffe08a"
 GRAYC="#586069"          # a discarded branch (the road not taken)
-COPYC="#e29bd0"          # a freshly-copied argument, fading back to normal as it lands
-FLASH="#dfe7ef"          # sparkle where the rule fired
+CPFLASH="#ff9bd2"        # the copy's spine flashes this, then emerges into normal colour
+FLASH="#dfe7ef"          # twinkling sparkle where the rule fired
 DRIFT=18.0               # how far a discarded branch drifts outward as it fades
 TRAILC="#9aa7b3"; TRAIL_THRESH=26.0   # faint trail showing a rearranged argument's path
 
@@ -147,17 +147,6 @@ def _subtree(root,kids):
         out.append(n); st.extend(kids[n])
     return out
 
-def _pair(src,dst,kids):
-    """Pair the (isomorphic) copy subtree at dst with its original at src, both in
-    the same tree -> {copyNode: origNode}."""
-    m={}; st=[(src,dst)]
-    while st:
-        s,d=st.pop(); m[d]=s
-        ks,kd=kids.get(s,[]),kids.get(d,[])
-        if len(ks)==len(kd):
-            for a,b in zip(ks,kd): st.append((a,b))
-    return m
-
 def compute_transition(W,H,A,B,prov):
     """Everything the tween A->B needs: attachment points for plain new/dropped
     nodes, plus the semantic roles from the reducer -- which A-nodes are a discarded
@@ -169,12 +158,11 @@ def compute_transition(W,H,A,B,prov):
     gray=set()
     for d in prov["drop"]:
         gray.update(_subtree(d,kA))
-    copysrc={}; csrc_roots=set()
+    copyset=set(); csrc_roots=set()
     for s,d in prov["copy"]:
-        copysrc.update(_pair(s,d,kB)); csrc_roots.add(s)   # {copyNode: origNode}; only the copy is highlit
+        copyset.update(_subtree(d,kB)); csrc_roots.add(s)  # the copy subtree -> flashes; original untouched
     newsrc={}
-    for nid in inB-inA:
-        if nid in copysrc: continue                       # copies fly from their original
+    for nid in inB-inA:                                   # new nodes AND copies emerge from attachment
         p=parB.get(nid)
         while p is not None and p not in inA: p=parB.get(p)
         newsrc[nid]=node_xy(pA,p,cx,cy) if p is not None else (cx,cy)
@@ -184,7 +172,7 @@ def compute_transition(W,H,A,B,prov):
         if r in inB and r not in csrc_roots:
             ax,ay=node_xy(pA,r,cx,cy); bx,by=node_xy(pB,r,cx,cy)
             if (ax-bx)**2+(ay-by)**2 > TRAIL_THRESH*TRAIL_THRESH: trail.append(r)
-    return {"newsrc":newsrc,"gray":gray,"copysrc":copysrc,"trail":trail,
+    return {"newsrc":newsrc,"gray":gray,"copyset":copyset,"trail":trail,
             "redex":prov.get("redex")}
 
 def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
@@ -196,7 +184,8 @@ def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
     te=ease(t)
     tr=tr or {}
     newsrc=tr.get("newsrc",{}); gray=tr.get("gray",set())
-    copysrc=tr.get("copysrc",{}); trail=tr.get("trail",[]); redex=tr.get("redex")
+    copyset=tr.get("copyset",set()); trail=tr.get("trail",[]); redex=tr.get("redex")
+    cff=max(0.0, 1.0 - t/0.5)              # copy-flash factor: bright early, gone by mid-morph
     out=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" font-family="monospace">',
          f'<rect width="{W}" height="{H}" fill="{BG}"/>',
          f'<text x="{W/2}" y="50" font-size="34" fill="{FG}" text-anchor="middle">{esc(caption)}</text>']
@@ -208,10 +197,11 @@ def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
     def cur(nid):                          # (x, y, alpha, depth)
         if nid in inB:
             tgt=px(pB,nid)
-            if nid in copysrc:                                # a copy: fly out of its original
-                o=copysrc[nid]; src=px(pA,o) if o in pA else px(pB,o); a=0.4+0.6*te
-            elif nid in inA: src=px(pA,nid); a=1.0            # persists -> glide
-            else:            src=newsrc.get(nid,tgt); a=te    # new machinery -> grow from attachment
+            if nid in copyset:                                # a copy: flash, then emerge into place
+                src=newsrc.get(nid,tgt); tc=ease(min(1.0, t/0.45))
+                return (lerp(src[0],tgt[0],tc), lerp(src[1],tgt[1],tc), min(1.0, t*3.0), pB[nid][1])
+            if nid in inA: src=px(pA,nid); a=1.0              # persists -> glide
+            else:          src=newsrc.get(nid,tgt); a=te      # new machinery -> grow from attachment
             return (lerp(src[0],tgt[0],te), lerp(src[1],tgt[1],te), a, pB[nid][1])
         s=px(pA,nid)                                          # dropped -> drift outward as it fades
         dx,dy=s[0]-cx, s[1]-cy; L=math.hypot(dx,dy) or 1.0; k=DRIFT*te
@@ -219,7 +209,7 @@ def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
     def ncol(nid,d,inB_):                  # edge/dot colour by semantic role
         base=hsl_hex(360.0*d/max(1,maxd),0.85,0.62)
         if (not inB_) and nid in gray: return GRAYC
-        if nid in copysrc:             return mix(COPYC, base, te)  # highlight, settling as it lands
+        if nid in copyset:             return mix(base, CPFLASH, cff)  # spine flash, fading to normal
         return base
     def edges(ids,kids,inB_):
         for nid in ids:
@@ -227,8 +217,8 @@ def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
             for c in kids[nid]:
                 x1,y1,a1,d1=cur(c); a=min(a0,a1)*0.85
                 if a>0.02:
-                    col=ncol(c,d1,inB_); w=1.3 if c in copysrc else 1.0
-                    out.append(f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" stroke="{col}" stroke-width="{w}" opacity="{a:.2f}"/>')
+                    col=ncol(c,d1,inB_); w=1.0+1.4*cff if c in copyset else 1.0
+                    out.append(f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" stroke="{col}" stroke-width="{w:.1f}" opacity="{a:.2f}"/>')
     edges(inB,kB,True); edges(inA-inB,kA,False)
     for r in trail:                        # directional cue: faint path of a rearranged arg
         ax,ay=px(pA,r); bx,by,_,_=cur(r); top=0.22*math.sin(math.pi*t)
@@ -242,14 +232,17 @@ def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
         x,y,a,d=cur(nid)
         if a>0.02:
             out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.4" fill="{ncol(nid,d,inB_)}" opacity="{a:.2f}"/>')
-    if redex is not None and redex in pA:  # subtle sparkle where the rule fired (early in the morph)
-        rx,ry=px(pA,redex); fa=max(0.0, 1.0-3.4*t)
+    if redex is not None and redex in pA:  # twinkling sparkle where the rule fired (early in the morph)
+        rx,ry=px(pA,redex); fa=max(0.0, 1.0-3.0*t)
         if fa>0.02:
-            out.append(f'<circle cx="{rx:.1f}" cy="{ry:.1f}" r="2.8" fill="{FLASH}" opacity="{fa*0.7:.2f}"/>')
-            for ox,oy,sz in ((9,-5,4.5),(-8,6,3.5),(5,8,3.0)):    # a few little stars
-                sx,sy=rx+ox,ry+oy; op=fa*0.55
-                out.append(f'<line x1="{sx-sz:.1f}" y1="{sy:.1f}" x2="{sx+sz:.1f}" y2="{sy:.1f}" stroke="{FLASH}" stroke-width="1" opacity="{op:.2f}"/>')
-                out.append(f'<line x1="{sx:.1f}" y1="{sy-sz:.1f}" x2="{sx:.1f}" y2="{sy+sz:.1f}" stroke="{FLASH}" stroke-width="1" opacity="{op:.2f}"/>')
+            c0=0.55+0.45*math.sin(t*54)    # central dot twinkle
+            out.append(f'<circle cx="{rx:.1f}" cy="{ry:.1f}" r="{2.6*(0.7+0.3*c0):.1f}" fill="{FLASH}" opacity="{fa*0.75*c0:.2f}"/>')
+            for k,(ox,oy,sz) in enumerate(((10,-5,4.8),(-8,7,3.8),(6,9,3.2),(-9,-7,3.0))):
+                tw=0.5+0.5*math.sin(t*48 + k*1.7)         # each star out of phase -> scintillation
+                op=fa*0.6*tw; s=sz*(0.45+0.55*tw); sx,sy=rx+ox,ry+oy
+                if op>0.02:
+                    out.append(f'<line x1="{sx-s:.1f}" y1="{sy:.1f}" x2="{sx+s:.1f}" y2="{sy:.1f}" stroke="{FLASH}" stroke-width="1" opacity="{op:.2f}"/>')
+                    out.append(f'<line x1="{sx:.1f}" y1="{sy-s:.1f}" x2="{sx:.1f}" y2="{sy+s:.1f}" stroke="{FLASH}" stroke-width="1" opacity="{op:.2f}"/>')
     out.append("</svg>")
     return "\n".join(out)
 
