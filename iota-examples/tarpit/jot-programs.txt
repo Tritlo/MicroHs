@@ -1,0 +1,8 @@
+# Notable Jot programs from Hemann & Holk, "Visualizing the Turing Tarpit"
+# (data: github.com/tarpit/jot-code).  Translate to combinator dumps with
+#   python3 iota/jot.py catalog iota-examples/tarpit/jot-programs.txt
+# name              spec                  (int:N = Goedel number; bits:... = binary string)
+Jot.longest_term    int:556550            # longest terminating in the first 2^20 (1433 beta-steps, applicative order)
+Jot.aoloop_288752   int:288752            # paper's applicative-order non-terminating cluster (halts under our weak-NF reducer)
+Jot.aoloop_577504   int:577504
+Jot.elf_true        bits:011111110100010101001100010001100000000100000000000000000000000000000000000000000000000000000000000000000000000001001001001001010000001000000000000000110000000000011010000000000100100100100101000110100000000001001001001001010000010000000000000000000000000001011011010111111111001010101110010000000010001001011111111110111100110110000000001000000000000000000001

@@ -171,11 +171,11 @@ note :: String -> [(Int, G)] -> String
 note "Y" ((_,a):(_,b):_) | Just i <- numG a, Just j <- numG b = "   lt " ++ show i ++ " " ++ show j
 note _ _                                                      = ""
 
--- one normal-order step: (rule description, provenance, new whole term).  The term
--- is already closed (no named defs), so there is nothing to unfold: every step is
--- a real combinator rule, and we record what it dropped / copied for the animator.
-gStep :: G -> Maybe (F (String, Prov, G))
-gStep g =
+-- fire the redex at the head of the spine, recording provenance for the animator
+-- (what it dropped / copied, the redex head and its argument roots).  The term is
+-- already closed (no named defs), so there is nothing to unfold.
+fireHead :: G -> Maybe (F (String, Prov, G))
+fireHead g =
   case spineIds g of
     (GLf hid name, ps)
       | Just (n, f) <- gRule name, length ps >= n ->
@@ -185,19 +185,30 @@ gStep g =
                          , prov { pRedex = Just (iroot (GLf hid name))
                                 , pArgs  = map (iroot . snd) used }
                          , reattach res rest )
-    (h, ps) -> argStep h ps
-  where
-    argStep h = go []
-      where go _ [] = Nothing
-            go done ((i,arg):rest) = case gStep arg of
-              Just act -> Just $ do (r, prov, arg') <- act
-                                    pure (r, prov, reattach h (reverse done ++ (i,arg') : rest))
-              Nothing  -> go ((i,arg):done) rest
+    _ -> Nothing
 
-greduce :: Int -> G -> F [(Maybe String, Maybe Prov, G)]
-greduce lim g0 = ((Nothing, Nothing, g0) :) <$> loop lim g0
+-- reduce the leftmost argument along the spine that `step` can reduce.
+argStepWith :: (G -> Maybe (F (String, Prov, G))) -> G -> Maybe (F (String, Prov, G))
+argStepWith step g = let (h, ps) = spineIds g in go h [] ps
+  where go _ _ [] = Nothing
+        go h done ((i,arg):rest) = case step arg of
+          Just act -> Just $ do (r, prov, arg') <- act
+                                pure (r, prov, reattach h (reverse done ++ (i,arg') : rest))
+          Nothing  -> go h ((i,arg):done) rest
+
+-- Two reduction strategies, differing only in order.  Normal order fires the head
+-- redex first (lazy: it never touches an argument the head will drop).  Applicative
+-- order reduces the arguments first (eager/call-by-value: it reduces every argument,
+-- even one that gets discarded) -- the strategy the Turing Tarpit paper uses, and a
+-- source of its long reductions.
+gStep, gStepAO :: G -> Maybe (F (String, Prov, G))
+gStep   g = maybe (argStepWith gStep   g) Just (fireHead g)
+gStepAO g = maybe (fireHead g)            Just (argStepWith gStepAO g)
+
+greduce :: Int -> (G -> Maybe (F (String, Prov, G))) -> G -> F [(Maybe String, Maybe Prov, G)]
+greduce lim step g0 = ((Nothing, Nothing, g0) :) <$> loop lim g0
   where loop 0 _ = pure []
-        loop n g = case gStep g of
+        loop n g = case step g of
           Nothing  -> pure []
           Just act -> do (r, prov, g') <- act; rest <- loop (n-1) g'; pure ((Just r, Just prov, g') : rest)
 
@@ -326,10 +337,11 @@ main :: IO ()
 main = do
   raw <- getArgs
   let iotaMode = "--iota" `elem` raw
-  (path, root, lim) <- case filter (/= "--iota") raw of
+      aoMode   = "--ao"   `elem` raw           -- applicative (eager) order, as in the paper
+  (path, root, lim) <- case filter (\a -> a /= "--iota" && a /= "--ao") raw of
     [p, r]    -> pure (p, r, 5000)
     [p, r, n] -> pure (p, r, read n)
-    _ -> error "usage: morph [--iota] DUMPFILE ROOTNAME [stepLimit]"
+    _ -> error "usage: morph [--iota] [--ao] DUMPFILE ROOTNAME [stepLimit]"
   defsTm <- M.map unPMF . parseDump <$> readFile path
   -- Inline every non-recursive definition (the data constructors and the entry
   -- point) and tie the one recursive definition with Y (as iota/Iota.hs does),
@@ -337,7 +349,8 @@ main = do
   -- defs means there is nothing to "unfold": every step is a real combinator/iota
   -- rule, and the recursion shows up honestly as Y x -> x (Y x).
   let root0  = inlineClosed defsTm (TLf root)
-      action = do g0 <- tag root0; greduce lim g0
+      step   = if aoMode then gStepAO else gStep
+      action = do g0 <- tag root0; greduce lim step g0
       (trace, _) = runF action 0
       line mr mprov g
         | iotaMode  = maybe "" id mr ++ "\t" ++ showGTerm g ++ "\t" ++ sexp (expandIota M.empty g)
