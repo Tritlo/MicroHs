@@ -3,3 +3,4 @@
 /check
 *.o
 *.hi
+/reduce
