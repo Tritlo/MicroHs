@@ -316,6 +316,16 @@ def raster(prims, W, H, gs=1.0):
     np.clip(img,0,255,out=img)
     return img.astype(np.uint8)
 
+# Frames are independent, so render them across a process pool.  The big shared data
+# (layouts, transition roles) is put in a module global before the pool forks, so
+# workers inherit it copy-on-write -- only the frame index is passed per task.
+_G={}
+def _render_frame(f):
+    g=_G; Ai,Bi,t,tri=g["specs"][f]
+    tr=g["trs"][tri] if tri>=0 else {}
+    return raster(frame_prims(g["W"],g["H"],g["lays"][Ai],g["lays"][Bi],t,g["maxd"],tr),
+                  g["OW"],g["OH"],g["gs"]).tobytes()
+
 # ---------------------------------------------------------------- main
 # Three output modes, all sharing the same schedule + geometry:
 #   morph_render.py OUTDIR [secs] [fps]            -> numbered SVG frames (the old way)
@@ -392,9 +402,26 @@ def main():
         return
 
     if mode=="raw":
+        # flat frame table: (Aidx, Bidx, t, transition-index) + the shared role dicts
+        specs=[]; trs=[]
+        for i in range(n):
+            for _ in range(hold[i]): specs.append((i,i,0.0,-1))
+            if i+1<n:
+                tri=len(trs); trs.append(compute_transition(W,H,lays[i],lays[i+1], steps[i+1][3]))
+                for f in range(tween[i]): specs.append((i,i+1,(f+1)/tween[i],tri))
+        _G.update(lays=lays,trs=trs,specs=specs,W=W,H=H,OW=OW,OH=OH,gs=gs,maxd=maxd)
+        jobs=max(1,int(os.environ.get("MORPH_JOBS","6")))
         buf=sys.stdout.buffer
-        for (Al,Bl,t,tr,_,_,_) in frame_iter():
-            buf.write(raster(frame_prims(W,H,Al,Bl,t,maxd,tr),OW,OH,gs).tobytes())
+        try:
+            if jobs==1:
+                for f in range(len(specs)): buf.write(_render_frame(f))
+            else:
+                import multiprocessing as mp
+                with mp.Pool(jobs) as pool:                  # workers fork *after* _G is set
+                    for b in pool.imap(_render_frame, range(len(specs)), chunksize=4):
+                        buf.write(b)
+        except BrokenPipeError:
+            pass                                             # consumer (ffmpeg/head) closed early
         return
 
     fnum=0
