@@ -232,13 +232,13 @@ def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
         x,y,a,d=cur(nid)
         if a>0.02:
             out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.4" fill="{ncol(nid,d,inB_)}" opacity="{a:.2f}"/>')
-    if redex is not None and redex in pA:  # twinkling sparkle where the rule fired (early in the morph)
-        rx,ry=px(pA,redex); fa=max(0.0, 1.0-3.0*t)
+    if redex is not None and redex in pA:  # twinkling sparkle where the rule fired (lingers ~3/5 of the morph)
+        rx,ry=px(pA,redex); fa=max(0.0, 1.0-1.7*t)
         if fa>0.02:
-            c0=0.55+0.45*math.sin(t*54)    # central dot twinkle
+            c0=0.55+0.45*math.sin(t*40)    # central dot twinkle
             out.append(f'<circle cx="{rx:.1f}" cy="{ry:.1f}" r="{2.6*(0.7+0.3*c0):.1f}" fill="{FLASH}" opacity="{fa*0.75*c0:.2f}"/>')
             for k,(ox,oy,sz) in enumerate(((10,-5,4.8),(-8,7,3.8),(6,9,3.2),(-9,-7,3.0))):
-                tw=0.5+0.5*math.sin(t*48 + k*1.7)         # each star out of phase -> scintillation
+                tw=0.5+0.5*math.sin(t*34 + k*1.7)         # each star out of phase -> scintillation
                 op=fa*0.6*tw; s=sz*(0.45+0.55*tw); sx,sy=rx+ox,ry+oy
                 if op>0.02:
                     out.append(f'<line x1="{sx-s:.1f}" y1="{sy:.1f}" x2="{sx+s:.1f}" y2="{sy:.1f}" stroke="{FLASH}" stroke-width="1" opacity="{op:.2f}"/>')
