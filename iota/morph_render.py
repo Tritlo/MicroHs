@@ -100,10 +100,12 @@ def schedule(steps, sizes, target, fps):
     n=len(steps)
     trans=[abs(sizes[i+1]-sizes[i]) for i in range(n-1)]
     key=[bool(step_expl(steps[i])) for i in range(n)]
-    isY=[steps[i][0].startswith("Y ") for i in range(n)]
+    def is_copy(rule):                                  # S / S' / Y duplicate an argument
+        h=rule.split(); return bool(h) and h[0] in ("S","S'","Y")
     total_frames=int(target*fps); MIN_HOLD, MIN_TWEEN = 3, 5
     hold_extra =[(110.0 if i==n-1 else 55.0 if key[i] else 0.0) for i in range(n)]
-    tween_extra=[(trans[i]**0.62) * (1.6 if isY[i+1] else 1.0) for i in range(n-1)]
+    # copying morphs (esp. the big ones) get more frames so the duplication reads
+    tween_extra=[(trans[i]**0.62) * (1.9 if is_copy(steps[i+1][0]) else 1.0) for i in range(n-1)]
     floor=MIN_HOLD*n + MIN_TWEEN*(n-1)
     raw=sum(hold_extra)+sum(tween_extra)
     sc=max(0.0, total_frames-floor)/raw if raw>0 else 0.0
@@ -118,17 +120,21 @@ def esc(s): return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"
 
 RSTEP=22.0; CAPTOP=150; LEAF="#ffe08a"
 GRAYC="#586069"          # a discarded branch (the road not taken)
-COPYC="#ff9bd2"          # a freshly-copied argument splitting off its original
-FLASH="#f0f6fc"          # the redex that just fired
+COPYC="#e29bd0"          # a freshly-copied argument, fading back to normal as it lands
+FLASH="#dfe7ef"          # sparkle where the rule fired
+DRIFT=18.0               # how far a discarded branch drifts outward as it fades
+TRAILC="#9aa7b3"; TRAIL_THRESH=26.0   # faint trail showing a rearranged argument's path
 
 def parse_prov(s):
-    """4th trace field: 'R:id'(redex head) 'D:id'(discarded root) 'C:src:dst'(copy)."""
-    redex=None; drop=[]; copy=[]
+    """4th trace field: 'R:'(redex head) 'D:'(discarded root) 'C:src:dst'(copy)
+    'A:'(redex argument root, for the directional cue)."""
+    redex=None; drop=[]; copy=[]; args=[]
     for tok in s.split():
         if   tok.startswith("R:"): redex=int(tok[2:])
         elif tok.startswith("D:"): drop.append(int(tok[2:]))
         elif tok.startswith("C:"): a,b=tok[2:].split(":"); copy.append((int(a),int(b)))
-    return {"redex":redex,"drop":drop,"copy":copy}
+        elif tok.startswith("A:"): args.append(int(tok[2:]))
+    return {"redex":redex,"drop":drop,"copy":copy,"args":args}
 
 def node_xy(pos,nid,cx,cy):
     ang,d=pos[nid]; r=d*RSTEP; return (cx+r*math.cos(ang), cy+r*math.sin(ang))
@@ -163,16 +169,22 @@ def compute_transition(W,H,A,B,prov):
     gray=set()
     for d in prov["drop"]:
         gray.update(_subtree(d,kA))
-    copysrc={}; copyorig=set()
+    copysrc={}; csrc_roots=set()
     for s,d in prov["copy"]:
-        m=_pair(s,d,kB); copysrc.update(m); copyorig.update(m.values())
+        copysrc.update(_pair(s,d,kB)); csrc_roots.add(s)   # {copyNode: origNode}; only the copy is highlit
     newsrc={}
     for nid in inB-inA:
         if nid in copysrc: continue                       # copies fly from their original
         p=parB.get(nid)
         while p is not None and p not in inA: p=parB.get(p)
         newsrc[nid]=node_xy(pA,p,cx,cy) if p is not None else (cx,cy)
-    return {"newsrc":newsrc,"gray":gray,"copysrc":copysrc,"copyorig":copyorig,
+    # a rearranged argument (kept, not the copied original) that moves far -> trail it
+    trail=[]
+    for r in prov.get("args",[]):
+        if r in inB and r not in csrc_roots:
+            ax,ay=node_xy(pA,r,cx,cy); bx,by=node_xy(pB,r,cx,cy)
+            if (ax-bx)**2+(ay-by)**2 > TRAIL_THRESH*TRAIL_THRESH: trail.append(r)
+    return {"newsrc":newsrc,"gray":gray,"copysrc":copysrc,"trail":trail,
             "redex":prov.get("redex")}
 
 def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
@@ -184,7 +196,7 @@ def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
     te=ease(t)
     tr=tr or {}
     newsrc=tr.get("newsrc",{}); gray=tr.get("gray",set())
-    copysrc=tr.get("copysrc",{}); copyorig=tr.get("copyorig",set()); redex=tr.get("redex")
+    copysrc=tr.get("copysrc",{}); trail=tr.get("trail",[]); redex=tr.get("redex")
     out=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" font-family="monospace">',
          f'<rect width="{W}" height="{H}" fill="{BG}"/>',
          f'<text x="{W/2}" y="50" font-size="34" fill="{FG}" text-anchor="middle">{esc(caption)}</text>']
@@ -197,16 +209,17 @@ def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
         if nid in inB:
             tgt=px(pB,nid)
             if nid in copysrc:                                # a copy: fly out of its original
-                o=copysrc[nid]; src=px(pA,o) if o in pA else px(pB,o); a=0.2+0.8*te
+                o=copysrc[nid]; src=px(pA,o) if o in pA else px(pB,o); a=0.4+0.6*te
             elif nid in inA: src=px(pA,nid); a=1.0            # persists -> glide
             else:            src=newsrc.get(nid,tgt); a=te    # new machinery -> grow from attachment
             return (lerp(src[0],tgt[0],te), lerp(src[1],tgt[1],te), a, pB[nid][1])
-        s=px(pA,nid)                                          # dropped -> fade out in place
-        return (s[0], s[1], 1-te, pA[nid][1])
+        s=px(pA,nid)                                          # dropped -> drift outward as it fades
+        dx,dy=s[0]-cx, s[1]-cy; L=math.hypot(dx,dy) or 1.0; k=DRIFT*te
+        return (s[0]+dx/L*k, s[1]+dy/L*k, 1-te, pA[nid][1])
     def ncol(nid,d,inB_):                  # edge/dot colour by semantic role
         base=hsl_hex(360.0*d/max(1,maxd),0.85,0.62)
-        if (not inB_) and nid in gray:        return GRAYC
-        if nid in copysrc or nid in copyorig: return mix(COPYC, base, te)  # highlight, then settle
+        if (not inB_) and nid in gray: return GRAYC
+        if nid in copysrc:             return mix(COPYC, base, te)  # highlight, settling as it lands
         return base
     def edges(ids,kids,inB_):
         for nid in ids:
@@ -214,10 +227,14 @@ def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
             for c in kids[nid]:
                 x1,y1,a1,d1=cur(c); a=min(a0,a1)*0.85
                 if a>0.02:
-                    col=ncol(c,d1,inB_)
-                    w=1.6 if (c in copysrc or c in copyorig) else 1.0
+                    col=ncol(c,d1,inB_); w=1.3 if c in copysrc else 1.0
                     out.append(f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" stroke="{col}" stroke-width="{w}" opacity="{a:.2f}"/>')
     edges(inB,kB,True); edges(inA-inB,kA,False)
+    for r in trail:                        # directional cue: faint path of a rearranged arg
+        ax,ay=px(pA,r); bx,by,_,_=cur(r); top=0.22*math.sin(math.pi*t)
+        if top>0.01:
+            out.append(f'<line x1="{ax:.1f}" y1="{ay:.1f}" x2="{bx:.1f}" y2="{by:.1f}" stroke="{TRAILC}" stroke-width="1" opacity="{top:.2f}"/>')
+            out.append(f'<circle cx="{bx:.1f}" cy="{by:.1f}" r="2.2" fill="{TRAILC}" opacity="{top*1.4:.2f}"/>')
     for nid in inB | (inA-inB):            # iota leaf dots only
         inB_=nid in inB
         label = labB[nid] if inB_ else labA[nid]
@@ -225,10 +242,14 @@ def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
         x,y,a,d=cur(nid)
         if a>0.02:
             out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.4" fill="{ncol(nid,d,inB_)}" opacity="{a:.2f}"/>')
-    if redex is not None and redex in pA:  # flash where the rule fired
-        rx,ry=px(pA,redex); fa=max(0.0,1.0-2.4*t)
+    if redex is not None and redex in pA:  # subtle sparkle where the rule fired (early in the morph)
+        rx,ry=px(pA,redex); fa=max(0.0, 1.0-3.4*t)
         if fa>0.02:
-            out.append(f'<circle cx="{rx:.1f}" cy="{ry:.1f}" r="{lerp(10,30,t):.1f}" fill="none" stroke="{FLASH}" stroke-width="2.5" opacity="{fa*0.85:.2f}"/>')
+            out.append(f'<circle cx="{rx:.1f}" cy="{ry:.1f}" r="2.8" fill="{FLASH}" opacity="{fa*0.7:.2f}"/>')
+            for ox,oy,sz in ((9,-5,4.5),(-8,6,3.5),(5,8,3.0)):    # a few little stars
+                sx,sy=rx+ox,ry+oy; op=fa*0.55
+                out.append(f'<line x1="{sx-sz:.1f}" y1="{sy:.1f}" x2="{sx+sz:.1f}" y2="{sy:.1f}" stroke="{FLASH}" stroke-width="1" opacity="{op:.2f}"/>')
+                out.append(f'<line x1="{sx:.1f}" y1="{sy-sz:.1f}" x2="{sx:.1f}" y2="{sy+sz:.1f}" stroke="{FLASH}" stroke-width="1" opacity="{op:.2f}"/>')
     out.append("</svg>")
     return "\n".join(out)
 

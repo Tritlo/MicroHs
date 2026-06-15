@@ -106,10 +106,10 @@ ap2 l r = (\i -> GAp i l r) <$> fresh
 -- *discards* (the branch not selected), which it *copies* (a duplicated argument,
 -- as (original-root, copy-root) pairs), and the *redex* head that fired.  Ids are
 -- iota-level (see 'iroot'), so they line up with the rendered ι-tree.
-data Prov = Prov { pDrop :: [Int], pCopy :: [(Int, Int)], pRedex :: Maybe Int }
+data Prov = Prov { pDrop :: [Int], pCopy :: [(Int, Int)], pRedex :: Maybe Int, pArgs :: [Int] }
 
 emptyProv :: Prov
-emptyProv = Prov [] [] Nothing
+emptyProv = Prov [] [] Nothing []
 
 -- Iota-level root id of a combinator subtree: an application keeps its id under
 -- expandIota; a leaf becomes its gadget, whose root id is gid 0 (see 'tagGadget').
@@ -182,7 +182,8 @@ gStep g =
           Just $ do let (used, rest) = splitAt n ps
                     (res, prov) <- f (map snd used)
                     pure ( ruleDesc name ++ note name rest
-                         , prov { pRedex = Just (iroot (GLf hid name)) }
+                         , prov { pRedex = Just (iroot (GLf hid name))
+                                , pArgs  = map (iroot . snd) used }
                          , reattach res rest )
     (h, ps) -> argStep h ps
   where
@@ -344,9 +345,11 @@ main = do
         | otherwise = maybe "" id mr ++ "\t" ++ sexp g
   mapM_ (\(mr, mprov, g) -> putStrLn (line mr mprov g)) trace
 
--- provenance, packed onto the 4th field: redex head, discarded roots, copy pairs.
+-- provenance, packed onto the 4th field: redex head, discarded roots, copy pairs,
+-- and the redex's argument roots (for the renderer's directional cue).
 provStr :: Prov -> String
-provStr (Prov ds cs r) = unwords $
+provStr (Prov ds cs r as) = unwords $
      [ "R:" ++ show i        | Just i <- [r] ]
   ++ [ "D:" ++ show d        | d <- ds ]
   ++ [ "C:" ++ show s ++ ":" ++ show t | (s,t) <- cs ]
+  ++ [ "A:" ++ show a        | a <- as ]
