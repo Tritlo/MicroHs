@@ -48,7 +48,7 @@ terms of S/K/I), so its iota size reflects its structure, not just its arity:
 no two of `B'`/`C'`/`C'B` coincide. All definitions are verified by reduction.
 `Y=SPP` (269) is the exception — it has no finite combinator-algebra form, so it
 comes from its lambda; that `P` is the SK form of `\x.f(x x)`, *not* the pairing
-combinator `P`. The subtitle gives `ι` itself: `ι = λf.((f λabc.((ac)(bc))) λde.d)`
+combinator `P`. The subtitle gives `ι` itself: `ι = λf.((f λa.λb.λc.((ac)(bc))) λd.λe.d)`
 = `λf. f S K`.
 `zoo_topdown.png` shows the
 small, legible ones (`S`, `K`, `I`=`ιι`, `A`=`KI`) top-down so the gadget shape

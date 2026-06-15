@@ -98,7 +98,7 @@ ZW="$(identify -format '%w' "$WORK/zgrid.png")"
 convert -background "$ZBG" -size "${ZW}x" -gravity center \
   pango:"<span font='$ZFONT 42' foreground='#eef2f8'>MicroHs combinators as iota trees (symbol counts)</span>" "$WORK/zh1.png"
 convert -background "$ZBG" -size "${ZW}x" -gravity center \
-  pango:"<span font='$ZFONT 30' foreground='#9fb0c8'>ι = λf.((fλa.λb.λc.((ac)(bc)))λde.d)</span>" "$WORK/zh2.png"
+  pango:"<span font='$ZFONT 30' foreground='#9fb0c8'>ι = λf.((fλa.λb.λc.((ac)(bc)))λd.λe.d)</span>" "$WORK/zh2.png"
 convert -size "${ZW}x16" xc:"$ZBG" "$WORK/zpad.png"
 convert "$WORK/zpad.png" "$WORK/zh1.png" "$WORK/zh2.png" "$WORK/zpad.png" "$WORK/zgrid.png" \
   -background "$ZBG" -append -depth 8 "$PIC/zoo_iota.png"
