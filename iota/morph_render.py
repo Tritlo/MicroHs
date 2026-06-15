@@ -185,7 +185,7 @@ def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
     tr=tr or {}
     newsrc=tr.get("newsrc",{}); gray=tr.get("gray",set())
     copyset=tr.get("copyset",set()); trail=tr.get("trail",[]); redex=tr.get("redex")
-    cff=max(0.0, 1.0 - t/0.5)              # copy-flash factor: bright early, gone by mid-morph
+    cff=1.0 if t<=0.45 else max(0.0,(0.7-t)/0.25)   # copy-flash: shine bright, then settle by 0.7
     out=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" font-family="monospace">',
          f'<rect width="{W}" height="{H}" fill="{BG}"/>',
          f'<text x="{W/2}" y="50" font-size="34" fill="{FG}" text-anchor="middle">{esc(caption)}</text>']
@@ -197,9 +197,9 @@ def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
     def cur(nid):                          # (x, y, alpha, depth)
         if nid in inB:
             tgt=px(pB,nid)
-            if nid in copyset:                                # a copy: flash, then emerge into place
-                src=newsrc.get(nid,tgt); tc=ease(min(1.0, t/0.45))
-                return (lerp(src[0],tgt[0],tc), lerp(src[1],tgt[1],tc), min(1.0, t*3.0), pB[nid][1])
+            if nid in copyset:                                # a copy: emerge fast, then shine, then settle
+                src=newsrc.get(nid,tgt); tc=ease(min(1.0, t/0.28))
+                return (lerp(src[0],tgt[0],tc), lerp(src[1],tgt[1],tc), min(1.0, t/0.12), pB[nid][1])
             if nid in inA: src=px(pA,nid); a=1.0              # persists -> glide
             else:          src=newsrc.get(nid,tgt); a=te      # new machinery -> grow from attachment
             return (lerp(src[0],tgt[0],te), lerp(src[1],tgt[1],te), a, pB[nid][1])
@@ -217,7 +217,7 @@ def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
             for c in kids[nid]:
                 x1,y1,a1,d1=cur(c); a=min(a0,a1)*0.85
                 if a>0.02:
-                    col=ncol(c,d1,inB_); w=1.0+1.4*cff if c in copyset else 1.0
+                    col=ncol(c,d1,inB_); w=1.0+2.2*cff if c in copyset else 1.0
                     out.append(f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" stroke="{col}" stroke-width="{w:.1f}" opacity="{a:.2f}"/>')
     edges(inB,kB,True); edges(inA-inB,kA,False)
     for r in trail:                        # directional cue: faint path of a rearranged arg
@@ -236,13 +236,13 @@ def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
         rx,ry=px(pA,redex); fa=max(0.0, 1.0-1.7*t)
         if fa>0.02:
             c0=0.55+0.45*math.sin(t*40)    # central dot twinkle
-            out.append(f'<circle cx="{rx:.1f}" cy="{ry:.1f}" r="{2.6*(0.7+0.3*c0):.1f}" fill="{FLASH}" opacity="{fa*0.75*c0:.2f}"/>')
-            for k,(ox,oy,sz) in enumerate(((10,-5,4.8),(-8,7,3.8),(6,9,3.2),(-9,-7,3.0))):
+            out.append(f'<circle cx="{rx:.1f}" cy="{ry:.1f}" r="{5.0*(0.7+0.3*c0):.1f}" fill="{FLASH}" opacity="{fa*0.8*c0:.2f}"/>')
+            for k,(ox,oy,sz) in enumerate(((18,-10,9.0),(-15,13,7.5),(12,17,6.5),(-17,-13,6.0))):
                 tw=0.5+0.5*math.sin(t*34 + k*1.7)         # each star out of phase -> scintillation
-                op=fa*0.6*tw; s=sz*(0.45+0.55*tw); sx,sy=rx+ox,ry+oy
+                op=fa*0.7*tw; s=sz*(0.45+0.55*tw); sx,sy=rx+ox,ry+oy
                 if op>0.02:
-                    out.append(f'<line x1="{sx-s:.1f}" y1="{sy:.1f}" x2="{sx+s:.1f}" y2="{sy:.1f}" stroke="{FLASH}" stroke-width="1" opacity="{op:.2f}"/>')
-                    out.append(f'<line x1="{sx:.1f}" y1="{sy-s:.1f}" x2="{sx:.1f}" y2="{sy+s:.1f}" stroke="{FLASH}" stroke-width="1" opacity="{op:.2f}"/>')
+                    out.append(f'<line x1="{sx-s:.1f}" y1="{sy:.1f}" x2="{sx+s:.1f}" y2="{sy:.1f}" stroke="{FLASH}" stroke-width="1.6" opacity="{op:.2f}"/>')
+                    out.append(f'<line x1="{sx:.1f}" y1="{sy-s:.1f}" x2="{sx:.1f}" y2="{sy+s:.1f}" stroke="{FLASH}" stroke-width="1.6" opacity="{op:.2f}"/>')
     out.append("</svg>")
     return "\n".join(out)
 
