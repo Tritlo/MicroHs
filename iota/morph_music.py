@@ -20,13 +20,13 @@ MELODY=-12                        # transpose the melody + final chord down an o
                                   # (warmer register); the bass/drone stay as anchors
 
 # "comb" pitch mode: each combinator *family* shares a pitch class, and a prime
-# lifts it an octave -- S=G4, S'=G5; C=D4, C'=D5, C'B=D6; B=A4, B'=A5 -- which
-# mirrors the maths (a prime is the same combinator threading one more argument).
-# K/I are the tonic, J the third; the rarer plumbing (U, Z, R) sits higher up.
-# Values are semitones above C4.
+# lifts it an octave -- S=G4/S'=G5, C=D4/C'=D5, B=A4 -- which mirrors the maths (a
+# prime is the same combinator threading one more argument).  K/I are the tonic, J
+# the third.  We cap the climb at one octave so nothing gets shrill: the doubly-
+# decorated C'B shares C''s register, and the lone R shares S'.  Semitones above C4.
 COMB_SEMI={"":0,"I":0,"K":0,"K2":12,"K3":12,"K4":12,"U":12,
-           "C":2,"C'":14,"C'B":26,"J":4,"Z":16,
-           "S":7,"S'":19,"R":31,"B":9,"B'":21,"Y":0}
+           "C":2,"C'":14,"C'B":14,"J":4,"Z":16,
+           "S":7,"S'":19,"R":19,"B":9,"B'":21,"Y":0}
 
 def freq(semi): return ROOT*2.0**(semi/12.0)
 def deg_semi(d): return 12*(d//5)+PENTA[d%5]      # pentatonic degree -> semitone
