@@ -9,6 +9,7 @@ shrink out).  Variable timing keeps the whole thing under a target length.
   morph_render.py OUTDIR [target_seconds] [fps]
 """
 import sys, os, math, re
+sys.setrecursionlimit(1_000_000)   # deep left-nested programs (e.g. a binary read as Jot) nest far past the default
 
 BG="#0d1117"; FG="#e6edf3"; MUT="#6e7681"; ACC="#7ee787"
 XS=24.0; YS=58.0; TOP=150.0
@@ -43,6 +44,20 @@ def parse(s):
         pos[0]+=1
         return (nid,label,kids)
     return go()
+
+def scan_sx(s):
+    """Node count and max node-depth of a parenthesised term WITHOUT building the tree.
+    Every node is one `( ... )` (labels/ids never contain parens), so the open-paren
+    count is the node count and the deepest nesting is the depth.  Node depth counts
+    the root as 0 (matching layout()), i.e. one less than the paren nesting.  Lets the
+    --dims pass and per-segment sizing skip parsing the (huge) terms entirely."""
+    nodes=0; depth=0; mx=0
+    for c in s:
+        if c=="(":
+            nodes+=1; depth+=1
+            if depth>mx: mx=depth
+        elif c==")": depth-=1
+    return nodes, max(0, mx-1)
 
 # ---------------------------------------------------------------- layout (radial)
 def nleaves(nd):
@@ -344,17 +359,23 @@ def main():
     fps=int(av[1]) if len(av)>1 else 30
     if outdir: os.makedirs(outdir,exist_ok=True)
 
-    steps=[]
+    # One pass over the trace.  The terms can be ~1e6 chars each (millions of nodes), so
+    # we DON'T parse them up front: node count + max depth come from a paren scan, and the
+    # captions only need the rule/term text.  The (huge) sx strings are kept only when a
+    # later stage actually builds trees from them, and only for the steps it needs.
+    keep_sx = (mode!="dims")
+    rules=[]; terms=[]; sxs=[]; pvs=[]; sizes=[]; maxd=0
     for line in sys.stdin:
         f=line.rstrip("\n").split("\t")
         rule = f[0] if f else ""
         if   len(f)>=3: term,sx,pv = f[1],f[2],(f[3] if len(f)>3 else "")
         elif len(f)==2: term,sx,pv = "",f[1],""
         else:           rule,term,sx,pv = "","",(f[0] if f else ""),""
-        steps.append((rule,term,parse(sx),parse_prov(pv)))
-    n=len(steps)
-    lays=[layout(s[2]) for s in steps]
-    maxd=max(l[5] for l in lays)
+        nodes,d=scan_sx(sx)
+        if d>maxd: maxd=d
+        rules.append(rule); terms.append(term[:120]); pvs.append(pv); sizes.append(nodes)
+        if keep_sx: sxs.append(sx)
+    n=len(rules)
     SZ=2*(maxd+1)*RSTEP
     W=int(SZ+120); H=int(CAPTOP+SZ+50); W+=W&1; H+=H&1   # native canvas
     # render straight at display size (the streaming path); SVG keeps native.
@@ -362,35 +383,30 @@ def main():
     gs=min(1.0, MAXW/W) if mode in ("raw","dims") else 1.0
     OW=int(W*gs); OH=int(H*gs); OW+=OW&1; OH+=OH&1
 
+    steps=list(zip(rules,terms))   # schedule/captions only read [0]=rule and [1]=term
     def term_for(i):
-        s=steps[i][1].strip()
+        s=terms[i].strip()
         return s if len(s)<=72 else s[:69]+"..."
-    sizes=[len(l[0]) for l in lays]
     hold, tween, _ = schedule(steps, sizes, target, fps)
 
-    # one place that defines what is on screen each frame: (A, B, t, tr, cap, term, expl)
-    def frame_iter():
-        for i in range(n):
-            cap=caption_call(steps[i][0])[0]; term=term_for(i); expl=step_expl(steps[i])
-            for _ in range(hold[i]):
-                yield (lays[i],lays[i],0.0,{},cap,term,expl)
-            if i+1<n:
-                cap2=caption_call(steps[i+1][0])[0]; term2=term_for(i+1); expl2=step_expl(steps[i+1])
-                tr=compute_transition(W,H,lays[i],lays[i+1], steps[i+1][3])
-                tw=tween[i]
-                for f in range(tw):
-                    t=(f+1)/tw; late=t>0.5
-                    yield (lays[i],lays[i+1],t,tr, cap2 if late else cap,
-                           term2 if late else term, expl2 if late else expl)
-
     if mode=="dims":
-        # collect per-frame caption text, coalesce equal runs into [start,end) windows
-        rows=list(frame_iter()); total=len(rows)
+        # per-frame caption text (no geometry needed), coalesced into [start,end) windows
+        def caps_iter():
+            for i in range(n):
+                cap=caption_call(rules[i])[0]; term=term_for(i); expl=step_expl(steps[i])
+                for _ in range(hold[i]): yield (cap,term,expl)
+                if i+1<n:
+                    cap2=caption_call(rules[i+1])[0]; term2=term_for(i+1); expl2=step_expl(steps[i+1])
+                    tw=tween[i]
+                    for fc in range(tw):
+                        late=(fc+1)/tw>0.5
+                        yield (cap2 if late else cap, term2 if late else term, expl2 if late else expl)
+        rows=list(caps_iter()); total=len(rows)
         segs=[]   # (lineidx, startframe, endframe, text); line 0=caption,1=term,2=expl
         for li in range(3):
             cur_txt=None; cs=0
             for fi,row in enumerate(rows):
-                txt=row[4+li]
+                txt=row[li]
                 if txt!=cur_txt:
                     if cur_txt: segs.append((li,cs,fi,cur_txt))
                     cur_txt=txt; cs=fi
@@ -401,32 +417,59 @@ def main():
         print(f"{OW} {OH} {total} {gs:.5f}")
         return
 
+    # flat frame table -- (Aidx, Bidx, t, transition-index) -- built from int counts only.
+    specs=[]; tr_pairs=[]                              # tr_pairs[tri] = the step i of transition i->i+1
+    for i in range(n):
+        for _ in range(hold[i]): specs.append((i,i,0.0,-1))
+        if i+1<n:
+            tri=len(tr_pairs); tr_pairs.append(i)
+            for fc in range(tween[i]): specs.append((i,i+1,(fc+1)/tween[i],tri))
+    total=len(specs)
+
     if mode=="raw":
-        # flat frame table: (Aidx, Bidx, t, transition-index) + the shared role dicts
-        specs=[]; trs=[]
-        for i in range(n):
-            for _ in range(hold[i]): specs.append((i,i,0.0,-1))
-            if i+1<n:
-                tri=len(trs); trs.append(compute_transition(W,H,lays[i],lays[i+1], steps[i+1][3]))
-                for f in range(tween[i]): specs.append((i,i+1,(f+1)/tween[i],tri))
+        start=int(av[2]) if len(av)>2 else 0           # optional frame window [start,start+count)
+        count=int(av[3]) if len(av)>3 else total       # lets a driver render segments independently
+        lo=max(0,start); hi=min(start+count, total)
+        # only the steps/transitions this window shows need their trees built + laid out
+        need_steps=set(); need_tris=set()
+        for (Ai,Bi,_t,tri) in specs[lo:hi]:
+            need_steps.add(Ai); need_steps.add(Bi)
+            if tri>=0: need_tris.add(tri)
+        lays={i:layout(parse(sxs[i])) for i in need_steps}
+        trs={tri:compute_transition(W,H,lays[tr_pairs[tri]],lays[tr_pairs[tri]+1],parse_prov(pvs[tr_pairs[tri]+1]))
+             for tri in need_tris}
+        sxs.clear()                                    # free the ~hundreds-of-MB of term strings before forking
         _G.update(lays=lays,trs=trs,specs=specs,W=W,H=H,OW=OW,OH=OH,gs=gs,maxd=maxd)
+        idxs=range(lo,hi)
         jobs=max(1,int(os.environ.get("MORPH_JOBS","8")))
         buf=sys.stdout.buffer
         try:
             if jobs==1:
-                for f in range(len(specs)): buf.write(_render_frame(f))
+                for f in idxs: buf.write(_render_frame(f))
             else:
                 import multiprocessing as mp
                 with mp.Pool(jobs) as pool:                  # workers fork *after* _G is set
-                    for b in pool.imap(_render_frame, range(len(specs)), chunksize=4):
+                    for b in pool.imap(_render_frame, idxs, chunksize=4):
                         buf.write(b)
         except BrokenPipeError:
             pass                                             # consumer (ffmpeg/head) closed early
         return
 
+    # svg: numbered files, one per frame (the old path) -- builds every layout up front
+    lays=[layout(parse(sxs[i])) for i in range(n)]
     fnum=0
-    for (Al,Bl,t,tr,cap,term,expl) in frame_iter():
-        open(os.path.join(outdir,f"f{fnum:05d}.svg"),"w").write(frame_svg(W,H,Al,Bl,t,cap,term,expl,maxd,tr)); fnum+=1
+    for i in range(n):
+        cap=caption_call(rules[i])[0]; term=term_for(i); expl=step_expl(steps[i])
+        for _ in range(hold[i]):
+            open(os.path.join(outdir,f"f{fnum:05d}.svg"),"w").write(frame_svg(W,H,lays[i],lays[i],0.0,cap,term,expl,maxd,{})); fnum+=1
+        if i+1<n:
+            cap2=caption_call(rules[i+1])[0]; term2=term_for(i+1); expl2=step_expl(steps[i+1])
+            tr=compute_transition(W,H,lays[i],lays[i+1], parse_prov(pvs[i+1])); tw=tween[i]
+            for fc in range(tw):
+                t=(fc+1)/tw; late=t>0.5
+                open(os.path.join(outdir,f"f{fnum:05d}.svg"),"w").write(
+                    frame_svg(W,H,lays[i],lays[i+1],t, cap2 if late else cap,
+                              term2 if late else term, expl2 if late else expl, maxd, tr)); fnum+=1
     print(fnum)
 
 if __name__=="__main__":

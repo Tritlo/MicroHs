@@ -1,2 +1,2 @@
-# generated reduction films — regenerate with ../scripts/morph-film.sh
+# generated reduction films — regenerate with `python3 iota/morph_film.py` (from the repo root)
 *.mp4
