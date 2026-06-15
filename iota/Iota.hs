@@ -155,15 +155,32 @@ lamToTm (Lam _ _) = error "lamToTm: residual lambda"
 ------------------------------------------------------------------------
 -- Expand a combinator term to pure S/K/I, then to an iota tree.
 
--- S/K/I form of a single combinator (S,K,I kept as leaves; the iota basis
--- has a direct form for each, incl. I = ii, so we do NOT expand I to S K K).
+-- Minimal combinator-algebra definitions (each verified by reduction), in terms
+-- of S/K/I and simpler combinators.  Rendering from these instead of naive
+-- bracket abstraction makes a combinator's iota size reflect its structure --
+-- e.g. B'=BB is smaller than C'=B(BC)B -- rather than just its arity.
+algebraDefs :: [(String, String)]
+algebraDefs =
+  [ ("B","S (K S) K"), ("C","S (B B S) (K K)"), ("A","K I"), ("U","C I")
+  , ("Z","B K"), ("P","B C (C I)"), ("R","C C"), ("O","B (B K) (B C (C I))")
+  , ("J","B K (C I)"), ("S'","B (B S) B"), ("B'","B B"), ("C'","B (B C) B")
+  , ("C'B","C' B"), ("K2","B K K"), ("K3","B K2 K"), ("K4","B K3 K") ]
+
+parseTmStr :: String -> Tm
+parseTmStr s = let (e, ts) = parseExpr (tokenize s) in fst (apps e ts)
+
+-- S/K/I form of a single combinator.  S,K,I are leaves; the rest expand via
+-- their algebra definition (Y has none in the zoo, so it uses its lambda).
 combSK :: String -> Tm
 combSK "S" = Lf "S"
 combSK "K" = Lf "K"
 combSK "I" = Lf "I"
-combSK n   = case M.lookup n zoo of
-  Just l  -> lamToTm (compileLam l)
-  Nothing -> error ("combSK: unknown combinator " ++ n)
+combSK n
+  | Just d <- lookup n algebraDefs = expand (parseTmStr d)
+  | Just l <- M.lookup n zoo       = lamToTm (compileLam l)
+  | otherwise                      = error ("combSK: unknown combinator " ++ n)
+  where expand (Ap a b) = Ap (expand a) (expand b)
+        expand (Lf s)   = combSK s
 
 -- Whole term -> pure S/K/I term.  Fails on any non-combinator leaf.
 toSK :: Tm -> Either String Tm

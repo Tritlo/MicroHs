@@ -62,36 +62,46 @@ radial Quicksort Quicksort.ex312 qs312_iota "quicksort [3,1,2] -> iota"
 # combinator's reduction rule to S/K/I, then to iota), and tiled into one montage.
 : > "$WORK/empty.dump"
 ZOO="S K I B C A U Z P R O J S' B' C' C'B K2 K3 K4 Y"
-ZFONT=DejaVu-Sans-Mono   # has a clear Greek iota, distinct from I
+ZBG='#0b0f17'
+ZFONT="DejaVu Sans Mono"   # fallback; prefer Berkeley Mono if installed
+if fc-match 'BerkeleyMono Nerd Font' 2>/dev/null | grep -qi berkeley; then
+  ZFONT="BerkeleyMono Nerd Font"
+fi
 # definition under each: iota form for S/K/I, combinator algebra for the rest
 # (all verified by reduction).  The P in Y=SPP is the SK form of \x.f(x x) (an
 # open term), NOT the pairing combinator P listed in the zoo.
 declare -A DEF=(
-  [S]='ι(ι(ι(ιι)))' [K]='ι(ι(ιι))' [I]='ιι'
+  [S]='(ι(ι(ι(ιι))))' [K]='(ι(ι(ιι)))' [I]='(ιι)'
   [B]='S(KS)K' [C]='S(BBS)(KK)' [A]='KI' [U]='CI' [Z]='BK'
   [P]='BC(CI)' [R]='CC' [O]='B(BK)(BC(CI))' [J]='BK(CI)'
   ["S'"]='B(BS)B' ["B'"]='BB' ["C'"]='B(BC)B' ["C'B"]='C'"'"'B'
   [K2]='BKK' [K3]='BK2K' [K4]='BK3K' [Y]='SPP'
 )
-radial_tiles=()
+# Pango renders labels so Berkeley Mono can carry the combinator algebra while
+# the iota/lambda glyphs fall back to DejaVu automatically.
+zoo_tiles=()
 for c in $ZOO; do
   s="$("$IOTA" iota "$WORK/empty.dump" "$c")"
   safe="$(printf '%s' "$c" | tr "'" p)"
   printf '%s' "$s" | python3 iota/treedraw.py radial iota "$WORK/zr_$safe.svg" "" >/dev/null
-  convert -density 55 -depth 8 -background '#0b0f17' "$WORK/zr_$safe.svg" "$WORK/zr_$safe.png"
-  radial_tiles+=( -label "$c  (${#s})
-${DEF[$c]}" "$WORK/zr_$safe.png" )
+  convert -density 55 -background "$ZBG" "$WORK/zr_$safe.svg" \
+    -resize 330x290 -gravity center -extent 360x300 "$WORK/zi_$safe.png"
+  convert -background "$ZBG" pango:"<span font='$ZFONT 25' foreground='#e3e9f2'>$c  (${#s})</span>" "$WORK/zn_$safe.png"
+  convert -background "$ZBG" pango:"<span font='$ZFONT 25' foreground='#9fb0c8'>${DEF[$c]}</span>" "$WORK/zd_$safe.png"
+  convert "$WORK/zn_$safe.png" "$WORK/zd_$safe.png" -background "$ZBG" \
+    -gravity center -append -extent 360x96 "$WORK/zlbl_$safe.png"
+  convert "$WORK/zi_$safe.png" "$WORK/zlbl_$safe.png" -background "$ZBG" -append "$WORK/zfull_$safe.png"
+  zoo_tiles+=( "$WORK/zfull_$safe.png" )
 done
-montage "${radial_tiles[@]}" -tile 5x4 -geometry 360x396+8+10 -background '#0b0f17' \
-  -fill '#dbe2ee' -font "$ZFONT" -pointsize 28 "$WORK/zgrid.png"
+montage "${zoo_tiles[@]}" -tile 5x4 -geometry +6+6 -background "$ZBG" "$WORK/zgrid.png"
 ZW="$(identify -format '%w' "$WORK/zgrid.png")"
-convert -background '#0b0f17' -fill '#e8edf5' -font "$ZFONT" -pointsize 40 -size "${ZW}x" \
-  -gravity center caption:"MicroHs combinators as iota trees (symbol counts)" "$WORK/zh1.png"
-convert -background '#0b0f17' -fill '#9fb0c8' -font "$ZFONT" -pointsize 30 -size "${ZW}x" \
-  -gravity center caption:"ι = λf.((fλa.λb.λc.((ac)(bc)))λd.λe.d)" "$WORK/zh2.png"
-convert -size "${ZW}x18" xc:'#0b0f17' "$WORK/zpad.png"
+convert -background "$ZBG" -size "${ZW}x" -gravity center \
+  pango:"<span font='$ZFONT 42' foreground='#eef2f8'>MicroHs combinators as iota trees (symbol counts)</span>" "$WORK/zh1.png"
+convert -background "$ZBG" -size "${ZW}x" -gravity center \
+  pango:"<span font='$ZFONT 30' foreground='#9fb0c8'>ι = λf.((fλa.λb.λc.((ac)(bc)))λde.d)</span>" "$WORK/zh2.png"
+convert -size "${ZW}x16" xc:"$ZBG" "$WORK/zpad.png"
 convert "$WORK/zpad.png" "$WORK/zh1.png" "$WORK/zh2.png" "$WORK/zpad.png" "$WORK/zgrid.png" \
-  -background '#0b0f17' -append -depth 8 "$PIC/zoo_iota.png"
+  -background "$ZBG" -append -depth 8 "$PIC/zoo_iota.png"
 echo "  $PIC/zoo_iota.png"
 
 small_tiles=()       # the small ones are legible top-down
