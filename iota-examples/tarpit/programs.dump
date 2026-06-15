@@ -1,0 +1,3 @@
+Tarpit.omega = ((S I I) (S I I))
+Tarpit.grow = ((S (S I I) I) (S (S I I) I))
+Tarpit.grow4 = ((S (S (S I I) I) I) (S (S (S I I) I) I))

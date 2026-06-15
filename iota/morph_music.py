@@ -74,13 +74,17 @@ def main():
         if mode=="comb": return COMB_SEMI.get(comb_head(i),0)
         return deg_semi(size_deg(sizes[i]))
 
+    # the reduction "resolved" only if it ended on a small normal form (e.g. A = True);
+    # a divergent / step-capped reduction (Turing-tarpit long reductions) just stops,
+    # so it gets no resolving chord -- it trails off unresolved, which is the point.
+    resolved = len(steps[-1][1].strip()) <= 3
     buf=array('d',[0.0])*int((total_dur+3.0)*SR)      # +3 s for the final chord to ring
     # soft root drone for tonal glue
     add(buf, 0.0, total_dur+2.0, freq(-24), 0.05, harm=(1.0,0.0), decay=(total_dur+2.0)*1.4)
     for i in range(n):
         t0=starts[i]/fps
         ring=min((hold[i]+(tween[i] if i+1<n else 0))/fps + 0.9, 2.2)
-        if i==n-1:                                    # A = True -> sustained tonic chord
+        if i==n-1 and resolved:                       # A = True -> sustained tonic chord
             for semi in (0,4,7,12):
                 add(buf, t0, 2.8, freq(semi+MELODY), 0.22, decay=2.6)
             continue
