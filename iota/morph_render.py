@@ -9,6 +9,7 @@ shrink out).  Variable timing keeps the whole thing under a target length.
   morph_render.py OUTDIR [target_seconds] [fps]
 """
 import sys, os, math, re
+sys.setrecursionlimit(1_000_000)   # deep left-nested programs (e.g. a binary read as Jot) nest far past the default
 
 BG="#0d1117"; FG="#e6edf3"; MUT="#6e7681"; ACC="#7ee787"
 XS=24.0; YS=58.0; TOP=150.0
