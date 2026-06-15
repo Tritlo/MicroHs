@@ -103,9 +103,9 @@ def main():
     def listlbl(j): return "["+",".join(str(cells[i][2]) for i in range(j,m))+"]"  # the suffix list from j
     listtxt=", ".join(map(str,vals))                       # in list order (no reordering)
 
-    if outro:                          # the result list -> uncons head-first -> the numbers (ends on chord)
-        if not iotafile:               # standalone preview shows the list first; joined onto the reduction it's already there
-            emit("sorted!", "", mkrow([suffix[0]]), lbls([listlbl(0)])+" HOLD:1.4")
+    if outro:                          # sorted list (held, with a chord) -> uncons head-first -> the numbers
+        # the full list, radial + full-scale (matches the reduction's last frame -> zero-morph join), rung
+        emit(f"sorted!  [{listtxt}]", "", find(iota,suffix[0]), "HOLD:2.5 CHORD")
         for j in range(1, m):          # columns: first j numbers peeled off + the remaining tail list
             cols=[cells[i][1] for i in range(j)]+[suffix[j]]
             lab =[numlbl(i) for i in range(j)]+[listlbl(j)]

@@ -171,16 +171,17 @@ ROW_SCALE=0.55           # intro "row" frames: each number's iota gadget drawn t
 def parse_prov(s):
     """4th trace field: 'R:'(redex head) 'D:'(discarded root) 'C:src:dst'(copy)
     'A:'(redex argument root, for the directional cue)."""
-    redex=None; drop=[]; copy=[]; args=[]; rowlbl=None; hold=0.0; tween=0.0
+    redex=None; drop=[]; copy=[]; args=[]; rowlbl=None; hold=0.0; tween=0.0; chord=False
     for tok in s.split():
         if   tok.startswith("ROWLBL:"): rowlbl=tok[len("ROWLBL:"):].split("|")  # intro row: per-column labels ('|' sep)
         elif tok.startswith("HOLD:"):   hold=float(tok[len("HOLD:"):])          # min hold for this frame (s)
         elif tok.startswith("TWEEN:"):  tween=float(tok[len("TWEEN:"):])        # min morph OUT of this frame (s)
+        elif tok=="CHORD":              chord=True                              # ring the resolving chord here
         elif tok.startswith("R:"): redex=int(tok[2:])
         elif tok.startswith("D:"): drop.append(int(tok[2:]))
         elif tok.startswith("C:"): a,b=tok[2:].split(":"); copy.append((int(a),int(b)))
         elif tok.startswith("A:"): args.append(int(tok[2:]))
-    return {"redex":redex,"drop":drop,"copy":copy,"args":args,"rowlbl":rowlbl,"hold":hold,"tween":tween}
+    return {"redex":redex,"drop":drop,"copy":copy,"args":args,"rowlbl":rowlbl,"hold":hold,"tween":tween,"chord":chord}
 
 def _depth(p): return p[4] if len(p)==5 else p[1]    # node depth, for either layout form
 

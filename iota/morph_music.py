@@ -83,7 +83,7 @@ def main():
     for i in range(n):
         t0=starts[i]/fps
         ring=min((hold[i]+(tween[i] if i+1<n else 0))/fps + 0.9, 2.2)
-        if i==n-1:                                    # A = True -> sustained tonic chord
+        if i==n-1 or provs[i].get("chord"):           # result/answer -> sustained tonic chord
             for semi in (0,4,7,12):
                 add(buf, t0, 2.8, freq(semi+MELODY), 0.22, decay=2.6)
             continue
