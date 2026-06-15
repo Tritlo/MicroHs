@@ -112,9 +112,26 @@ names: zero and successor are **K** and **J**, `True` is **A**. The only true at
 is `ι` itself — `K`, `S`, `J`, `Y`, every label above is a little ι-gadget, which
 is why even `True` is a tree and not a point.
 
-## Soundtrack notes
+## The soundtrack
 
-~1:28 long, ending on `A = T = True`. The pace is rubato (big expansions stretch,
-small reductions snap), averaging ~56 steps/min — roughly **112 BPM** with a step
-on every half-note. Structural anchors for section changes: `lt 2 3` ≈ 0:02,
-`lt 1 2` ≈ 0:39, `lt 0 1` ≈ 1:15, `True` ≈ 1:27.
+The music is generated from the reduction itself (pure-stdlib synthesis), locked
+to the same frame schedule so every note lands on its morph. Each step plays a
+note, and **the combinator being applied picks the pitch** (the default `comb`
+mode) — so recurring rules become recurring motifs and you can *hear* the
+S/K duplicate-and-drop rhythm and the `J` successor steps.
+
+The mapping mirrors the maths: each combinator **family shares a pitch class**, and
+a prime lifts it an octave — `S`=G, `S'`=G an octave up; `C`=D, `C'`=D an octave
+up. `K`/`I` are the tonic (C), `J` the third (E). The climb is capped at one
+octave so nothing turns shrill (the doubly-decorated `C'B` shares `C'`'s note, the
+lone `R` shares `S'`'s), keeping the melody at or below G4 over a low bass. The
+three **`Y` fixpoint steps get a bass accent** (you hear each recursive call), and
+**`A = True` resolves on a sustained tonic chord**, held while the final frame
+lingers, over a soft root drone. (An alternative `size` mode instead maps pitch to
+the tree size, so the melody rises as the mandala expands and falls as it
+collapses — `MUSIC_MODE=size`.)
+
+It runs ~1:28, ending on `A = T = True`. The pace is rubato (big expansions
+stretch, small reductions snap), averaging ~56 steps/min — roughly **112 BPM**
+with a step on every half-note. Structural anchors for section changes: `lt 2 3`
+≈ 0:02, `lt 1 2` ≈ 0:39, `lt 0 1` ≈ 1:15, `True` ≈ 1:27.
