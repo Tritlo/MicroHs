@@ -8,7 +8,7 @@ shrink out).  Variable timing keeps the whole thing under a target length.
 
   morph_render.py OUTDIR [target_seconds] [fps]
 """
-import sys, os, math
+import sys, os, math, re
 
 BG="#0d1117"; FG="#e6edf3"; MUT="#6e7681"; ACC="#7ee787"
 XS=24.0; YS=58.0; TOP=150.0
@@ -160,29 +160,36 @@ def main():
     SZ=2*(maxd+1)*RSTEP
     W=int(SZ+120); H=int(CAPTOP+SZ+50)
 
+    # The fixpoint step's rule carries the call it is unrolling, e.g.
+    # "Y x -> x (Y x)   lt 2 3"; split that note off the caption and surface it.
+    def caption_call(i):
+        m=re.search(r"\s+lt (\d+) (\d+)\s*$", steps[i][0])
+        if m: return steps[i][0][:m.start()], (int(m.group(1)), int(m.group(2)))
+        return steps[i][0], None
     # the machine state (combinator term) shown on every frame, truncated
     def term_for(i):
         s=steps[i][1].strip()
         return s if len(s)<=72 else s[:69]+"..."
     # green insight on the recursive-call / result steps
     def expl_for(i):
-        s=steps[i][1].strip(); parts=s.split()
-        if len(parts)==3 and parts[0]=="lt": return f"is {parts[1]} < {parts[2]} ?"
-        if s=="A": return "A  =  T  =  True"
+        _,call=caption_call(i)
+        if call: return f"lt {call[0]} {call[1]}      is {call[0]} < {call[1]} ?"
+        if steps[i][1].strip()=="A": return "A  =  T  =  True"
         return ""
 
     # frame budget: a hold on each step + a tween into the next, fit to <= target s.
-    # Every step gets a floor; "extra" frames are scaled to fill the budget and go
-    # to (a) dwelling on the explained / unfold steps and (b) smoother, longer morphs
-    # on the big expansions (unfold lt, S/S'/Y duplications), where the most happens.
+    # A faithful pure-combinator reduction is many (~150) substantial steps, so the
+    # floors are small; "extra" frames are scaled to fill the budget and go to
+    # (a) dwelling on the lt-call / result milestones and (b) smoother, longer morphs
+    # on the big expansions (Y unrolls, S'/J duplications), where the most happens.
     total_frames=int(target*fps)
     sizes=[len(l[0]) for l in lays]
     trans=[abs(sizes[i+1]-sizes[i]) for i in range(n-1)]   # nodes added/removed i->i+1
-    key=[bool(expl_for(i)) for i in range(n)]
-    unf=[steps[i][0].startswith("unfold") for i in range(n)]
-    MIN_HOLD, MIN_TWEEN = 6, 10
-    hold_extra =[(120.0 if i==n-1 else 70.0 if key[i] else 0.0) + (20.0 if unf[i] else 0.0) for i in range(n)]
-    tween_extra=[(trans[i]**0.65) * (1.8 if (unf[i+1] and trans[i]>0) else 1.0) for i in range(n-1)]
+    key=[bool(expl_for(i)) for i in range(n)]              # lt-call milestones + result
+    isY=[steps[i][0].startswith("Y ") for i in range(n)]   # fixpoint unrolls (recursion)
+    MIN_HOLD, MIN_TWEEN = 3, 5
+    hold_extra =[(110.0 if i==n-1 else 55.0 if key[i] else 0.0) for i in range(n)]
+    tween_extra=[(trans[i]**0.62) * (1.6 if isY[i+1] else 1.0) for i in range(n-1)]
     floor=MIN_HOLD*n + MIN_TWEEN*(n-1)
     raw=sum(hold_extra)+sum(tween_extra)
     scale=max(0.0, total_frames-floor)/raw if raw>0 else 0.0
@@ -193,18 +200,17 @@ def main():
         nonlocal fnum
         open(os.path.join(outdir,f"f{fnum:05d}.svg"),"w").write(svg); fnum+=1
     for i in range(n):
-        rule,_,_=steps[i]
-        cap = rule if rule else ""
+        cap = caption_call(i)[0]
         term=term_for(i); expl=expl_for(i)
         for _ in range(hold[i]):                     # hold current step
             write(frame_svg(W,H, lays[i],lays[i], 0.0, cap, term, expl, maxd))
         if i+1<n:
-            rule2,_,_=steps[i+1]; term2=term_for(i+1); expl2=expl_for(i+1)
+            cap2=caption_call(i+1)[0]; term2=term_for(i+1); expl2=expl_for(i+1)
             anch=compute_anchors(W,H,lays[i],lays[i+1])
             tw=tween[i]
             for f in range(tw):                      # morph to next
                 t=(f+1)/tw; late=t>0.5
-                write(frame_svg(W,H, lays[i],lays[i+1], t, rule2,
+                write(frame_svg(W,H, lays[i],lays[i+1], t, cap2,
                                 term2 if late else term, expl2 if late else expl, maxd, anch))
     print(fnum)
 

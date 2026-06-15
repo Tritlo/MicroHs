@@ -141,6 +141,12 @@ ruleDesc c = case lookup c tbl of Just d -> d; Nothing -> c
 reattach :: G -> [(Int, G)] -> G                 -- rebuild the upper spine, keeping app ids
 reattach = foldl' (\acc (i, arg) -> GAp i acc arg)
 
+-- When the fixpoint combinator unrolls (Y g -> g (Y g)) the next two spine args
+-- are lt's numeral arguments; surface them so the animator can mark the call.
+note :: String -> [(Int, G)] -> String
+note "Y" ((_,a):(_,b):_) | Just i <- numG a, Just j <- numG b = "   lt " ++ show i ++ " " ++ show j
+note _ _                                                      = ""
+
 -- one normal-order step: (rule, new whole term)
 gStep :: M.Map String G -> G -> Maybe (F (String, G))
 gStep defs g =
@@ -151,7 +157,7 @@ gStep defs g =
       | Just (n, f) <- gRule name, length ps >= n ->
           Just $ do let (used, rest) = splitAt n ps
                     res <- f (map snd used)
-                    pure (ruleDesc name, reattach res rest)
+                    pure (ruleDesc name ++ note name rest, reattach res rest)
     (h, ps) -> argStep h ps
   where
     argStep h = go []
@@ -172,19 +178,25 @@ sexp :: G -> String
 sexp (GLf i s)   = "(" ++ show i ++ " " ++ unqual s ++ ")"
 sexp (GAp i a b) = "(" ++ show i ++ " @ " ++ sexp a ++ " " ++ sexp b ++ ")"
 
--- combinator term as a string, Peano numerals collapsed to integers
+-- Scott numerals as combinators (the constructors are inlined: Lt.Z = K, Lt.S = J),
+-- so a number n is the tower J^n K.  numG reads one back out (K = 0, J t = 1+t);
+-- numTop only fires on a J-headed tower so a bare K combinator isn't shown as "0".
 numG :: G -> Maybe Int
-numG (GLf _ s)            | unqual s == "Z" = Just 0
-numG (GAp _ (GLf _ s) t)  | unqual s == "S" = (+ 1) <$> numG t
+numG (GLf _ s)            | unqual s == "K" = Just 0
+numG (GAp _ (GLf _ s) t)  | unqual s == "J" = (+ 1) <$> numG t
 numG _                                      = Nothing
+
+numTop :: G -> Maybe Int
+numTop g@(GAp _ (GLf _ s) _) | unqual s == "J" = numG g
+numTop _                                       = Nothing
 
 showGTerm :: G -> String
 showGTerm = top
   where
-    top g | Just k <- numG g = show k
+    top g | Just k <- numTop g = show k
     top (GLf _ s)   = unqual s
     top (GAp _ f a) = top f ++ " " ++ arg a
-    arg g | Just k <- numG g = show k
+    arg g | Just k <- numTop g = show k
     arg (GLf _ s)   = unqual s
     arg g           = "(" ++ top g ++ ")"
 
@@ -196,10 +208,16 @@ occurs :: String -> Tm -> Bool
 occurs x (TLf s)   = s == x
 occurs x (TAp a b) = occurs x a || occurs x b
 
+-- Optimised bracket abstraction (the classic K/I/eta/S rules).  Because the
+-- recursion variable occurs just once, the K and eta rules keep \x.body close to
+-- the size of body itself instead of tripling it the way naive S/K abstraction
+-- would -- which keeps the reduction (and the rendered ι-trees) tractable.
 absTm :: String -> Tm -> Tm
-absTm x (TLf s) | s == x    = TLf "I"
-                | otherwise = TAp (TLf "K") (TLf s)
-absTm x (TAp a b)           = TAp (TAp (TLf "S") (absTm x a)) (absTm x b)
+absTm x t
+  | not (occurs x t)                            = TAp (TLf "K") t      -- K: x unused
+absTm _ (TLf _)                                 = TLf "I"             -- I: t is x
+absTm x (TAp a (TLf y)) | y == x, not (occurs x a) = a                -- eta: \x. a x = a
+absTm x (TAp a b)                               = TAp (TAp (TLf "S") (absTm x a)) (absTm x b)
 
 inlineClosed :: M.Map String Tm -> Tm -> Tm
 inlineClosed defs0 = go []
@@ -261,10 +279,16 @@ leafIota defs c
                    Right sk -> skToIota sk
                    Left _   -> skToIota (combSK "I")
 
+-- Gadget node ids are derived from the combinator leaf's id (base) so the same
+-- node's ι-gadget keeps its identity across steps.  They live in a *negative*
+-- id space, disjoint from the (non-negative) application-node ids of the term --
+-- otherwise, once the fresh counter passes the 100000 stride, a raw app id would
+-- collide with some base*100000 region, fusing two nodes (a cycle, an infinite loop).
 tagGadget :: Int -> Tm -> G
 tagGadget base t = fst (go t 0)
-  where go (TLf s)   k = (GLf (base*100000 + k) s, k+1)
-        go (TAp a b) k = let (a',k1) = go a (k+1); (b',k2) = go b k1 in (GAp (base*100000+k) a' b', k2)
+  where gid k = negate (base*100000 + k + 1)
+        go (TLf s)   k = (GLf (gid k) s, k+1)
+        go (TAp a b) k = let (a',k1) = go a (k+1); (b',k2) = go b k1 in (GAp (gid k) a' b', k2)
 
 expandIota :: M.Map String Tm -> G -> G
 expandIota defs (GAp i a b) = GAp i (expandIota defs a) (expandIota defs b)
@@ -279,11 +303,15 @@ main = do
     [p, r, n] -> pure (p, r, read n)
     _ -> error "usage: morph [--iota] DUMPFILE ROOTNAME [stepLimit]"
   defsTm <- M.map unPMF . parseDump <$> readFile path
-  let action = do defsG <- traverse tag defsTm
-                  g0    <- tag (TLf root)
-                  greduce lim defsG g0
+  -- Inline every non-recursive definition (the data constructors and the entry
+  -- point) and tie the one recursive definition with Y (as iota/Iota.hs does),
+  -- giving a *closed* term over primitive combinators.  Reducing it with no named
+  -- defs means there is nothing to "unfold": every step is a real combinator/iota
+  -- rule, and the recursion shows up honestly as Y x -> x (Y x).
+  let root0  = inlineClosed defsTm (TLf root)
+      action = do g0 <- tag root0; greduce lim M.empty g0
       (trace, _) = runF action 0
       line mr g
-        | iotaMode  = maybe "" id mr ++ "\t" ++ showGTerm g ++ "\t" ++ sexp (expandIota defsTm g)
+        | iotaMode  = maybe "" id mr ++ "\t" ++ showGTerm g ++ "\t" ++ sexp (expandIota M.empty g)
         | otherwise = maybe "" id mr ++ "\t" ++ sexp g
   mapM_ (\(mr, g) -> putStrLn (line mr g)) trace

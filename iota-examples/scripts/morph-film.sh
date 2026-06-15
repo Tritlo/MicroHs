@@ -35,7 +35,7 @@ echo "frames: $NF  (~$(python3 -c "print(f'{$NF/$FPS:.1f}')")s @ ${FPS}fps)"
 
 # rasterise all SVGs in one ImageMagick process (mogrify reuses it -> much faster
 # than a convert per frame), then encode.
-mogrify -density 64 -background '#0d1117' -format png "$W/frames"/f*.svg
+mogrify -density 96 -background '#0d1117' -format png "$W/frames"/f*.svg
 ffmpeg -y -framerate "$FPS" -i "$W/frames/f%05d.png" \
   -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -pix_fmt yuv420p -crf 20 "$OUT" 2>/dev/null
 rm -rf "$W"

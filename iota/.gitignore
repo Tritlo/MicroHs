@@ -5,3 +5,4 @@
 *.hi
 /reduce
 /morph
+__pycache__/
