@@ -164,13 +164,15 @@ algebraDefs =
   [ ("B","S (K S) K"), ("C","S (B B S) (K K)"), ("A","K I"), ("U","C I")
   , ("Z","B K"), ("P","B C (C I)"), ("R","C C"), ("O","B (B K) (B C (C I))")
   , ("J","B K (C I)"), ("S'","B (B S) B"), ("B'","B B"), ("C'","B (B C) B")
-  , ("C'B","C' B"), ("K2","B K K"), ("K3","B K2 K"), ("K4","B K3 K") ]
+  , ("C'B","C' B"), ("K2","B K K"), ("K3","B K2 K"), ("K4","B K3 K")
+  -- Y = BU(CBU) with U = SII (the B/C fixed-point combinator), U expanded
+  , ("Y","B (S I I) (C B (S I I))") ]
 
 parseTmStr :: String -> Tm
 parseTmStr s = let (e, ts) = parseExpr (tokenize s) in fst (apps e ts)
 
 -- S/K/I form of a single combinator.  S,K,I are leaves; the rest expand via
--- their algebra definition (Y has none in the zoo, so it uses its lambda).
+-- their algebra definition (the zoo-lambda fallback is now unused).
 combSK :: String -> Tm
 combSK "S" = Lf "S"
 combSK "K" = Lf "K"

@@ -66,15 +66,16 @@ ZFONT="DejaVu Sans Mono"   # fallback; prefer Berkeley Mono if installed
 if fc-match 'BerkeleyMono Nerd Font' 2>/dev/null | grep -qi berkeley; then
   ZFONT="BerkeleyMono Nerd Font"
 fi
-# definition under each: iota form for S/K/I, combinator algebra for the rest
-# (all verified by reduction).  The P in Y=SPP is the SK form of \x.f(x x) (an
-# open term), NOT the pairing combinator P listed in the zoo.
+# definition under each: iota form for S/K/I, combinator algebra for the rest,
+# all verified by reduction.  Y = B(SII)(CB(SII)) is the B/C fixed-point
+# combinator (Wikipedia's BU(CBU) with the self-application U = SII expanded, so
+# it does not collide with the zoo's U); it reduces g to g(g(g...)).
 declare -A DEF=(
   [S]='(ι(ι(ι(ιι))))' [K]='(ι(ι(ιι)))' [I]='(ιι)'
   [B]='S(KS)K' [C]='S(BBS)(KK)' [A]='KI' [U]='CI' [Z]='BK'
   [P]='BC(CI)' [R]='CC' [O]='B(BK)(BC(CI))' [J]='BK(CI)'
   ["S'"]='B(BS)B' ["B'"]='BB' ["C'"]='B(BC)B' ["C'B"]='C'"'"'B'
-  [K2]='BKK' [K3]='BK2K' [K4]='BK3K' [Y]='SPP'
+  [K2]='BKK' [K3]='BK2K' [K4]='BK3K' [Y]='B(SII)(CB(SII))'
 )
 
 # Colour scheme: sets ZBG (canvas), ZFG (title/labels), ZFG2 (subtitle/defs) and
