@@ -70,7 +70,10 @@ def hsl_hex(h,s,l):
     r,g,b=colorsys.hls_to_rgb((h%360)/360.0,l,s)
     return "#%02x%02x%02x"%(int(r*255),int(g*255),int(b*255))
 
+import functools
+@functools.lru_cache(maxsize=4096)
 def _hex(c): return (int(c[1:3],16),int(c[3:5],16),int(c[5:7],16))
+@functools.lru_cache(maxsize=8192)
 def mix(c1,c2,t):                          # blend two #rrggbb colours
     a,b=_hex(c1),_hex(c2)
     return "#%02x%02x%02x"%tuple(int(a[i]+(b[i]-a[i])*t) for i in range(3))
@@ -175,26 +178,26 @@ def compute_transition(W,H,A,B,prov):
     return {"newsrc":newsrc,"gray":gray,"copyset":copyset,"trail":trail,
             "redex":prov.get("redex")}
 
-def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
-    """radial morph; A,B = (pos,lab,kids,parent,nleaves,maxd); pos[id]=(angle,depth)."""
+def frame_prims(W,H, A,B, t, maxd, tr):
+    """Backend-agnostic draw list for one morph frame: ('L',x0,y0,x1,y1,hexcol,alpha,width)
+    and ('C',x,y,r,hexcol,alpha).  Shared by the SVG and the numpy rasteriser so both
+    draw exactly the same thing.  Text is added by the SVG backend / burnt in by ffmpeg."""
     pA,labA,kA,parA,nlA,mdA = A
     pB,labB,kB,parB,nlB,mdB = B
     cx=W/2.0; cy=CAPTOP + (H-CAPTOP)/2.0
     def px(pos,nid): return node_xy(pos,nid,cx,cy)
     te=ease(t)
-    tr=tr or {}
     newsrc=tr.get("newsrc",{}); gray=tr.get("gray",set())
     copyset=tr.get("copyset",set()); trail=tr.get("trail",[]); redex=tr.get("redex")
     cff=1.0 if t<=0.45 else max(0.0,(0.7-t)/0.25)   # copy-flash: shine bright, then settle by 0.7
-    out=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" font-family="monospace">',
-         f'<rect width="{W}" height="{H}" fill="{BG}"/>',
-         f'<text x="{W/2}" y="50" font-size="34" fill="{FG}" text-anchor="middle">{esc(caption)}</text>']
-    if term:
-        out.append(f'<text x="{W/2}" y="90" font-size="26" fill="{MUT}" text-anchor="middle">{esc(term)}</text>')
-    if expl:
-        out.append(f'<text x="{W/2}" y="128" font-size="32" fill="{ACC}" text-anchor="middle">{esc(expl)}</text>')
-    inA=set(pA); inB=set(pB)
-    def cur(nid):                          # (x, y, alpha, depth)
+    inA=set(pA); inB=set(pB); P=[]
+    dcol=[hsl_hex(360.0*d/max(1,maxd),0.85,0.62) for d in range(maxd+1)]  # rainbow by depth, memoised
+    _cc={}
+    def cur(nid):                          # (x, y, alpha, depth), cached per frame
+        v=_cc.get(nid)
+        if v is not None: return v
+        v=_cur(nid); _cc[nid]=v; return v
+    def _cur(nid):
         if nid in inB:
             tgt=px(pB,nid)
             if nid in copyset:                                # a copy: emerge fast, then shine, then settle
@@ -207,50 +210,130 @@ def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
         dx,dy=s[0]-cx, s[1]-cy; L=math.hypot(dx,dy) or 1.0; k=DRIFT*te
         return (s[0]+dx/L*k, s[1]+dy/L*k, 1-te, pA[nid][1])
     def ncol(nid,d,inB_):                  # edge/dot colour by semantic role
-        base=hsl_hex(360.0*d/max(1,maxd),0.85,0.62)
         if (not inB_) and nid in gray: return GRAYC
-        if nid in copyset:             return mix(base, CPFLASH, cff)  # spine flash, fading to normal
-        return base
+        if nid in copyset:             return mix(dcol[d], CPFLASH, cff)  # spine flash, fading to normal
+        return dcol[d]
     def edges(ids,kids,inB_):
         for nid in ids:
             x0,y0,a0,_=cur(nid)
             for c in kids[nid]:
                 x1,y1,a1,d1=cur(c); a=min(a0,a1)*0.85
                 if a>0.02:
-                    col=ncol(c,d1,inB_); w=1.0+2.2*cff if c in copyset else 1.0
-                    out.append(f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" stroke="{col}" stroke-width="{w:.1f}" opacity="{a:.2f}"/>')
+                    w=1.0+2.2*cff if c in copyset else 1.0
+                    P.append(('L',x0,y0,x1,y1,ncol(c,d1,inB_),a,w))
     edges(inB,kB,True); edges(inA-inB,kA,False)
     for r in trail:                        # directional cue: faint path of a rearranged arg
         ax,ay=px(pA,r); bx,by,_,_=cur(r); top=0.22*math.sin(math.pi*t)
         if top>0.01:
-            out.append(f'<line x1="{ax:.1f}" y1="{ay:.1f}" x2="{bx:.1f}" y2="{by:.1f}" stroke="{TRAILC}" stroke-width="1" opacity="{top:.2f}"/>')
-            out.append(f'<circle cx="{bx:.1f}" cy="{by:.1f}" r="2.2" fill="{TRAILC}" opacity="{top*1.4:.2f}"/>')
+            P.append(('L',ax,ay,bx,by,TRAILC,top,1.0))
+            P.append(('C',bx,by,2.2,TRAILC,min(1.0,top*1.4)))
     for nid in inB | (inA-inB):            # iota leaf dots only
         inB_=nid in inB
         label = labB[nid] if inB_ else labA[nid]
         if label!="1": continue
         x,y,a,d=cur(nid)
-        if a>0.02:
-            out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.4" fill="{ncol(nid,d,inB_)}" opacity="{a:.2f}"/>')
+        if a>0.02: P.append(('C',x,y,2.4,ncol(nid,d,inB_),a))
     if redex is not None and redex in pA:  # twinkling sparkle where the rule fired (lingers ~3/5 of the morph)
         rx,ry=px(pA,redex); fa=max(0.0, 1.0-1.7*t)
         if fa>0.02:
             c0=0.55+0.45*math.sin(t*40)    # central dot twinkle
-            out.append(f'<circle cx="{rx:.1f}" cy="{ry:.1f}" r="{5.0*(0.7+0.3*c0):.1f}" fill="{FLASH}" opacity="{fa*0.8*c0:.2f}"/>')
+            P.append(('C',rx,ry,5.0*(0.7+0.3*c0),FLASH,min(1.0,fa*0.8*c0)))
             for k,(ox,oy,sz) in enumerate(((18,-10,9.0),(-15,13,7.5),(12,17,6.5),(-17,-13,6.0))):
                 tw=0.5+0.5*math.sin(t*34 + k*1.7)         # each star out of phase -> scintillation
                 op=fa*0.7*tw; s=sz*(0.45+0.55*tw); sx,sy=rx+ox,ry+oy
                 if op>0.02:
-                    out.append(f'<line x1="{sx-s:.1f}" y1="{sy:.1f}" x2="{sx+s:.1f}" y2="{sy:.1f}" stroke="{FLASH}" stroke-width="1.6" opacity="{op:.2f}"/>')
-                    out.append(f'<line x1="{sx:.1f}" y1="{sy-s:.1f}" x2="{sx:.1f}" y2="{sy+s:.1f}" stroke="{FLASH}" stroke-width="1.6" opacity="{op:.2f}"/>')
+                    P.append(('L',sx-s,sy,sx+s,sy,FLASH,op,1.6)); P.append(('L',sx,sy-s,sx,sy+s,FLASH,op,1.6))
+    return P
+
+def frame_svg(W,H, A,B, t, caption, term, expl, maxd, tr=None):
+    out=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" font-family="monospace">',
+         f'<rect width="{W}" height="{H}" fill="{BG}"/>',
+         f'<text x="{W/2}" y="50" font-size="34" fill="{FG}" text-anchor="middle">{esc(caption)}</text>']
+    if term: out.append(f'<text x="{W/2}" y="90" font-size="26" fill="{MUT}" text-anchor="middle">{esc(term)}</text>')
+    if expl: out.append(f'<text x="{W/2}" y="128" font-size="32" fill="{ACC}" text-anchor="middle">{esc(expl)}</text>')
+    for p in frame_prims(W,H,A,B,t,maxd,tr or {}):
+        if p[0]=='L':
+            _,x0,y0,x1,y1,col,a,w=p
+            out.append(f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" stroke="{col}" stroke-width="{w:.1f}" opacity="{a:.2f}"/>')
+        else:
+            _,x,y,r,col,a=p
+            out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{r:.1f}" fill="{col}" opacity="{a:.2f}"/>')
     out.append("</svg>")
     return "\n".join(out)
 
+# ---------------------------------------------------------------- numpy rasteriser
+# Draw the same primitives straight into an RGB buffer (lighten/max blend on the dark
+# background) so we can stream frames to ffmpeg and skip the per-file SVG->PNG step.
+# All sample points are gathered, then composited in ONE scatter via sort+reduceat
+# (numpy's unbuffered ufunc.at is ~10x slower).
+import numpy as np
+def _scatter_max(img, ys, xs, cols):
+    if len(ys)==0: return
+    H,W,_=img.shape; flat=img.reshape(-1,3)
+    idx=(ys*W+xs).astype(np.int64)
+    order=np.argsort(idx, kind='stable'); idx=idx[order]; cols=cols[order]
+    uniq, start=np.unique(idx, return_index=True)
+    mx=np.maximum.reduceat(cols, start, axis=0)
+    flat[uniq]=np.maximum(flat[uniq], mx)
+
+def raster(prims, W, H, gs=1.0):
+    # W,H are the OUTPUT pixel dims; gs scales the (native) primitive coords into them,
+    # so we render straight at display size instead of big-then-downscale.
+    img=np.empty((H,W,3),dtype=np.float32); img[:]=_hex(BG)
+    Ls=[p for p in prims if p[0]=='L']; Cs=[p for p in prims if p[0]=='C']
+    YS=[]; XS=[]; CC=[]
+    if Ls:
+        a=np.array([(p[1],p[2],p[3],p[4],p[6],p[7]) for p in Ls],dtype=np.float64)  # x0,y0,x1,y1,alpha,width
+        a[:,:4]*=gs
+        col=np.array([_hex(p[5]) for p in Ls],dtype=np.float32)*a[:,4,None]         # premultiplied
+        dx=a[:,2]-a[:,0]; dy=a[:,3]-a[:,1]; ln=np.hypot(dx,dy)
+        S=np.maximum(2,np.ceil(ln).astype(np.int64)+1)
+        tot=int(S.sum()); li=np.repeat(np.arange(len(Ls)),S)
+        within=np.arange(tot)-(np.cumsum(S)-S)[li]; tt=within/np.maximum(1,(S-1))[li]
+        inv=1.0/np.maximum(ln,1e-6); nx=-dy*inv; ny=dx*inv          # perpendicular, to fatten wide lines
+        bx=a[li,0]+dx[li]*tt; by=a[li,1]+dy[li]*tt; cc=col[li]; ww=a[li,5]
+        for off in (0.0, 0.6, -0.6, 1.2, -1.2):
+            m=ww>=(abs(off)*1.6)                                    # only fatten lines wide enough for this rail
+            xs=np.round(bx[m]+nx[li[m]]*off).astype(np.int64); ys=np.round(by[m]+ny[li[m]]*off).astype(np.int64)
+            ok=(xs>=0)&(xs<W)&(ys>=0)&(ys<H)
+            XS.append(xs[ok]); YS.append(ys[ok]); CC.append(cc[m][ok])
+    def disk(cx,cy,rad,premult):
+        rr=int(math.ceil(rad)); gy,gx=np.mgrid[-rr:rr+1,-rr:rr+1]
+        msk=gx*gx+gy*gy<=rad*rad; ox=gx[msk]; oy=gy[msk]
+        px=np.round(cx).astype(np.int64)[:,None]+ox[None,:]; py=np.round(cy).astype(np.int64)[:,None]+oy[None,:]
+        ok=(px>=0)&(px<W)&(py>=0)&(py<H)
+        pm=np.repeat(premult,ox.size,axis=0).reshape(len(cx),ox.size,3)
+        XS.append(px[ok]); YS.append(py[ok]); CC.append(pm[ok])
+    dots=[p for p in Cs if abs(p[3]-2.4)<1e-6]
+    if dots:
+        cxv=np.array([p[1] for p in dots])*gs; cyv=np.array([p[2] for p in dots])*gs
+        pm=np.array([_hex(p[4]) for p in dots],dtype=np.float32)*np.array([p[5] for p in dots],dtype=np.float32)[:,None]
+        disk(cxv,cyv,max(1.4,2.4*gs),pm)
+    for p in Cs:
+        if abs(p[3]-2.4)<1e-6: continue
+        disk(np.array([p[1]*gs]),np.array([p[2]*gs]),max(1.0,p[3]*gs),np.array([_hex(p[4])],dtype=np.float32)*p[5])
+    if YS: _scatter_max(img, np.concatenate(YS), np.concatenate(XS), np.concatenate(CC))
+    np.clip(img,0,255,out=img)
+    return img.astype(np.uint8)
+
 # ---------------------------------------------------------------- main
+# Three output modes, all sharing the same schedule + geometry:
+#   morph_render.py OUTDIR [secs] [fps]            -> numbered SVG frames (the old way)
+#   morph_render.py --dims CAPFILE [secs] [fps]    -> print "W H NFRAMES"; write a
+#                                                     caption-timing manifest to CAPFILE
+#   morph_render.py --raw [secs] [fps]             -> stream raw rgb24 frames to stdout
+# The --dims + --raw pair lets a driver pipe frames straight into ffmpeg (no per-file
+# SVG->PNG) and burn the captions with ffmpeg drawtext from the manifest.
 def main():
-    outdir=sys.argv[1]; target=float(sys.argv[2]) if len(sys.argv)>2 else 80.0
-    fps=int(sys.argv[3]) if len(sys.argv)>3 else 30
-    os.makedirs(outdir,exist_ok=True)
+    av=sys.argv[1:]
+    mode="svg"; outdir=None; capfile=None
+    if av and av[0]=="--raw":   mode="raw"; av=av[1:]
+    elif av and av[0]=="--dims": mode="dims"; capfile=av[1]; av=av[2:]
+    else:                        outdir=av[0]; av=av[1:]
+    target=float(av[0]) if av else 80.0
+    fps=int(av[1]) if len(av)>1 else 30
+    if outdir: os.makedirs(outdir,exist_ok=True)
+
     steps=[]
     for line in sys.stdin:
         f=line.rstrip("\n").split("\t")
@@ -263,35 +346,60 @@ def main():
     lays=[layout(s[2]) for s in steps]
     maxd=max(l[5] for l in lays)
     SZ=2*(maxd+1)*RSTEP
-    W=int(SZ+120); H=int(CAPTOP+SZ+50)
+    W=int(SZ+120); H=int(CAPTOP+SZ+50); W+=W&1; H+=H&1   # native canvas
+    # render straight at display size (the streaming path); SVG keeps native.
+    MAXW=1000
+    gs=min(1.0, MAXW/W) if mode in ("raw","dims") else 1.0
+    OW=int(W*gs); OH=int(H*gs); OW+=OW&1; OH+=OH&1
 
-    # the machine state (combinator term) shown on every frame, truncated
     def term_for(i):
         s=steps[i][1].strip()
         return s if len(s)<=72 else s[:69]+"..."
-    def expl_for(i): return step_expl(steps[i])
-
     sizes=[len(l[0]) for l in lays]
     hold, tween, _ = schedule(steps, sizes, target, fps)
+
+    # one place that defines what is on screen each frame: (A, B, t, tr, cap, term, expl)
+    def frame_iter():
+        for i in range(n):
+            cap=caption_call(steps[i][0])[0]; term=term_for(i); expl=step_expl(steps[i])
+            for _ in range(hold[i]):
+                yield (lays[i],lays[i],0.0,{},cap,term,expl)
+            if i+1<n:
+                cap2=caption_call(steps[i+1][0])[0]; term2=term_for(i+1); expl2=step_expl(steps[i+1])
+                tr=compute_transition(W,H,lays[i],lays[i+1], steps[i+1][3])
+                tw=tween[i]
+                for f in range(tw):
+                    t=(f+1)/tw; late=t>0.5
+                    yield (lays[i],lays[i+1],t,tr, cap2 if late else cap,
+                           term2 if late else term, expl2 if late else expl)
+
+    if mode=="dims":
+        # collect per-frame caption text, coalesce equal runs into [start,end) windows
+        rows=list(frame_iter()); total=len(rows)
+        segs=[]   # (lineidx, startframe, endframe, text); line 0=caption,1=term,2=expl
+        for li in range(3):
+            cur_txt=None; cs=0
+            for fi,row in enumerate(rows):
+                txt=row[4+li]
+                if txt!=cur_txt:
+                    if cur_txt: segs.append((li,cs,fi,cur_txt))
+                    cur_txt=txt; cs=fi
+            if cur_txt: segs.append((li,cs,total,cur_txt))
+        with open(capfile,"w") as cf:
+            for li,s,e,txt in segs:
+                cf.write(f"{li}\t{s/fps:.3f}\t{e/fps:.3f}\t{txt}\n")
+        print(f"{OW} {OH} {total} {gs:.5f}")
+        return
+
+    if mode=="raw":
+        buf=sys.stdout.buffer
+        for (Al,Bl,t,tr,_,_,_) in frame_iter():
+            buf.write(raster(frame_prims(W,H,Al,Bl,t,maxd,tr),OW,OH,gs).tobytes())
+        return
+
     fnum=0
-    def write(svg):
-        nonlocal fnum
-        open(os.path.join(outdir,f"f{fnum:05d}.svg"),"w").write(svg); fnum+=1
-    for i in range(n):
-        cap = caption_call(steps[i][0])[0]
-        term=term_for(i); expl=expl_for(i)
-        for _ in range(hold[i]):                     # hold current step
-            write(frame_svg(W,H, lays[i],lays[i], 0.0, cap, term, expl, maxd))
-        if i+1<n:
-            cap2=caption_call(steps[i+1][0])[0]; term2=term_for(i+1); expl2=expl_for(i+1)
-            tr=compute_transition(W,H,lays[i],lays[i+1], steps[i+1][3])   # roles for i->i+1
-            tw=tween[i]
-            for f in range(tw):                      # morph to next
-                t=(f+1)/tw; late=t>0.5               # caption/term/expl all track the
-                write(frame_svg(W,H, lays[i],lays[i+1], t,   # currently-dominant step,
-                                cap2 if late else cap,       # so we show the ongoing
-                                term2 if late else term,     # reduction, not the next one
-                                expl2 if late else expl, maxd, tr))
+    for (Al,Bl,t,tr,cap,term,expl) in frame_iter():
+        open(os.path.join(outdir,f"f{fnum:05d}.svg"),"w").write(frame_svg(W,H,Al,Bl,t,cap,term,expl,maxd,tr)); fnum+=1
     print(fnum)
 
 if __name__=="__main__":
