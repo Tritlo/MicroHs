@@ -60,7 +60,9 @@ combinators (no program needed — the tool expands each combinator's rule).
 main zoo's scheme with the `SCHEME` env var, e.g. `SCHEME=github-light bash
 iota-examples/scripts/render-all.sh`. Schemes are defined in `zoo_scheme` in the
 script (canvas/text colours, plus `IOTA_BG`/`IOTA_LEAF`/`IOTA_EDGE_L` which
-`treedraw.py` reads for the trees).
+`treedraw.py` reads for the trees). `HIRES=1` additionally renders each theme at
+**2K / 4K / 8K** (`<theme>-{2k,4k,8k}.png`) — built large, then downsampled, so
+the text and trees stay crisp.
 
 ### Notes
 

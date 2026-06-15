@@ -93,28 +93,28 @@ zoo_scheme () {
 
 # Build the whole zoo montage (current scheme) into $1.  Pango lets Berkeley Mono
 # carry the combinator algebra while iota/lambda glyphs fall back to DejaVu.
-build_zoo () {
-  local out="$1" tiles=() s safe ZW
+build_zoo () {        # build_zoo OUT [SCALE]    (SCALE multiplies every dimension)
+  local out="$1" S="${2:-1}" tiles=() s safe ZW
   for c in $ZOO; do
     s="$("$IOTA" iota "$WORK/empty.dump" "$c")"
     safe="$(printf '%s' "$c" | tr "'" p)"
     printf '%s' "$s" | python3 iota/treedraw.py radial iota "$WORK/zr_$safe.svg" "" >/dev/null
-    convert -density 55 -background "$ZBG" "$WORK/zr_$safe.svg" \
-      -resize 330x290 -gravity center -extent 360x300 "$WORK/zi_$safe.png"
-    convert -background "$ZBG" pango:"<span font='$ZFONT 25' foreground='$ZFG'>$c  (${#s})</span>" "$WORK/zn_$safe.png"
-    convert -background "$ZBG" pango:"<span font='$ZFONT 25' foreground='$ZFG2'>${DEF[$c]}</span>" "$WORK/zd_$safe.png"
+    convert -density $((55*S)) -background "$ZBG" "$WORK/zr_$safe.svg" \
+      -resize $((330*S))x$((290*S)) -gravity center -extent $((360*S))x$((300*S)) "$WORK/zi_$safe.png"
+    convert -background "$ZBG" pango:"<span font='$ZFONT $((25*S))' foreground='$ZFG'>$c  (${#s})</span>" "$WORK/zn_$safe.png"
+    convert -background "$ZBG" pango:"<span font='$ZFONT $((25*S))' foreground='$ZFG2'>${DEF[$c]}</span>" "$WORK/zd_$safe.png"
     convert "$WORK/zn_$safe.png" "$WORK/zd_$safe.png" -background "$ZBG" \
-      -gravity center -append -extent 360x96 "$WORK/zlbl_$safe.png"
+      -gravity center -append -extent $((360*S))x$((96*S)) "$WORK/zlbl_$safe.png"
     convert "$WORK/zi_$safe.png" "$WORK/zlbl_$safe.png" -background "$ZBG" -append "$WORK/zfull_$safe.png"
     tiles+=( "$WORK/zfull_$safe.png" )
   done
-  montage "${tiles[@]}" -tile 5x4 -geometry +6+6 -background "$ZBG" "$WORK/zgrid.png"
+  montage "${tiles[@]}" -tile 5x4 -geometry +$((6*S))+$((6*S)) -background "$ZBG" "$WORK/zgrid.png"
   ZW="$(identify -format '%w' "$WORK/zgrid.png")"
   convert -background "$ZBG" -size "${ZW}x" -gravity center \
-    pango:"<span font='$ZFONT 42' foreground='$ZFG'>MicroHs combinators as iota trees (symbol counts)</span>" "$WORK/zh1.png"
+    pango:"<span font='$ZFONT $((42*S))' foreground='$ZFG'>MicroHs combinators as iota trees (symbol counts)</span>" "$WORK/zh1.png"
   convert -background "$ZBG" -size "${ZW}x" -gravity center \
-    pango:"<span font='$ZFONT 30' foreground='$ZFG2'>ι = λf.((fλa.λb.λc.((ac)(bc)))λd.λe.d)</span>" "$WORK/zh2.png"
-  convert -size "${ZW}x16" xc:"$ZBG" "$WORK/zpad.png"
+    pango:"<span font='$ZFONT $((30*S))' foreground='$ZFG2'>ι = λf.((fλa.λb.λc.((ac)(bc)))λd.λe.d)</span>" "$WORK/zh2.png"
+  convert -size "${ZW}x$((16*S))" xc:"$ZBG" "$WORK/zpad.png"
   convert "$WORK/zpad.png" "$WORK/zh1.png" "$WORK/zh2.png" "$WORK/zpad.png" "$WORK/zgrid.png" \
     -background "$ZBG" -append -depth 8 "$out"
   echo "  $out"
@@ -130,6 +130,19 @@ for sc in github-light github-dark github-light-hc github-dark-hc; do
   build_zoo "$VAR/$sc.png"
 done
 zoo_scheme "${SCHEME:-default}"   # restore for any later steps
+
+# high-resolution variations (HIRES=1): render large, then downsample to 2k/4k/8k
+if [ "${HIRES:-0}" = 1 ]; then
+  for sc in github-light github-dark github-light-hc github-dark-hc; do
+    zoo_scheme "$sc"
+    build_zoo "$WORK/hi.png" 5 >/dev/null
+    convert "$WORK/hi.png" -resize 8192x -depth 8 "$VAR/$sc-8k.png"
+    convert "$WORK/hi.png" -resize 4096x -depth 8 "$VAR/$sc-4k.png"
+    convert "$WORK/hi.png" -resize 2048x -depth 8 "$VAR/$sc-2k.png"
+    echo "  $VAR/$sc-{2k,4k,8k}.png"
+  done
+  zoo_scheme "${SCHEME:-default}"
+fi
 
 small_tiles=()       # the small ones are legible top-down
 for c in S K I A; do
