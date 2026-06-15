@@ -1,0 +1,137 @@
+1
+00:00:00,500 --> 00:00:05,500
+This is quicksort in plain Haskell,
+sorting the list [3, 1, 2].
+
+2
+00:00:05,500 --> 00:00:10,500
+MicroHs (a tiny Haskell compiler) turns it into
+combinators: no variables, just tree-rewriting.
+
+3
+00:00:10,500 --> 00:00:15,500
+Start with the classic core:
+the combinators S and K.
+
+4
+00:00:15,500 --> 00:00:20,500
+K x y = x.
+(Keep the first argument, drop the second.)
+
+5
+00:00:20,500 --> 00:00:25,500
+S x y z = x z (y z).
+(Copy z into both branches, then apply.)
+
+6
+00:00:25,500 --> 00:00:30,500
+S and K alone are Turing-complete:
+enough to express any computation.
+
+7
+00:00:30,500 --> 00:00:35,500
+MicroHs compiles to a richer set: supercombinators.
+
+8
+00:00:35,500 --> 00:00:40,500
+The rules firing up top, like P, O, J and Y,
+are those supercombinators.
+
+9
+00:00:40,500 --> 00:00:45,500
+Each one still reduces to S and K underneath.
+
+10
+00:00:45,500 --> 00:00:50,500
+There is an even smaller basis:
+a single combinator, ι (iota).
+
+11
+00:00:50,500 --> 00:00:55,500
+ι = λx. x S K.
+Applied to itself, ι ι = I, the identity.
+
+12
+00:00:55,500 --> 00:01:00,500
+K = ι(ι(ιι)),    S = ι(ι(ι(ιι))).
+
+13
+00:01:00,500 --> 00:01:05,500
+So S, K, and every supercombinator collapse to ι.
+
+14
+00:01:05,500 --> 00:01:10,500
+Each step rewrites a combinator,
+but every frame is drawn as pure ι.
+
+15
+00:01:10,500 --> 00:01:15,500
+In the picture, each dot is one ι,
+and each branch is an application.
+
+16
+00:01:15,500 --> 00:01:20,500
+A term is one bit-code:  iota = 0 | 1 iota iota
+(0 is ι; 1 applies the next two).
+
+17
+00:01:20,500 --> 00:01:25,500
+This whole turning mandala is one closed ι-term.
+
+18
+00:01:25,500 --> 00:01:30,500
+Data is compiled too: each constructor
+becomes a function that picks a branch.
+
+19
+00:01:30,500 --> 00:01:35,500
+Numbers are Peano: a zero,
+and the successor (Succ) of a smaller number.
+
+20
+00:01:35,500 --> 00:01:40,500
+Zero picks the zero branch;
+Succ n picks the other, carrying n.
+
+21
+00:01:40,500 --> 00:01:45,500
+Lists and booleans work the same way,
+each compiling to its own combinator.
+
+22
+00:01:45,500 --> 00:01:50,500
+So this tree is quicksort [3, 1, 2]:
+data and code, all of it in ι.
+
+23
+00:01:50,500 --> 00:01:55,500
+Listen: each combinator family has its own note,
+and recursion drops to a low bass.
+
+24
+00:01:55,500 --> 00:02:00,500
+The algorithm: pick a pivot, split the rest
+into ≤ and >, sort each side, join.
+
+25
+00:02:00,500 --> 00:02:05,500
+That ≤ comparison is the phrase you keep hearing.
+
+26
+00:02:05,500 --> 00:02:10,500
+The recursion is the Y combinator (Y f → f (Y f)):
+each call copies the sorter and expands the tree.
+
+27
+00:02:10,700 --> 00:02:13,300
+Comparison by comparison,
+it reaches the sorted answer: [1, 2, 3].
+
+28
+00:02:13,400 --> 00:02:15,600
+And to read a list back, we un-cons it:
+peel off the head, then the rest.
+
+29
+00:02:15,700 --> 00:02:20,500
+1, 2, 3.  Sorted, in pure ι.
