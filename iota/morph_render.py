@@ -410,7 +410,7 @@ def main():
                 tri=len(trs); trs.append(compute_transition(W,H,lays[i],lays[i+1], steps[i+1][3]))
                 for f in range(tween[i]): specs.append((i,i+1,(f+1)/tween[i],tri))
         _G.update(lays=lays,trs=trs,specs=specs,W=W,H=H,OW=OW,OH=OH,gs=gs,maxd=maxd)
-        jobs=max(1,int(os.environ.get("MORPH_JOBS","6")))
+        jobs=max(1,int(os.environ.get("MORPH_JOBS","8")))
         buf=sys.stdout.buffer
         try:
             if jobs==1:
