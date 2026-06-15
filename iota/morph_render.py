@@ -74,6 +74,41 @@ def hsl_hex(h,s,l):
 def ease(t): return t*t*(3-2*t)
 def lerp(a,b,t): return a+(b-a)*t
 
+# ---------------------------------------------------------------- timing (shared)
+def caption_call(rule):
+    """Split a fixpoint step's "Y x -> x (Y x)   lt 2 3" into (caption, (2,3))."""
+    m=re.search(r"\s+lt (\d+) (\d+)\s*$", rule)
+    if m: return rule[:m.start()], (int(m.group(1)), int(m.group(2)))
+    return rule, None
+
+def step_expl(step):                       # green insight on milestones
+    _,call=caption_call(step[0])
+    if call: return f"lt {call[0]} {call[1]}      is {call[0]} < {call[1]} ?"
+    if step[1].strip()=="A": return "A  =  T  =  True"
+    return ""
+
+def schedule(steps, sizes, target, fps):
+    """Frame budget shared by the renderer and the music so they stay in sync:
+    a hold on each step + a tween into the next, fit to <= target seconds, with the
+    extra frames going to the lt-call / result milestones and the big (Y / S')
+    morphs.  Returns (hold[n], tween[n-1], starts[n])."""
+    n=len(steps)
+    trans=[abs(sizes[i+1]-sizes[i]) for i in range(n-1)]
+    key=[bool(step_expl(steps[i])) for i in range(n)]
+    isY=[steps[i][0].startswith("Y ") for i in range(n)]
+    total_frames=int(target*fps); MIN_HOLD, MIN_TWEEN = 3, 5
+    hold_extra =[(110.0 if i==n-1 else 55.0 if key[i] else 0.0) for i in range(n)]
+    tween_extra=[(trans[i]**0.62) * (1.6 if isY[i+1] else 1.0) for i in range(n-1)]
+    floor=MIN_HOLD*n + MIN_TWEEN*(n-1)
+    raw=sum(hold_extra)+sum(tween_extra)
+    sc=max(0.0, total_frames-floor)/raw if raw>0 else 0.0
+    hold =[MIN_HOLD  + round(hold_extra[i]*sc) for i in range(n)]
+    tween=[MIN_TWEEN + round(tween_extra[i]*sc) for i in range(n-1)]
+    starts=[]; f=0
+    for i in range(n):
+        starts.append(f); f += hold[i] + (tween[i] if i+1<n else 0)
+    return hold, tween, starts
+
 def esc(s): return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
 RSTEP=22.0; CAPTOP=150; LEAF="#ffe08a"
@@ -160,52 +195,25 @@ def main():
     SZ=2*(maxd+1)*RSTEP
     W=int(SZ+120); H=int(CAPTOP+SZ+50)
 
-    # The fixpoint step's rule carries the call it is unrolling, e.g.
-    # "Y x -> x (Y x)   lt 2 3"; split that note off the caption and surface it.
-    def caption_call(i):
-        m=re.search(r"\s+lt (\d+) (\d+)\s*$", steps[i][0])
-        if m: return steps[i][0][:m.start()], (int(m.group(1)), int(m.group(2)))
-        return steps[i][0], None
     # the machine state (combinator term) shown on every frame, truncated
     def term_for(i):
         s=steps[i][1].strip()
         return s if len(s)<=72 else s[:69]+"..."
-    # green insight on the recursive-call / result steps
-    def expl_for(i):
-        _,call=caption_call(i)
-        if call: return f"lt {call[0]} {call[1]}      is {call[0]} < {call[1]} ?"
-        if steps[i][1].strip()=="A": return "A  =  T  =  True"
-        return ""
+    def expl_for(i): return step_expl(steps[i])
 
-    # frame budget: a hold on each step + a tween into the next, fit to <= target s.
-    # A faithful pure-combinator reduction is many (~150) substantial steps, so the
-    # floors are small; "extra" frames are scaled to fill the budget and go to
-    # (a) dwelling on the lt-call / result milestones and (b) smoother, longer morphs
-    # on the big expansions (Y unrolls, S'/J duplications), where the most happens.
-    total_frames=int(target*fps)
     sizes=[len(l[0]) for l in lays]
-    trans=[abs(sizes[i+1]-sizes[i]) for i in range(n-1)]   # nodes added/removed i->i+1
-    key=[bool(expl_for(i)) for i in range(n)]              # lt-call milestones + result
-    isY=[steps[i][0].startswith("Y ") for i in range(n)]   # fixpoint unrolls (recursion)
-    MIN_HOLD, MIN_TWEEN = 3, 5
-    hold_extra =[(110.0 if i==n-1 else 55.0 if key[i] else 0.0) for i in range(n)]
-    tween_extra=[(trans[i]**0.62) * (1.6 if isY[i+1] else 1.0) for i in range(n-1)]
-    floor=MIN_HOLD*n + MIN_TWEEN*(n-1)
-    raw=sum(hold_extra)+sum(tween_extra)
-    scale=max(0.0, total_frames-floor)/raw if raw>0 else 0.0
-    hold =[MIN_HOLD  + round(hold_extra[i]*scale)  for i in range(n)]
-    tween=[MIN_TWEEN + round(tween_extra[i]*scale) for i in range(n-1)]
+    hold, tween, _ = schedule(steps, sizes, target, fps)
     fnum=0
     def write(svg):
         nonlocal fnum
         open(os.path.join(outdir,f"f{fnum:05d}.svg"),"w").write(svg); fnum+=1
     for i in range(n):
-        cap = caption_call(i)[0]
+        cap = caption_call(steps[i][0])[0]
         term=term_for(i); expl=expl_for(i)
         for _ in range(hold[i]):                     # hold current step
             write(frame_svg(W,H, lays[i],lays[i], 0.0, cap, term, expl, maxd))
         if i+1<n:
-            cap2=caption_call(i+1)[0]; term2=term_for(i+1); expl2=expl_for(i+1)
+            cap2=caption_call(steps[i+1][0])[0]; term2=term_for(i+1); expl2=expl_for(i+1)
             anch=compute_anchors(W,H,lays[i],lays[i+1])
             tw=tween[i]
             for f in range(tw):                      # morph to next

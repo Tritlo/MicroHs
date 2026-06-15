@@ -8,7 +8,8 @@
 #     defaults: Lt  Lt.test  iota-examples/films/morph_lt23.mp4  85  30
 #
 # Pipeline: iota/morph (id-tracked reducer) -> morph_render.py (SVG tween frames)
-#           -> ImageMagick (rasterise) -> ffmpeg (mp4).
+#           -> ImageMagick (rasterise) -> ffmpeg; morph_music.py adds a generated
+#           soundtrack on the same schedule, muxed in at the end.
 # Needs: bin/gmhs, ghc, python3, ImageMagick, ffmpeg.
 set -euo pipefail
 
@@ -34,9 +35,17 @@ NF="$(python3 iota/morph_render.py "$W/frames" "$SECS" "$FPS" < "$W/trace.txt")"
 echo "frames: $NF  (~$(python3 -c "print(f'{$NF/$FPS:.1f}')")s @ ${FPS}fps)"
 
 # rasterise all SVGs in one ImageMagick process (mogrify reuses it -> much faster
-# than a convert per frame), then encode.
+# than a convert per frame), then encode the silent video.
 mogrify -density 96 -background '#0d1117' -format png "$W/frames"/f*.svg
 ffmpeg -y -framerate "$FPS" -i "$W/frames/f%05d.png" \
-  -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -pix_fmt yuv420p -crf 20 "$OUT" 2>/dev/null
+  -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -pix_fmt yuv420p -crf 20 "$W/silent.mp4" 2>/dev/null
+
+# generated soundtrack on the *same* schedule, so notes land on the morphs:
+# pitch follows the tree size, Y steps get a bass accent, A = True resolves on a chord.
+python3 iota/morph_music.py "$W/music.wav" "$SECS" "$FPS" < "$W/trace.txt"
+# mux; hold the final frame 2.5 s so the resolving chord rings out
+ffmpeg -y -i "$W/silent.mp4" -i "$W/music.wav" \
+  -filter_complex "[0:v]tpad=stop_mode=clone:stop_duration=2.5[v]" \
+  -map "[v]" -map 1:a -c:v libx264 -pix_fmt yuv420p -crf 20 -c:a aac -b:a 192k -shortest "$OUT" 2>/dev/null
 rm -rf "$W"
 echo "wrote $OUT"
