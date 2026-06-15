@@ -76,28 +76,54 @@ def lerp(a,b,t): return a+(b-a)*t
 
 def esc(s): return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
-RSTEP=22.0; CAPTOP=126; LEAF="#ffe08a"
+RSTEP=22.0; CAPTOP=150; LEAF="#ffe08a"
 
-def frame_svg(W,H, A,B, t, caption, expl, maxd):
+def node_xy(pos,nid,cx,cy):
+    ang,d=pos[nid]; r=d*RSTEP; return (cx+r*math.cos(ang), cy+r*math.sin(ang))
+
+def compute_anchors(W,H,A,B):
+    """For a transition A->B: where new nodes grow FROM (their nearest surviving
+    ancestor) and where dropped nodes collapse INTO, so subtrees unfurl/retract
+    from their attachment point instead of popping in/out of existence."""
+    pA,parA=A[0],A[3]; pB,parB=B[0],B[3]
+    cx=W/2.0; cy=CAPTOP + (H-CAPTOP)/2.0
+    inA=set(pA); inB=set(pB)
+    newsrc={}
+    for nid in inB-inA:
+        p=parB.get(nid)
+        while p is not None and p not in inA: p=parB.get(p)
+        newsrc[nid]=node_xy(pA,p,cx,cy) if p is not None else (cx,cy)
+    dropdst={}
+    for nid in inA-inB:
+        p=parA.get(nid)
+        while p is not None and p not in inB: p=parA.get(p)
+        dropdst[nid]=node_xy(pB,p,cx,cy) if p is not None else (cx,cy)
+    return (newsrc,dropdst)
+
+def frame_svg(W,H, A,B, t, caption, term, expl, maxd, anchors=None):
     """radial morph; A,B = (pos,lab,kids,parent,nleaves,maxd); pos[id]=(angle,depth)."""
     pA,labA,kA,parA,nlA,mdA = A
     pB,labB,kB,parB,nlB,mdB = B
     cx=W/2.0; cy=CAPTOP + (H-CAPTOP)/2.0
-    def px(pos,nid):
-        ang,d=pos[nid]; r=d*RSTEP; return (cx+r*math.cos(ang), cy+r*math.sin(ang))
+    def px(pos,nid): return node_xy(pos,nid,cx,cy)
     te=ease(t)
+    newsrc,dropdst = anchors if anchors else ({},{})
     out=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" font-family="monospace">',
          f'<rect width="{W}" height="{H}" fill="{BG}"/>',
-         f'<text x="{W/2}" y="56" font-size="36" fill="{FG}" text-anchor="middle">{esc(caption)}</text>']
+         f'<text x="{W/2}" y="50" font-size="34" fill="{FG}" text-anchor="middle">{esc(caption)}</text>']
+    if term:
+        out.append(f'<text x="{W/2}" y="90" font-size="26" fill="{MUT}" text-anchor="middle">{esc(term)}</text>')
     if expl:
-        out.append(f'<text x="{W/2}" y="104" font-size="32" fill="{ACC}" text-anchor="middle">{esc(expl)}</text>')
+        out.append(f'<text x="{W/2}" y="128" font-size="32" fill="{ACC}" text-anchor="middle">{esc(expl)}</text>')
     inA=set(pA); inB=set(pB)
     def cur(nid):                          # (x, y, alpha, depth)
         if nid in inB:
-            tgt=px(pB,nid); src=px(pA,nid) if nid in inA else tgt
-            a=1.0 if nid in inA else te
+            tgt=px(pB,nid)
+            if nid in inA: src=px(pA,nid); a=1.0
+            else:          src=newsrc.get(nid,tgt); a=te      # grow out from attachment
             return (lerp(src[0],tgt[0],te), lerp(src[1],tgt[1],te), a, pB[nid][1])
-        s=px(pA,nid); return (s[0],s[1],1-te, pA[nid][1])
+        s=px(pA,nid); dst=dropdst.get(nid,s)                  # collapse into surviving ancestor
+        return (lerp(s[0],dst[0],te), lerp(s[1],dst[1],te), 1-te, pA[nid][1])
     def edges(ids,kids):
         for nid in ids:
             x0,y0,a0,d0=cur(nid)
@@ -134,39 +160,52 @@ def main():
     SZ=2*(maxd+1)*RSTEP
     W=int(SZ+120); H=int(CAPTOP+SZ+50)
 
-    # explanations on the recursive-call / result steps (from the combinator term)
+    # the machine state (combinator term) shown on every frame, truncated
+    def term_for(i):
+        s=steps[i][1].strip()
+        return s if len(s)<=72 else s[:69]+"..."
+    # green insight on the recursive-call / result steps
     def expl_for(i):
         s=steps[i][1].strip(); parts=s.split()
         if len(parts)==3 and parts[0]=="lt": return f"is {parts[1]} < {parts[2]} ?"
         if s=="A": return "A  =  T  =  True"
         return ""
 
-    # frame budget: hold + tween per step, scaled to ~target seconds
+    # frame budget: a hold on each step + a tween into the next, fit to <= target s.
+    # Every step gets a floor; "extra" frames are scaled to fill the budget and go
+    # to (a) dwelling on the explained / unfold steps and (b) smoother, longer morphs
+    # on the big expansions (unfold lt, S/S'/Y duplications), where the most happens.
     total_frames=int(target*fps)
-    # weight: expansions (big node delta) and key steps get more time
-    import_w=[]
-    for i in range(n):
-        delta = abs(len(lays[i][0]) - (len(lays[i-1][0]) if i>0 else 0))
-        key = 1 if expl_for(i) else 0
-        import_w.append(1 + 0.04*delta + 1.4*key)
-    wsum=sum(import_w)
+    sizes=[len(l[0]) for l in lays]
+    trans=[abs(sizes[i+1]-sizes[i]) for i in range(n-1)]   # nodes added/removed i->i+1
+    key=[bool(expl_for(i)) for i in range(n)]
+    unf=[steps[i][0].startswith("unfold") for i in range(n)]
+    MIN_HOLD, MIN_TWEEN = 6, 10
+    hold_extra =[(120.0 if i==n-1 else 70.0 if key[i] else 0.0) + (20.0 if unf[i] else 0.0) for i in range(n)]
+    tween_extra=[(trans[i]**0.65) * (1.8 if (unf[i+1] and trans[i]>0) else 1.0) for i in range(n-1)]
+    floor=MIN_HOLD*n + MIN_TWEEN*(n-1)
+    raw=sum(hold_extra)+sum(tween_extra)
+    scale=max(0.0, total_frames-floor)/raw if raw>0 else 0.0
+    hold =[MIN_HOLD  + round(hold_extra[i]*scale)  for i in range(n)]
+    tween=[MIN_TWEEN + round(tween_extra[i]*scale) for i in range(n-1)]
     fnum=0
     def write(svg):
         nonlocal fnum
         open(os.path.join(outdir,f"f{fnum:05d}.svg"),"w").write(svg); fnum+=1
     for i in range(n):
         rule,_,_=steps[i]
-        budget=max(6, round(total_frames*import_w[i]/wsum))
-        hold=max(3, round(budget*0.45)); tween=budget-hold if i+1<n else 0
         cap = rule if rule else ""
-        expl=expl_for(i)
-        for _ in range(hold):                       # hold current step
-            write(frame_svg(W,H, lays[i],lays[i], 0.0, cap, expl, maxd))
+        term=term_for(i); expl=expl_for(i)
+        for _ in range(hold[i]):                     # hold current step
+            write(frame_svg(W,H, lays[i],lays[i], 0.0, cap, term, expl, maxd))
         if i+1<n:
-            rule2,_,_=steps[i+1]; expl2=expl_for(i+1)
-            for f in range(tween):                  # morph to next
-                t=(f+1)/tween
-                write(frame_svg(W,H, lays[i],lays[i+1], t, rule2, expl2 if t>0.5 else expl, maxd))
+            rule2,_,_=steps[i+1]; term2=term_for(i+1); expl2=expl_for(i+1)
+            anch=compute_anchors(W,H,lays[i],lays[i+1])
+            tw=tween[i]
+            for f in range(tw):                      # morph to next
+                t=(f+1)/tw; late=t>0.5
+                write(frame_svg(W,H, lays[i],lays[i+1], t, rule2,
+                                term2 if late else term, expl2 if late else expl, maxd, anch))
     print(fnum)
 
 if __name__=="__main__":
