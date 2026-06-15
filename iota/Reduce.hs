@@ -94,26 +94,130 @@ rule "J"   = Just (3, \[x,_,z]   -> Ap z x)
 rule "Y"   = Just (1, \[x]       -> Ap x (Ap (Lf "Y") x))
 rule _     = Nothing
 
--- one normal-order step: unfold a definition at the head, else fire a saturated
--- combinator at the head, else reduce the leftmost reducible argument.
-step :: M.Map String Tm -> Tm -> Maybe Tm
+-- human description of each combinator rule (shown as "what's happening")
+ruleDesc :: String -> String
+ruleDesc "S"   = "S x y z -> x z (y z)"
+ruleDesc "K"   = "K x y -> x"
+ruleDesc "I"   = "I x -> x"
+ruleDesc "B"   = "B x y z -> x (y z)"
+ruleDesc "C"   = "C x y z -> x z y"
+ruleDesc "A"   = "A x y -> y"
+ruleDesc "U"   = "U x y -> y x"
+ruleDesc "Z"   = "Z x y z -> x y"
+ruleDesc "P"   = "P x y z -> z x y"
+ruleDesc "R"   = "R x y z -> y z x"
+ruleDesc "O"   = "O x y z w -> w x y"
+ruleDesc "S'"  = "S' x y z w -> x (y w) (z w)"
+ruleDesc "B'"  = "B' x y z w -> x y (z w)"
+ruleDesc "C'"  = "C' x y z w -> x (y w) z"
+ruleDesc "C'B" = "C'B x y z w -> x z (y w)"
+ruleDesc "K2"  = "K2 x y z -> x"
+ruleDesc "K3"  = "K3 x y z w -> x"
+ruleDesc "K4"  = "K4 x y z w v -> x"
+ruleDesc "J"   = "J x y z -> z x"
+ruleDesc "Y"   = "Y x -> x (Y x)"
+ruleDesc c     = c
+
+-- one normal-order step, returning (rule applied, new term): unfold a definition
+-- at the head, else fire a saturated combinator at the head, else reduce the
+-- leftmost reducible argument.
+step :: M.Map String Tm -> Tm -> Maybe (String, Tm)
 step defs t =
   case spine t of
     (Lf h, args)
-      | Just body <- M.lookup h defs              -> Just (rebuild body args)
-      | Just (n, f) <- rule h, length args >= n   -> Just (rebuild (f (take n args)) (drop n args))
+      | Just body <- M.lookup h defs              -> Just ("unfold " ++ unqual h, rebuild body args)
+      | Just (n, f) <- rule h, length args >= n   -> Just (ruleDesc h, rebuild (f (take n args)) (drop n args))
     (h, args) -> reduceArg h args
   where
     reduceArg h = go []
       where go _   []     = Nothing
             go acc (a:as) = case step defs a of
-              Just a' -> Just (rebuild h (reverse acc ++ a' : as))
-              Nothing -> go (a:acc) as
+              Just (r, a') -> Just (r, rebuild h (reverse acc ++ a' : as))
+              Nothing      -> go (a:acc) as
 
-reduceTrace :: Int -> M.Map String Tm -> Tm -> [Tm]
-reduceTrace lim defs = go lim
-  where go 0 t = [t]
-        go n t = t : maybe [] (go (n-1)) (step defs t)
+-- the reduction as (rule-that-produced-this, term); the head has no rule.
+reduceTrace :: Int -> M.Map String Tm -> Tm -> [(Maybe String, Tm)]
+reduceTrace lim defs t0 = (Nothing, t0) : go lim t0
+  where go 0 _ = []
+        go n t = case step defs t of
+          Just (r, t') -> (Just r, t') : go (n - 1) t'
+          Nothing      -> []
+
+------------------------------------------------------------ iota expansion (per step)
+
+-- replace the dead `patternMatchFail "..."` branch with I (never evaluated)
+unPMF :: Tm -> Tm
+unPMF (Ap (Lf p) _) | "patternMatchFail" `isInfixOf` p = Lf "I"
+unPMF (Ap a b)                                          = Ap (unPMF a) (unPMF b)
+unPMF t                                                 = t
+
+absTm :: String -> Tm -> Tm
+absTm x (Lf s) | s == x    = Lf "I"
+               | otherwise = Ap (Lf "K") (Lf s)
+absTm x (Ap a b)           = Ap (Ap (Lf "S") (absTm x a)) (absTm x b)
+
+-- inline all definitions into a closed combinator term (Y-wrapping self-recursive
+-- defs, dropping pattern-match failures)
+inlineClosed :: M.Map String Tm -> Tm -> Tm
+inlineClosed defs0 = go []
+  where
+    defs = M.mapWithKey ywrap (M.map unPMF defs0)
+    ywrap n b | occurs n b = Ap (Lf "Y") (absTm n b)
+              | otherwise  = b
+    go st (Ap a b) = Ap (go st a) (go st b)
+    go st (Lf s) | s `elem` st               = Lf s
+                 | Just t <- M.lookup s defs  = go (s:st) t
+                 | otherwise                  = Lf s
+
+algebraDefs :: [(String, String)]
+algebraDefs =
+  [ ("B","S (K S) K"), ("C","S (B B S) (K K)"), ("A","K I"), ("U","C I")
+  , ("Z","B K"), ("P","B C (C I)"), ("R","C C"), ("O","B (B K) (B C (C I))")
+  , ("J","B K (C I)"), ("S'","B (B S) B"), ("B'","B B"), ("C'","B (B C) B")
+  , ("C'B","C' B"), ("K2","B K K"), ("K3","B K2 K"), ("K4","B K3 K") ]
+
+ySK :: String   -- Curry's Y in S/K/I
+ySK = "((S ((S ((S (K S)) ((S (K K)) I))) ((S ((S (K S)) (K I))) (K I)))) ((S ((S (K S)) ((S (K K)) I))) ((S ((S (K S)) (K I))) (K I))))"
+
+parseTmStr :: String -> Tm
+parseTmStr s = let (e, ts) = parseExpr (tokenize s) in fst (apps e ts)
+
+isComb :: String -> Bool
+isComb s = s `elem` ["S","K","I","Y"] || s `elem` map fst algebraDefs
+
+combSK :: String -> Tm
+combSK "S" = Lf "S"
+combSK "K" = Lf "K"
+combSK "I" = Lf "I"
+combSK "Y" = parseTmStr ySK
+combSK n   = case lookup n algebraDefs of
+  Just d  -> expand (parseTmStr d)
+  Nothing -> error ("combSK: " ++ n)
+  where expand (Ap a b) = Ap (expand a) (expand b)
+        expand (Lf s)   = combSK s
+
+toSK :: Tm -> Either String Tm
+toSK (Ap a b) = Ap <$> toSK a <*> toSK b
+toSK (Lf s) | isComb s = Right (combSK s) | otherwise = Left s
+
+i1, iI, iK, iS :: Tm
+i1 = Lf "1"; iI = Ap i1 i1; iK = foldr1 Ap [i1,i1,i1,i1]; iS = Ap i1 iK
+
+skToIota :: Tm -> Tm
+skToIota (Lf "S") = iS
+skToIota (Lf "K") = iK
+skToIota (Lf "I") = iI
+skToIota (Lf s)   = error ("skToIota: " ++ s)
+skToIota (Ap a b) = Ap (skToIota a) (skToIota b)
+
+encodeIota :: Tm -> String
+encodeIota (Lf _)   = "1"
+encodeIota (Ap a b) = '0' : encodeIota a ++ encodeIota b
+
+stepIota :: M.Map String Tm -> Tm -> String
+stepIota defs t = case toSK (inlineClosed defs (unPMF t)) of
+  Right sk  -> encodeIota (skToIota sk)
+  Left bad  -> "IMPURE:" ++ bad
 
 ------------------------------------------------------------ display
 
@@ -158,17 +262,22 @@ main :: IO ()
 main = do
   raw <- getArgs
   let full = "--full" `elem` raw
-  (path, root, lim) <- case filter (/= "--full") raw of
+      flags = ["--full", "--iota"]
+  (path, root, lim) <- case filter (`notElem` flags) raw of
     [p, r]    -> pure (p, r, 5000)
     [p, r, n] -> pure (p, r, read n)
-    _ -> error "usage: reduce [--full] DUMPFILE ROOTNAME [stepLimit]"
+    _ -> error "usage: reduce [--full|--iota] DUMPFILE ROOTNAME [stepLimit]"
   defs <- parseDump <$> readFile path
-  let steps = zip [0 :: Int ..] (reduceTrace lim defs (Lf root))
-      n     = length steps - 1
-      rec   = recDefs defs
-      shown = if full then steps
-              else [ s | s@(i, t) <- steps, i == 0 || i == n || isTraced rec t ]
-  mapM_ (\(i, t) -> putStrLn (pad i ++ showTm t)) shown
-  putStrLn ("(" ++ show n ++ " combinator steps"
-            ++ (if full then "" else "; showing function-call steps -- use --full for all") ++ ")")
+  let trace = reduceTrace lim defs (Lf root)
+  if "--iota" `elem` raw
+    then mapM_ (\(mr, t) -> putStrLn (maybe "" id mr ++ "\t" ++ stepIota defs t)) trace
+    else do
+      let steps = zip [0 :: Int ..] trace
+          n     = length steps - 1
+          rec   = recDefs defs
+          shown = if full then steps
+                  else [ s | s@(i, (_, t)) <- steps, i == 0 || i == n || isTraced rec t ]
+      mapM_ (\(i, (mr, t)) -> putStrLn (pad i ++ maybe "" (\r -> "[" ++ r ++ "]  ") mr ++ showTm t)) shown
+      putStrLn ("(" ++ show n ++ " combinator steps"
+                ++ (if full then "" else "; showing function-call steps -- use --full for all") ++ ")")
   where pad i = let s = show i in replicate (4 - length s) ' ' ++ s ++ "  "
