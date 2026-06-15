@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Turn morph_render's --dims caption manifest into an ffmpeg drawtext filter chain.
 
-  caps_filter.py CAPS.tsv TEXTDIR FONT [total_seconds] [geom_scale]
+  caps_filter.py CAPS.tsv TEXTDIR FONT [total_seconds] [geom_scale] [tstart] [tend]
 
 Reads lines "lineidx<TAB>start_s<TAB>end_s<TAB>text", writes each text to TEXTDIR
 (so no shell escaping of the content is needed), and prints a comma-joined chain of
 drawtext filters (one per segment), each shown only during its [start,end) window.
 Segments that run to the end are extended a little so the final caption survives the
-freeze frame.  Line 0 = rule caption, 1 = machine-state term, 2 = green insight."""
+freeze frame.  Line 0 = rule caption, 1 = machine-state term, 2 = green insight.
+
+With [tstart tend] only captions overlapping that window are emitted, their times
+shifted to be local to tstart -- so a 30 s segment encoded on its own gets exactly
+its captions, on its own clock (used by the segmented/parallel driver)."""
 import sys, os
 
 STYLE={0:("#e6edf3",34,26), 1:("#6e7681",26,70), 2:("#7ee787",32,106)}  # colour, size, y
@@ -16,6 +20,8 @@ def main():
     caps, td, font = sys.argv[1], sys.argv[2], sys.argv[3]
     total=float(sys.argv[4]) if len(sys.argv)>4 else None
     gs=float(sys.argv[5]) if len(sys.argv)>5 else 1.0           # video rendered at gs*native
+    tstart=float(sys.argv[6]) if len(sys.argv)>6 else 0.0       # segment window (absolute seconds)
+    tend=float(sys.argv[7]) if len(sys.argv)>7 else float("inf")
     os.makedirs(td, exist_ok=True)
     parts=[]
     for i,ln in enumerate(open(caps)):
@@ -23,6 +29,9 @@ def main():
         if len(f)<4: continue
         li=int(f[0]); a=float(f[1]); b=float(f[2]); txt=f[3]
         if total is not None and b>=total-1e-3: b=total+4.0      # persist through the end/freeze
+        lo=max(a,tstart); hi=min(b,tend)                         # clip to this segment's window
+        if hi<=lo: continue
+        a,b=lo-tstart, hi-tstart                                 # shift to segment-local time
         col,sz,y=STYLE[li]; sz=max(10,round(sz*gs)); y=round(y*gs)
         tf=os.path.join(td,f"s{i}.txt"); open(tf,"w").write(txt)
         parts.append(f"drawtext=fontfile={font}:textfile={tf}:fontcolor={col}:fontsize={sz}:"
