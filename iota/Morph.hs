@@ -102,30 +102,54 @@ spineIds t = (t, [])
 ap2 :: G -> G -> F G
 ap2 l r = (\i -> GAp i l r) <$> fresh
 
--- combinator rules, producing the redex result (fresh ids for new app nodes,
--- deep copies for duplicated arguments)
-gRule :: String -> Maybe (Int, [G] -> F G)
-gRule "S"   = Just (3, \[x,y,z]   -> do z2 <- copyG z; a <- ap2 x z; b <- ap2 y z2; ap2 a b)
-gRule "K"   = Just (2, \[x,_]     -> pure x)
-gRule "I"   = Just (1, \[x]       -> pure x)
-gRule "B"   = Just (3, \[x,y,z]   -> do yz <- ap2 y z; ap2 x yz)
-gRule "C"   = Just (3, \[x,y,z]   -> do xz <- ap2 x z; ap2 xz y)
-gRule "A"   = Just (2, \[_,y]     -> pure y)
-gRule "U"   = Just (2, \[x,y]     -> ap2 y x)
-gRule "Z"   = Just (3, \[x,y,_]   -> ap2 x y)
-gRule "P"   = Just (3, \[x,y,z]   -> do zx <- ap2 z x; ap2 zx y)
-gRule "R"   = Just (3, \[x,y,z]   -> do yz <- ap2 y z; ap2 yz x)
-gRule "O"   = Just (4, \[x,y,_,w] -> do wx <- ap2 w x; ap2 wx y)
-gRule "S'"  = Just (4, \[x,y,z,w] -> do w2 <- copyG w; yw <- ap2 y w; zw <- ap2 z w2; a <- ap2 x yw; ap2 a zw)
-gRule "B'"  = Just (4, \[x,y,z,w] -> do zw <- ap2 z w; xy <- ap2 x y; ap2 xy zw)
-gRule "C'"  = Just (4, \[x,y,z,w] -> do yw <- ap2 y w; a <- ap2 x yw; ap2 a z)
-gRule "C'B" = Just (4, \[x,y,z,w] -> do yw <- ap2 y w; xz <- ap2 x z; ap2 xz yw)
-gRule "K2"  = Just (3, \(x:_)     -> pure x)
-gRule "K3"  = Just (4, \(x:_)     -> pure x)
-gRule "K4"  = Just (5, \(x:_)     -> pure x)
-gRule "J"   = Just (3, \[x,_,z]   -> ap2 z x)
-gRule "Y"   = Just (1, \[x]       -> do x2 <- copyG x; yn <- (\i -> GLf i "Y") <$> fresh; yx <- ap2 yn x2; ap2 x yx)
+-- | Per-step provenance for the animator: which argument subtrees this rule
+-- *discards* (the branch not selected), which it *copies* (a duplicated argument,
+-- as (original-root, copy-root) pairs), and the *redex* head that fired.  Ids are
+-- iota-level (see 'iroot'), so they line up with the rendered ι-tree.
+data Prov = Prov { pDrop :: [Int], pCopy :: [(Int, Int)], pRedex :: Maybe Int }
+
+emptyProv :: Prov
+emptyProv = Prov [] [] Nothing
+
+-- Iota-level root id of a combinator subtree: an application keeps its id under
+-- expandIota; a leaf becomes its gadget, whose root id is gid 0 (see 'tagGadget').
+iroot :: G -> Int
+iroot (GAp i _ _) = i
+iroot (GLf i _)   = negate (i*100000 + 1)
+
+-- combinator rules: each yields the redex result (fresh ids for new app nodes,
+-- deep copies for duplicated arguments) together with what it dropped / copied.
+gRule :: String -> Maybe (Int, [G] -> F (G, Prov))
+gRule "S"   = Just (3, \[x,y,z]   -> do z2 <- copyG z; a <- ap2 x z; b <- ap2 y z2; r <- ap2 a b; pure (r, copy z z2))
+gRule "K"   = Just (2, \[x,y]     -> pure (x, drop1 y))
+gRule "I"   = Just (1, \[x]       -> pure (x, none))
+gRule "B"   = Just (3, \[x,y,z]   -> do yz <- ap2 y z; r <- ap2 x yz; pure (r, none))
+gRule "C"   = Just (3, \[x,y,z]   -> do xz <- ap2 x z; r <- ap2 xz y; pure (r, none))
+gRule "A"   = Just (2, \[x,y]     -> pure (y, drop1 x))
+gRule "U"   = Just (2, \[x,y]     -> do r <- ap2 y x; pure (r, none))
+gRule "Z"   = Just (3, \[x,y,z]   -> do r <- ap2 x y; pure (r, drop1 z))
+gRule "P"   = Just (3, \[x,y,z]   -> do zx <- ap2 z x; r <- ap2 zx y; pure (r, none))
+gRule "R"   = Just (3, \[x,y,z]   -> do yz <- ap2 y z; r <- ap2 yz x; pure (r, none))
+gRule "O"   = Just (4, \[x,y,z,w] -> do wx <- ap2 w x; r <- ap2 wx y; pure (r, drop1 z))
+gRule "S'"  = Just (4, \[x,y,z,w] -> do w2 <- copyG w; yw <- ap2 y w; zw <- ap2 z w2; a <- ap2 x yw; r <- ap2 a zw; pure (r, copy w w2))
+gRule "B'"  = Just (4, \[x,y,z,w] -> do zw <- ap2 z w; xy <- ap2 x y; r <- ap2 xy zw; pure (r, none))
+gRule "C'"  = Just (4, \[x,y,z,w] -> do yw <- ap2 y w; a <- ap2 x yw; r <- ap2 a z; pure (r, none))
+gRule "C'B" = Just (4, \[x,y,z,w] -> do yw <- ap2 y w; xz <- ap2 x z; r <- ap2 xz yw; pure (r, none))
+gRule "K2"  = Just (3, \[x,y,z]   -> pure (x, drops [y,z]))
+gRule "K3"  = Just (4, \[x,y,z,w] -> pure (x, drops [y,z,w]))
+gRule "K4"  = Just (5, \[x,y,z,w,v] -> pure (x, drops [y,z,w,v]))
+gRule "J"   = Just (3, \[x,y,z]   -> do r <- ap2 z x; pure (r, drop1 y))
+gRule "Y"   = Just (1, \[x]       -> do x2 <- copyG x; yn <- (\i -> GLf i "Y") <$> fresh; yx <- ap2 yn x2; r <- ap2 x yx; pure (r, copy x x2))
 gRule _     = Nothing
+
+none :: Prov
+none = emptyProv
+drop1 :: G -> Prov
+drop1 g = emptyProv { pDrop = [iroot g] }
+drops :: [G] -> Prov
+drops gs = emptyProv { pDrop = map iroot gs }
+copy :: G -> G -> Prov
+copy orig cp = emptyProv { pCopy = [(iroot orig, iroot cp)] }
 
 ruleDesc :: String -> String
 ruleDesc c = case lookup c tbl of Just d -> d; Nothing -> c
@@ -147,31 +171,34 @@ note :: String -> [(Int, G)] -> String
 note "Y" ((_,a):(_,b):_) | Just i <- numG a, Just j <- numG b = "   lt " ++ show i ++ " " ++ show j
 note _ _                                                      = ""
 
--- one normal-order step: (rule, new whole term)
-gStep :: M.Map String G -> G -> Maybe (F (String, G))
-gStep defs g =
+-- one normal-order step: (rule description, provenance, new whole term).  The term
+-- is already closed (no named defs), so there is nothing to unfold: every step is
+-- a real combinator rule, and we record what it dropped / copied for the animator.
+gStep :: G -> Maybe (F (String, Prov, G))
+gStep g =
   case spineIds g of
-    (GLf _ name, ps)
-      | Just body <- M.lookup name defs ->
-          Just $ do b <- copyG body; pure ("unfold " ++ unqual name, reattach b ps)
+    (GLf hid name, ps)
       | Just (n, f) <- gRule name, length ps >= n ->
           Just $ do let (used, rest) = splitAt n ps
-                    res <- f (map snd used)
-                    pure (ruleDesc name ++ note name rest, reattach res rest)
+                    (res, prov) <- f (map snd used)
+                    pure ( ruleDesc name ++ note name rest
+                         , prov { pRedex = Just (iroot (GLf hid name)) }
+                         , reattach res rest )
     (h, ps) -> argStep h ps
   where
     argStep h = go []
       where go _ [] = Nothing
-            go done ((i,arg):rest) = case gStep defs arg of
-              Just act -> Just $ do (r, arg') <- act; pure (r, reattach h (reverse done ++ (i,arg') : rest))
+            go done ((i,arg):rest) = case gStep arg of
+              Just act -> Just $ do (r, prov, arg') <- act
+                                    pure (r, prov, reattach h (reverse done ++ (i,arg') : rest))
               Nothing  -> go ((i,arg):done) rest
 
-greduce :: Int -> M.Map String G -> G -> F [(Maybe String, G)]
-greduce lim defs g0 = ((Nothing, g0) :) <$> loop lim g0
+greduce :: Int -> G -> F [(Maybe String, Maybe Prov, G)]
+greduce lim g0 = ((Nothing, Nothing, g0) :) <$> loop lim g0
   where loop 0 _ = pure []
-        loop n g = case gStep defs g of
+        loop n g = case gStep g of
           Nothing  -> pure []
-          Just act -> do (r, g') <- act; rest <- loop (n-1) g'; pure ((Just r, g') : rest)
+          Just act -> do (r, prov, g') <- act; rest <- loop (n-1) g'; pure ((Just r, Just prov, g') : rest)
 
 ------------------------------------------------------------ output
 sexp :: G -> String
@@ -309,9 +336,17 @@ main = do
   -- defs means there is nothing to "unfold": every step is a real combinator/iota
   -- rule, and the recursion shows up honestly as Y x -> x (Y x).
   let root0  = inlineClosed defsTm (TLf root)
-      action = do g0 <- tag root0; greduce lim M.empty g0
+      action = do g0 <- tag root0; greduce lim g0
       (trace, _) = runF action 0
-      line mr g
+      line mr mprov g
         | iotaMode  = maybe "" id mr ++ "\t" ++ showGTerm g ++ "\t" ++ sexp (expandIota M.empty g)
+                                      ++ "\t" ++ maybe "" provStr mprov
         | otherwise = maybe "" id mr ++ "\t" ++ sexp g
-  mapM_ (\(mr, g) -> putStrLn (line mr g)) trace
+  mapM_ (\(mr, mprov, g) -> putStrLn (line mr mprov g)) trace
+
+-- provenance, packed onto the 4th field: redex head, discarded roots, copy pairs.
+provStr :: Prov -> String
+provStr (Prov ds cs r) = unwords $
+     [ "R:" ++ show i        | Just i <- [r] ]
+  ++ [ "D:" ++ show d        | d <- ds ]
+  ++ [ "C:" ++ show s ++ ":" ++ show t | (s,t) <- cs ]
