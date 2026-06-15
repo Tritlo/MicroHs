@@ -63,7 +63,22 @@ def scan_sx(s):
 def nleaves(nd):
     return 1 if not nd[2] else sum(nleaves(k) for k in nd[2])
 
+def layout_row(tree):
+    """A synthetic 'ROW' root: lay each child subtree out radially in its OWN column
+    (positions tagged ('R', col, ncols, angle, depth)).  The root and its edges are not
+    drawn, so the children read as a left-to-right row of separate iota trees -- used for
+    the intro frame that shows the input numbers before they combine into a list."""
+    nid0,_,kids=tree
+    pos={nid0:(0.0,0)}; lab={nid0:"ROW"}; kidsof={nid0:[k[0] for k in kids]}; parent={nid0:None}
+    k=len(kids); mx=0
+    for col,child in enumerate(kids):
+        cpos,clab,ckids,cpar,_,cmd=layout(child); mx=max(mx,cmd)
+        for cid,(a,d) in cpos.items(): pos[cid]=('R',col,k,a,d)
+        lab.update(clab); kidsof.update(ckids); cpar[child[0]]=nid0; parent.update(cpar)
+    return pos,lab,kidsof,parent,k,mx
+
 def layout(tree):
+    if tree[1]=="ROW": return layout_row(tree)
     # pos[id] = (angle, depth); leaves spread on the circle by in-order index
     pos={}; lab={}; kidsof={}; parent={}; lc=[0]; maxd=[0]
     nl=nleaves(tree)
@@ -110,11 +125,13 @@ def step_expl(step):                       # green insight on milestones
     if step[1].strip()=="A": return "A  =  T  =  True"
     return ""
 
-def schedule(steps, sizes, target, fps):
+def schedule(steps, sizes, target, fps, hold_hint=None, tween_hint=None):
     """Frame budget shared by the renderer and the music so they stay in sync:
     a hold on each step + a tween into the next, fit to <= target seconds, with the
     extra frames going to the lt-call / result milestones and the big (Y / S')
-    morphs.  Returns (hold[n], tween[n-1], starts[n])."""
+    morphs.  hold_hint[i] / tween_hint[i] (seconds, optional) force a minimum hold on
+    step i / morph out of step i -- used by intro/outro frames that must linger or morph
+    slowly enough to read.  Returns (hold, tween, starts)."""
     n=len(steps)
     trans=[abs(sizes[i+1]-sizes[i]) for i in range(n-1)]
     key=[bool(step_expl(steps[i])) for i in range(n)]
@@ -122,13 +139,20 @@ def schedule(steps, sizes, target, fps):
         h=rule.split(); return bool(h) and h[0] in ("S","S'","Y")
     total_frames=int(target*fps); MIN_HOLD, MIN_TWEEN = 3, 5
     hold_extra =[(110.0 if i==n-1 else 55.0 if key[i] else 0.0) for i in range(n)]
-    # copying morphs (esp. the big ones) get more frames so the duplication reads
-    tween_extra=[(trans[i]**0.62) * (1.9 if is_copy(steps[i+1][0]) else 1.0) for i in range(n-1)]
+    # copying morphs (esp. the big ones) get more frames so the duplication reads;
+    # MORPH_TWEEN_CAP clamps a giant size-jump morph (e.g. list -> full term) so it
+    # doesn't hog the timeline.
+    cap=float(os.environ.get("MORPH_TWEEN_CAP","1e18"))
+    tween_extra=[min(cap,(trans[i]**0.62) * (1.9 if is_copy(steps[i+1][0]) else 1.0)) for i in range(n-1)]
     floor=MIN_HOLD*n + MIN_TWEEN*(n-1)
     raw=sum(hold_extra)+sum(tween_extra)
     sc=max(0.0, total_frames-floor)/raw if raw>0 else 0.0
     hold =[MIN_HOLD  + round(hold_extra[i]*sc) for i in range(n)]
+    if hold_hint:                                       # guarantee a readable minimum on flagged frames
+        hold=[max(hold[i], round(hold_hint[i]*fps)) for i in range(n)]
     tween=[MIN_TWEEN + round(tween_extra[i]*sc) for i in range(n-1)]
+    if tween_hint:                                      # guarantee a minimum morph length on flagged frames
+        tween=[max(tween[i], round(tween_hint[i]*fps)) for i in range(n-1)]
     starts=[]; f=0
     for i in range(n):
         starts.append(f); f += hold[i] + (tween[i] if i+1<n else 0)
@@ -142,20 +166,30 @@ CPFLASH="#ff9bd2"        # the copy's spine flashes this, then emerges into norm
 FLASH="#dfe7ef"          # twinkling sparkle where the rule fired
 DRIFT=18.0               # how far a discarded branch drifts outward as it fades
 TRAILC="#9aa7b3"; TRAIL_THRESH=26.0   # faint trail showing a rearranged argument's path
+ROW_SCALE=0.55           # intro "row" frames: each number's iota gadget drawn this fraction of full size
 
 def parse_prov(s):
     """4th trace field: 'R:'(redex head) 'D:'(discarded root) 'C:src:dst'(copy)
     'A:'(redex argument root, for the directional cue)."""
-    redex=None; drop=[]; copy=[]; args=[]
+    redex=None; drop=[]; copy=[]; args=[]; rowlbl=None; hold=0.0; tween=0.0
     for tok in s.split():
-        if   tok.startswith("R:"): redex=int(tok[2:])
+        if   tok.startswith("ROWLBL:"): rowlbl=tok[len("ROWLBL:"):].split("|")  # intro row: per-column labels ('|' sep)
+        elif tok.startswith("HOLD:"):   hold=float(tok[len("HOLD:"):])          # min hold for this frame (s)
+        elif tok.startswith("TWEEN:"):  tween=float(tok[len("TWEEN:"):])        # min morph OUT of this frame (s)
+        elif tok.startswith("R:"): redex=int(tok[2:])
         elif tok.startswith("D:"): drop.append(int(tok[2:]))
         elif tok.startswith("C:"): a,b=tok[2:].split(":"); copy.append((int(a),int(b)))
         elif tok.startswith("A:"): args.append(int(tok[2:]))
-    return {"redex":redex,"drop":drop,"copy":copy,"args":args}
+    return {"redex":redex,"drop":drop,"copy":copy,"args":args,"rowlbl":rowlbl,"hold":hold,"tween":tween}
+
+def _depth(p): return p[4] if len(p)==5 else p[1]    # node depth, for either layout form
 
 def node_xy(pos,nid,cx,cy):
-    ang,d=pos[nid]; r=d*RSTEP; return (cx+r*math.cos(ang), cy+r*math.sin(ang))
+    p=pos[nid]
+    if len(p)==5:                                    # row layout: ('R', col, ncols, angle, depth)
+        _,col,k,ang,d=p; colx=(2*cx)*(col+1)/(k+1.0); r=d*RSTEP*ROW_SCALE
+        return (colx+r*math.cos(ang), cy+r*math.sin(ang))
+    ang,d=p; r=d*RSTEP; return (cx+r*math.cos(ang), cy+r*math.sin(ang))
 
 def _subtree(root,kids):
     out=[]; st=[root]
@@ -220,16 +254,18 @@ def frame_prims(W,H, A,B, t, maxd, tr):
                 return (lerp(src[0],tgt[0],tc), lerp(src[1],tgt[1],tc), min(1.0, t/0.12), pB[nid][1])
             if nid in inA: src=px(pA,nid); a=1.0              # persists -> glide
             else:          src=newsrc.get(nid,tgt); a=te      # new machinery -> grow from attachment
-            return (lerp(src[0],tgt[0],te), lerp(src[1],tgt[1],te), a, pB[nid][1])
+            return (lerp(src[0],tgt[0],te), lerp(src[1],tgt[1],te), a, _depth(pB[nid]))
         s=px(pA,nid)                                          # dropped -> drift outward as it fades
         dx,dy=s[0]-cx, s[1]-cy; L=math.hypot(dx,dy) or 1.0; k=DRIFT*te
-        return (s[0]+dx/L*k, s[1]+dy/L*k, 1-te, pA[nid][1])
+        return (s[0]+dx/L*k, s[1]+dy/L*k, 1-te, _depth(pA[nid]))
     def ncol(nid,d,inB_):                  # edge/dot colour by semantic role
         if (not inB_) and nid in gray: return GRAYC
         if nid in copyset:             return mix(dcol[d], CPFLASH, cff)  # spine flash, fading to normal
         return dcol[d]
     def edges(ids,kids,inB_):
+        L=labB if inB_ else labA
         for nid in ids:
+            if L.get(nid)=="ROW": continue            # invisible row root: don't connect the columns
             x0,y0,a0,_=cur(nid)
             for c in kids[nid]:
                 x1,y1,a1,d1=cur(c); a=min(a0,a1)*0.85
@@ -376,6 +412,7 @@ def main():
         rules.append(rule); terms.append(term[:120]); pvs.append(pv); sizes.append(nodes)
         if keep_sx: sxs.append(sx)
     n=len(rules)
+    maxd=max(maxd, int(os.environ.get("MORPH_MAXD","0")))   # force canvas depth so separate clips match scale
     SZ=2*(maxd+1)*RSTEP
     W=int(SZ+120); H=int(CAPTOP+SZ+50); W+=W&1; H+=H&1   # native canvas
     # render straight at display size (the streaming path); SVG keeps native.
@@ -387,7 +424,9 @@ def main():
     def term_for(i):
         s=terms[i].strip()
         return s if len(s)<=72 else s[:69]+"..."
-    hold, tween, _ = schedule(steps, sizes, target, fps)
+    provs=[parse_prov(pvs[i]) for i in range(n)]
+    hold_hint=[p.get("hold",0.0) for p in provs]; tween_hint=[p.get("tween",0.0) for p in provs]
+    hold, tween, starts = schedule(steps, sizes, target, fps, hold_hint, tween_hint)
 
     if mode=="dims":
         # per-frame caption text (no geometry needed), coalesced into [start,end) windows
@@ -411,9 +450,24 @@ def main():
                     if cur_txt: segs.append((li,cs,fi,cur_txt))
                     cur_txt=txt; cs=fi
             if cur_txt: segs.append((li,cs,total,cur_txt))
+        # intro "row" frames: a value label under each column (6-field 'L' lines; the x
+        # is a width fraction so it survives the gs scale).  Linger a little into the morph.
+        labels=[]   # ("L", start_s, end_s, text, xfrac, y_out)
+        for i in range(n):
+            lbls=parse_prov(pvs[i]).get("rowlbl")
+            if not lbls: continue
+            k=len(lbls); a=starts[i]/fps
+            b=(starts[i]+hold[i]+(tween[i]//3 if i+1<n else 0))/fps
+            ly=round(0.66*OH)
+            for col,txt in enumerate(lbls):
+                if not txt: continue                       # list columns carry no label
+                labels.append(("L", a, b, txt, (col+1)/(k+1.0), ly))
         with open(capfile,"w") as cf:
             for li,s,e,txt in segs:
                 cf.write(f"{li}\t{s/fps:.3f}\t{e/fps:.3f}\t{txt}\n")
+            for _,a,b,txt,xf,ly in labels:
+                cf.write(f"L\t{a:.3f}\t{b:.3f}\t{txt}\t{xf:.4f}\t{ly}\n")
+        sys.stderr.write(f"maxd={maxd}\n")             # so a driver can match this canvas on another clip
         print(f"{OW} {OH} {total} {gs:.5f}")
         return
 

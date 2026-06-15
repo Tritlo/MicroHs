@@ -33,11 +33,20 @@ def _tail(path, n):
 
 def main():
     a = sys.argv[1:]
-    mod  = a[0] if len(a)>0 else "Lt"
-    defn = a[1] if len(a)>1 else "Lt.test"
-    out  = a[2] if len(a)>2 else "iota-examples/films/morph_lt23.mp4"
-    secs = a[3] if len(a)>3 else "120"
-    fps  = int(a[4]) if len(a)>4 else 30
+    trace_in = None                              # --trace FILE: render this trace, skip gmhs/morph
+    if "--trace" in a:
+        i=a.index("--trace"); trace_in=a[i+1]; del a[i:i+2]
+    if trace_in:
+        mod = defn = None
+        out  = a[0] if len(a)>0 else "iota-examples/films/intro.mp4"
+        secs = a[1] if len(a)>1 else "120"
+        fps  = int(a[2]) if len(a)>2 else 30
+    else:
+        mod  = a[0] if len(a)>0 else "Lt"
+        defn = a[1] if len(a)>1 else "Lt.test"
+        out  = a[2] if len(a)>2 else "iota-examples/films/morph_lt23.mp4"
+        secs = a[3] if len(a)>3 else "120"
+        fps  = int(a[4]) if len(a)>4 else 30
     seg_secs   = int(os.environ.get("SEG_SECS", "30"))
     seg_jobs   = int(os.environ.get("SEG_JOBS", "4"))
     morph_jobs = os.environ.get("MORPH_JOBS", "4")
@@ -47,19 +56,22 @@ def main():
     W = tempfile.mkdtemp()
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     try:
-        # build the id-tracked reducer if needed
-        if not os.access("iota/morph", os.X_OK):
-            subprocess.run(["ghc","-O0","-outputdir",os.path.join(W,"b"),"-o","iota/morph","iota/Morph.hs"], check=True)
-        # gmhs dumps the combinator program, then exits non-zero (no `main`) -- expected
-        raw = subprocess.run([f"{ROOT}/bin/gmhs", f"-i{PROG}", "-ilib", "-ddump-combinator", mod],
-                             capture_output=True, text=True).stdout
-        dump = os.path.join(W,"dump")
-        with open(dump,"w") as f:
-            f.writelines(l+"\n" for l in raw.splitlines() if l.startswith(mod+"."))
-        # reduce ROOT into an id-tracked trace
-        trace = os.path.join(W,"trace.txt")
-        with open(trace,"wb") as f:
-            subprocess.run(["iota/morph","--iota",dump,defn], stdout=f, check=True)
+        if trace_in:
+            trace = trace_in                     # render a pre-made trace (intro/outro/combined)
+        else:
+            # build the id-tracked reducer if needed
+            if not os.access("iota/morph", os.X_OK):
+                subprocess.run(["ghc","-O0","-outputdir",os.path.join(W,"b"),"-o","iota/morph","iota/Morph.hs"], check=True)
+            # gmhs dumps the combinator program, then exits non-zero (no `main`) -- expected
+            raw = subprocess.run([f"{ROOT}/bin/gmhs", f"-i{PROG}", "-ilib", "-ddump-combinator", mod],
+                                 capture_output=True, text=True).stdout
+            dump = os.path.join(W,"dump")
+            with open(dump,"w") as f:
+                f.writelines(l+"\n" for l in raw.splitlines() if l.startswith(mod+"."))
+            # reduce ROOT into an id-tracked trace
+            trace = os.path.join(W,"trace.txt")
+            with open(trace,"wb") as f:
+                subprocess.run(["iota/morph","--iota",dump,defn], stdout=f, check=True)
 
         # output canvas size, frame count, geometry scale + caption-timing manifest
         caps = os.path.join(W,"caps.tsv")

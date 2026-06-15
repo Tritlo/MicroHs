@@ -26,6 +26,15 @@ def main():
     parts=[]
     for i,ln in enumerate(open(caps)):
         f=ln.rstrip("\n").split("\t")
+        if len(f)>=6 and f[0]=="L":                              # positioned label: L start end text xfrac y_out
+            a=float(f[1]); b=float(f[2]); txt=f[3]; xf=float(f[4]); y=int(round(float(f[5])))
+            lo=max(a,tstart); hi=min(b,tend)
+            if hi<=lo: continue
+            a,b=lo-tstart, hi-tstart
+            tf=os.path.join(td,f"L{i}.txt"); open(tf,"w").write(txt)
+            parts.append(f"drawtext=fontfile={font}:textfile={tf}:fontcolor=#e6edf3:fontsize={max(12,round(40*gs))}:"
+                         f"x=(w*{xf:.4f}-text_w/2):y={y}:enable=between(t\\,{a:.3f}\\,{b:.3f})")
+            continue
         if len(f)<4: continue
         li=int(f[0]); a=float(f[1]); b=float(f[2]); txt=f[3]
         if total is not None and b>=total-1e-3: b=total+4.0      # persist through the end/freeze

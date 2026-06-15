@@ -54,13 +54,15 @@ def main():
     steps=[]
     for line in sys.stdin:
         f=line.rstrip("\n").split("\t")
-        if len(f)>=3:   rule,term,sx=f[0],f[1],f[2]
-        elif len(f)==2: rule,term,sx=f[0],"",f[1]
-        else:           rule,term,sx="","",f[0]
-        steps.append((rule,term,sx))
+        if len(f)>=3:   rule,term,sx,pv=f[0],f[1],f[2],(f[3] if len(f)>3 else "")
+        elif len(f)==2: rule,term,sx,pv=f[0],"",f[1],""
+        else:           rule,term,sx,pv="","",f[0],""
+        steps.append((rule,term,sx,pv))
     n=len(steps)
     sizes=[s[2].count("(") for s in steps]            # node count == '(' count, as in the renderer
-    hold,tween,starts=mr.schedule([(s[0],s[1]) for s in steps], sizes, target, fps)
+    provs=[mr.parse_prov(s[3]) for s in steps]                       # same per-frame hold/tween hints the renderer uses
+    hold_hint=[p.get("hold",0.0) for p in provs]; tween_hint=[p.get("tween",0.0) for p in provs]
+    hold,tween,starts=mr.schedule([(s[0],s[1]) for s in steps], sizes, target, fps, hold_hint, tween_hint)
     total_dur=(starts[-1]+hold[-1])/fps
 
     # pitch: either follows the tree size (log-quantised to ~3 octaves of the
@@ -75,8 +77,9 @@ def main():
         return deg_semi(size_deg(sizes[i]))
 
     buf=array('d',[0.0])*int((total_dur+3.0)*SR)      # +3 s for the final chord to ring
-    # soft root drone for tonal glue
-    add(buf, 0.0, total_dur+2.0, freq(-24), 0.05, harm=(1.0,0.0), decay=(total_dur+2.0)*1.4)
+    # root drone (the base tone): low tonic + its octave for body, present throughout
+    add(buf, 0.0, total_dur+2.0, freq(-24), 0.11, harm=(1.0,0.0), decay=(total_dur+2.0)*1.4)
+    add(buf, 0.0, total_dur+2.0, freq(-12), 0.05, harm=(1.0,0.0), decay=(total_dur+2.0)*1.4)
     for i in range(n):
         t0=starts[i]/fps
         ring=min((hold[i]+(tween[i] if i+1<n else 0))/fps + 0.9, 2.2)
