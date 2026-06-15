@@ -217,9 +217,11 @@ def main():
             anch=compute_anchors(W,H,lays[i],lays[i+1])
             tw=tween[i]
             for f in range(tw):                      # morph to next
-                t=(f+1)/tw; late=t>0.5
-                write(frame_svg(W,H, lays[i],lays[i+1], t, cap2,
-                                term2 if late else term, expl2 if late else expl, maxd, anch))
+                t=(f+1)/tw; late=t>0.5               # caption/term/expl all track the
+                write(frame_svg(W,H, lays[i],lays[i+1], t,   # currently-dominant step,
+                                cap2 if late else cap,       # so we show the ongoing
+                                term2 if late else term,     # reduction, not the next one
+                                expl2 if late else expl, maxd, anch))
     print(fnum)
 
 if __name__=="__main__":

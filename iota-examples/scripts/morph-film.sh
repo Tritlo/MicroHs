@@ -17,6 +17,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 MOD="${1:-Lt}"; DEF="${2:-Lt.test}"; OUT="${3:-iota-examples/films/morph_lt23.mp4}"
 SECS="${4:-88}"; FPS="${5:-30}"
+MUSIC_MODE="${MUSIC_MODE:-comb}"   # how the soundtrack picks pitch: comb | size
 PROG=iota-examples/programs
 W="$(mktemp -d)"; mkdir -p "$(dirname "$OUT")"
 
@@ -42,7 +43,7 @@ ffmpeg -y -framerate "$FPS" -i "$W/frames/f%05d.png" \
 
 # generated soundtrack on the *same* schedule, so notes land on the morphs:
 # pitch follows the tree size, Y steps get a bass accent, A = True resolves on a chord.
-python3 iota/morph_music.py "$W/music.wav" "$SECS" "$FPS" < "$W/trace.txt"
+python3 iota/morph_music.py "$W/music.wav" "$SECS" "$FPS" "$MUSIC_MODE" < "$W/trace.txt"
 # mux; hold the final frame 2.5 s so the resolving chord rings out
 ffmpeg -y -i "$W/silent.mp4" -i "$W/music.wav" \
   -filter_complex "[0:v]tpad=stop_mode=clone:stop_duration=2.5[v]" \

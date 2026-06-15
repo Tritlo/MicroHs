@@ -16,6 +16,17 @@ import morph_render as mr
 SR=44100
 ROOT=261.63                       # C4
 PENTA=[0,2,4,7,9]                 # major pentatonic, semitones within an octave
+MELODY=-12                        # transpose the melody + final chord down an octave
+                                  # (warmer register); the bass/drone stay as anchors
+
+# "comb" pitch mode: each combinator *family* shares a pitch class, and a prime
+# lifts it an octave -- S=G4, S'=G5; C=D4, C'=D5, C'B=D6; B=A4, B'=A5 -- which
+# mirrors the maths (a prime is the same combinator threading one more argument).
+# K/I are the tonic, J the third; the rarer plumbing (U, Z, R) sits higher up.
+# Values are semitones above C4.
+COMB_SEMI={"":0,"I":0,"K":0,"K2":12,"K3":12,"K4":12,"U":12,
+           "C":2,"C'":14,"C'B":26,"J":4,"Z":16,
+           "S":7,"S'":19,"R":31,"B":9,"B'":21,"Y":0}
 
 def freq(semi): return ROOT*2.0**(semi/12.0)
 def deg_semi(d): return 12*(d//5)+PENTA[d%5]      # pentatonic degree -> semitone
@@ -38,6 +49,8 @@ def main():
     out=sys.argv[1]
     target=float(sys.argv[2]) if len(sys.argv)>2 else 88.0
     fps=int(sys.argv[3]) if len(sys.argv)>3 else 30
+    mode=sys.argv[4] if len(sys.argv)>4 else "size"   # "size": pitch follows the
+    #   tree size; "comb": each combinator drives the pitch (a motif per rule)
     steps=[]
     for line in sys.stdin:
         f=line.rstrip("\n").split("\t")
@@ -50,10 +63,16 @@ def main():
     hold,tween,starts=mr.schedule([(s[0],s[1]) for s in steps], sizes, target, fps)
     total_dur=(starts[-1]+hold[-1])/fps
 
-    # pitch = tree size (log) quantised to ~3 octaves of the pentatonic; small tree
-    # (the 11-node answer) -> tonic, the peak mandala -> top of the range.
+    # pitch: either follows the tree size (log-quantised to ~3 octaves of the
+    # pentatonic -- small/answer = tonic, peak mandala = top), or is fixed per
+    # combinator so each rule has its own note.
     lo=math.log2(min(sizes)); hi=math.log2(max(sizes)); span=max(1e-6,hi-lo); DMAX=14
-    def degree(sz): return round((math.log2(sz)-lo)/span*DMAX)
+    def size_deg(sz): return round((math.log2(sz)-lo)/span*DMAX)
+    def comb_head(i):
+        p=steps[i][0].split(); return p[0] if p else ""
+    def note_semi(i):
+        if mode=="comb": return COMB_SEMI.get(comb_head(i),0)
+        return deg_semi(size_deg(sizes[i]))
 
     buf=array('d',[0.0])*int((total_dur+3.0)*SR)      # +3 s for the final chord to ring
     # soft root drone for tonal glue
@@ -63,10 +82,9 @@ def main():
         ring=min((hold[i]+(tween[i] if i+1<n else 0))/fps + 0.9, 2.2)
         if i==n-1:                                    # A = True -> sustained tonic chord
             for semi in (0,4,7,12):
-                add(buf, t0, 2.8, freq(semi), 0.22, decay=2.6)
+                add(buf, t0, 2.8, freq(semi+MELODY), 0.22, decay=2.6)
             continue
-        note=freq(deg_semi(degree(sizes[i])))
-        add(buf, t0, ring, note, 0.26)
+        add(buf, t0, ring, freq(note_semi(i)+MELODY), 0.26)
         if steps[i][0].startswith("Y "):              # recursion: low bass accent
             add(buf, t0, min(ring+0.6,2.6), freq(-24+PENTA[0]), 0.40, harm=(1.0,0.5,0.0), decay=1.8)
 
@@ -75,7 +93,7 @@ def main():
     w=wave.open(out,"w"); w.setnchannels(1); w.setsampwidth(2); w.setframerate(SR)
     w.writeframes(b"".join(struct.pack("<h", int(max(-1.0,min(1.0,x*g))*32767)) for x in buf))
     w.close()
-    print(f"{out}  {total_dur:.1f}s  {n} notes")
+    print(f"{out}  {total_dur:.1f}s  {n} notes  ({mode})")
 
 if __name__=="__main__":
     main()
