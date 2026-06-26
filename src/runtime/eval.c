@@ -555,6 +555,7 @@ enum node_tag { T_FREE, T_IND, T_AP, T_INT, T_INT64, T_DBL, T_FLT32, T_PTR, T_FU
                 T_PACKCSTRING, T_PACKCSTRINGLEN,
                 T_BSAPPEND, T_BSEQ, T_BSNE, T_BSLT, T_BSLE, T_BSGT, T_BSGE, T_BSCMP,
                 T_BSUNPACK, T_BSREPLICATE, T_BSLENGTH, T_BSSUBSTR, T_BSINDEX,
+                T_BNDOT,
                 T_BSNEW, T_BSREAD, T_BSWRITE, T_BSFREEZE, T_BSAPPBYTE, T_BSAPPCHAR, 
                 T_BSFROMUTF8, T_BSHEADUTF8, T_BSTAILUTF8,
                 T_BSAPPENDDOT, T_BSGRAB, T_BSGRABLEN,
@@ -2231,6 +2232,7 @@ struct {
   { "bslength", T_BSLENGTH },
   { "bssubstr", T_BSSUBSTR },
   { "bsindex", T_BSINDEX },
+  { "bndot", T_BNDOT },
   { "bsnew", T_BSNEW },
   { "bsread", T_BSREAD },
   { "bswrite", T_BSWRITE },
@@ -4453,6 +4455,50 @@ mkFlt64(flt64_t d)
 }
 #endif  /* WANT_FLOAT64 */
 
+/* Decode IEEE-754 binary16 (fp16) to float32, for the bndot primitive. */
+static flt32_t
+bn_fp16_to_f32(uint16_t h)
+{
+  uint32_t sign = (uint32_t)(h & 0x8000) << 16;
+  uint32_t exp  = (h >> 10) & 0x1F;
+  uint32_t mant = h & 0x3FF;
+  uint32_t bits;
+  if (exp == 0) {
+    if (mant == 0) { bits = sign; }
+    else { exp = 127 - 15 + 1;
+           while (!(mant & 0x400)) { mant <<= 1; exp--; }
+           mant &= 0x3FF;
+           bits = sign | (exp << 23) | (mant << 13); }
+  } else if (exp == 0x1F) {
+    bits = sign | 0x7F800000u | (mant << 13);
+  } else {
+    bits = sign | ((exp + (127 - 15)) << 23) | (mant << 13);
+  }
+  flt32_t f; memcpy(&f, &bits, sizeof(f)); return f;
+}
+
+/* Decode fp8 E4M3 (1 sign, 4 exp bias 7, 3 mantissa; no inf, NaN = S1111111). */
+static flt32_t
+bn_e4m3_to_f32(uint8_t b)
+{
+  uint32_t sign = (uint32_t)(b & 0x80) << 24;
+  uint32_t exp  = (b >> 3) & 0xF;
+  uint32_t mant = b & 0x7;
+  uint32_t bits;
+  if (exp == 0) {
+    if (mant == 0) { bits = sign; }
+    else { exp = 127 - 7 + 1;
+           while (!(mant & 0x8)) { mant <<= 1; exp--; }
+           mant &= 0x7;
+           bits = sign | (exp << 23) | (mant << 20); }
+  } else if (exp == 0xF && mant == 0x7) {
+    bits = sign | 0x7FC00000u;
+  } else {
+    bits = sign | ((exp + (127 - 7)) << 23) | (mant << 20);
+  }
+  flt32_t f; memcpy(&f, &bits, sizeof(f)); return f;
+}
+
 NODEPTR
 mkPtr(void* p)
 {
@@ -5725,6 +5771,97 @@ evali(NODEPTR an)
     POP(2);
     n = TOP(-1);
     SETINT(n, ((uint8_t *)xfp->payload.bs_array)[xi]);
+    RET;
+
+  /* bndot kind weights acts shift len -> Double: a general quantized dot of one
+     output row, sum_c (decode_w(weights, c)) * (decode_a(acts, c)), in C (replacing
+     the per-element graph-reduction hot loop). Accumulates in double and returns a
+     Double for headroom. Like ggml's per-type vec_dot, this is a pure
+     decode-and-accumulate: quantization SCALES and zero-points are the caller's job
+     (applied per tensor or per group, outside). `len` is the element count. `shift`
+     selects the 2-bit field for the BitNet packed-ternary kind (its output-major
+     4-per-byte layout); ignored otherwise. Kinds (weight x activation):
+       0  W1.58 x int8     1.58-bit ternary {-1,0,1}, 4/byte (shift) x int8  [BitNet b1.58]
+       1  bf16  x float32  brain-float16 weights x float32
+       2  float32 x float32                                                  [attention q.k, fp]
+       3  int8  x int8     symmetric 8-bit x 8-bit                           [W8A8]
+       4  int8  x float32  8-bit weights x float32                           [weight-only int8]
+       5  int4  x int8     signed 4-bit {-8..7}, 2/byte (low nibble first) x int8  [W4A8]
+       6  int4  x float32  signed 4-bit weights x float32                    [GPTQ/AWQ-style]
+       7  fp16  x float32  IEEE half weights x float32
+       8  fp8e4m3 x float32  fp8 E4M3 weights x float32                      [fp8 inference]
+     (1-bit/E5M2/asymmetric-zero-point variants follow the same pattern.) */
+  case T_BNDOT:
+    CHECK(5);
+    {
+      value_t kind = evalint(ARG(TOP(0)));
+      struct forptr *wf = evalbstr(ARG(TOP(1)));
+      struct forptr *af = evalbstr(ARG(TOP(2)));
+      int sh = (int)evalint(ARG(TOP(3)));
+      value_t len = evalint(ARG(TOP(4)));
+      const uint8_t *wb = (const uint8_t *)wf->payload.bs_array;
+      flt64_t acc = 0;
+      value_t c;
+      switch (kind) {
+      case 0: {  /* W1.58 ternary x int8 */
+        const int8_t *a = (const int8_t *)af->payload.bs_array;
+        for (c = 0; c < len; c++)
+          acc += (flt64_t)(((wb[c] >> sh) & 3) - 1) * (flt64_t)a[c];
+      } break;
+      case 1: {  /* bf16 x float32 */
+        const flt32_t *a = (const flt32_t *)af->payload.bs_array;
+        for (c = 0; c < len; c++) {
+          uint32_t bits = ((uint32_t)((uint32_t)wb[2 * c] | ((uint32_t)wb[2 * c + 1] << 8))) << 16;
+          flt32_t wv; memcpy(&wv, &bits, sizeof(wv));
+          acc += (flt64_t)wv * (flt64_t)a[c];
+        }
+      } break;
+      case 2: {  /* float32 x float32 */
+        const flt32_t *w = (const flt32_t *)wf->payload.bs_array;
+        const flt32_t *a = (const flt32_t *)af->payload.bs_array;
+        for (c = 0; c < len; c++) acc += (flt64_t)w[c] * (flt64_t)a[c];
+      } break;
+      case 3: {  /* int8 x int8 */
+        const int8_t *w = (const int8_t *)wf->payload.bs_array;
+        const int8_t *a = (const int8_t *)af->payload.bs_array;
+        for (c = 0; c < len; c++) acc += (flt64_t)w[c] * (flt64_t)a[c];
+      } break;
+      case 4: {  /* int8 x float32 */
+        const int8_t *w = (const int8_t *)wf->payload.bs_array;
+        const flt32_t *a = (const flt32_t *)af->payload.bs_array;
+        for (c = 0; c < len; c++) acc += (flt64_t)w[c] * (flt64_t)a[c];
+      } break;
+      case 5: {  /* int4 (signed, 2/byte) x int8 */
+        const int8_t *a = (const int8_t *)af->payload.bs_array;
+        for (c = 0; c < len; c++) {
+          int nib = (wb[c >> 1] >> ((c & 1) * 4)) & 0xF;
+          acc += (flt64_t)(nib - ((nib & 8) ? 16 : 0)) * (flt64_t)a[c];
+        }
+      } break;
+      case 6: {  /* int4 (signed, 2/byte) x float32 */
+        const flt32_t *a = (const flt32_t *)af->payload.bs_array;
+        for (c = 0; c < len; c++) {
+          int nib = (wb[c >> 1] >> ((c & 1) * 4)) & 0xF;
+          acc += (flt64_t)(nib - ((nib & 8) ? 16 : 0)) * (flt64_t)a[c];
+        }
+      } break;
+      case 7: {  /* fp16 x float32 */
+        const flt32_t *a = (const flt32_t *)af->payload.bs_array;
+        for (c = 0; c < len; c++) {
+          uint16_t h = (uint16_t)((uint16_t)wb[2 * c] | ((uint16_t)wb[2 * c + 1] << 8));
+          acc += (flt64_t)bn_fp16_to_f32(h) * (flt64_t)a[c];
+        }
+      } break;
+      default: {  /* kind 8: fp8 E4M3 x float32 */
+        const flt32_t *a = (const flt32_t *)af->payload.bs_array;
+        for (c = 0; c < len; c++)
+          acc += (flt64_t)bn_e4m3_to_f32(wb[c]) * (flt64_t)a[c];
+      } break;
+      }
+      POP(5);
+      n = TOP(-1);
+      SETDBL(n, acc);
+    }
     RET;
 
   case T_BSNEW:

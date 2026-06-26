@@ -100,6 +100,7 @@ module Data.ByteString(
   index,
   indexMaybe,
   (!?),
+  bndot,
   elemIndex,
   elemIndices,
   elemIndexEnd,
@@ -162,6 +163,7 @@ import Control.Monad.Fail
 import Data.Bits.Base
 import Data.ByteString.Internal
 import Data.Coerce
+import Data.Double (Double)
 import Data.Function (($!))
 import Data.List.NonEmpty (NonEmpty, fromList)
 import Data.Monoid.Internal
@@ -415,6 +417,18 @@ index bs i
   | i < 0          = bsError "index: negative index"
   | i >= length bs = bsError "index: index too large"
   | otherwise      = primBSindex bs i
+
+-- | @bndot kind weights acts shift len@ — a general quantized dot product,
+-- @sum_c decode_w(weights,c) * decode_a(acts,c)@, computed in C and accumulated in
+-- double. Per-type (ggml-style) decode-and-accumulate: scales/zero-points are the
+-- caller's responsibility, the kind is dispatched once, and @shift@ selects the
+-- 2-bit field for the BitNet packed-ternary kind (ignored otherwise). @len@ is the
+-- element count. Kinds (weight x activation): 0 W1.58-ternary x int8, 1 bf16 x f32,
+-- 2 f32 x f32, 3 int8 x int8, 4 int8 x f32, 5 int4 x int8, 6 int4 x f32, 7 fp16 x
+-- f32, 8 fp8-E4M3 x f32. Unchecked — the caller must size @weights@\/@acts@ for the
+-- kind and @len@.
+bndot :: Int -> ByteString -> ByteString -> Int -> Int -> Double
+bndot = primBNDot
 
 indexMaybe :: ByteString -> Int -> Maybe Word8
 indexMaybe bs i
