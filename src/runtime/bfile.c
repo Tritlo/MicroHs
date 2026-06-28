@@ -1443,6 +1443,97 @@ add_buf(BFILE *file, int bufsize)
 }
 #endif  /* WANT_BUF */
 
+/***************** seek/tell *******************/
+
+/* 64-bit stdio seek/tell.  MSVC has no fseeko/ftello; use _fseeki64/_ftelli64. */
+#if WANT_STDIO
+#if defined(_MSC_VER)
+#define MHS_FSEEK(f, o, w) _fseeki64((f), (int64_t)(o), (w))
+#define MHS_FTELL(f)       _ftelli64(f)
+#else
+#define MHS_FSEEK(f, o, w) fseeko((f), (off_t)(o), (w))
+#define MHS_FTELL(f)       ftello(f)
+#endif
+#endif  /* WANT_STDIO */
+
+#if WANT_UTF8
+/* Number of bytes the UTF-8 encoding of codepoint c occupies. */
+static int
+utf8_clen(int c)
+{
+  if (c == 0) return 2;         /* modified UTF-8: NUL is encoded as two bytes */
+  if (c < 0x80) return 1;
+  if (c < 0x800) return 2;
+  if (c < 0x10000) return 3;
+  return 4;
+}
+#endif
+
+/*
+ * Reposition / report / probe the byte offset of a handle.  Only file handles
+ * are seekable (BFILE_file, possibly under a utf8 layer); we dispatch on the
+ * transducer type, as CHECKBFILE does.  A utf8 handle's position is the byte
+ * offset in the underlying file, corrected for any pending unget.
+ * whence: 0 = AbsoluteSeek (SEEK_SET), 1 = RelativeSeek (SEEK_CUR),
+ *         2 = SeekFromEnd (SEEK_END).
+ * seekb returns 0 on success and -1 on failure; tellb returns the offset or -1.
+ */
+int
+seekb(BFILE *p, value_t offset, int whence)
+{
+  int w = whence == 0 ? SEEK_SET : whence == 1 ? SEEK_CUR : whence == 2 ? SEEK_END : -1;
+  if (w < 0)
+    return -1;                          /* invalid whence */
+#if WANT_STDIO
+  if (p->getb == getb_file)
+    return MHS_FSEEK(((struct BFILE_file *)p)->file, offset, w) ? -1 : 0;
+#endif
+#if WANT_UTF8
+  if (p->getb == getb_utf8) {
+    struct BFILE_utf8 *u = (struct BFILE_utf8 *)p;
+    if (whence == 1 && u->unget >= 0)   /* relative: logical pos trails the inner file */
+      offset -= utf8_clen(u->unget);
+    u->unget = -1;
+    return seekb(u->bfile, offset, whence);
+  }
+#endif
+  return -1;                            /* not seekable */
+}
+
+value_t
+tellb(BFILE *p)
+{
+#if WANT_STDIO
+  if (p->getb == getb_file)
+    return (value_t)MHS_FTELL(((struct BFILE_file *)p)->file);
+#endif
+#if WANT_UTF8
+  if (p->getb == getb_utf8) {
+    struct BFILE_utf8 *u = (struct BFILE_utf8 *)p;
+    value_t pos = tellb(u->bfile);
+    if (pos >= 0 && u->unget >= 0)
+      pos -= utf8_clen(u->unget);
+    return pos;
+  }
+#endif
+  return -1;                            /* not seekable */
+}
+
+/* Probe whether a handle supports seeking, without disturbing its state. */
+value_t
+seekableb(BFILE *p)
+{
+#if WANT_STDIO
+  if (p->getb == getb_file)
+    return MHS_FTELL(((struct BFILE_file *)p)->file) >= 0;   /* fails (ESPIPE) on pipes */
+#endif
+#if WANT_UTF8
+  if (p->getb == getb_utf8)
+    return seekableb(((struct BFILE_utf8 *)p)->bfile);
+#endif
+  return 0;
+}
+
 /***************** BFILE that adds CR *******************/
 
 #if WANT_CRLF

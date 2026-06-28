@@ -17,6 +17,9 @@ module System.IO(
   hIsReadable,
   hIsWritable,
   hIsSeekable,
+  hSeek,
+  hTell,
+  hFileSize,
   hIsTerminalDevice,
   hGetEcho,
   hSetEcho,
@@ -34,7 +37,10 @@ import Mhs.Builtin
 import System.IO.Base
 import System.IO.Error
 import System.IO.Unsafe(unsafeInterleaveIO)
+import System.IO.Internal(withHandleAny, getHandleState)
 import System.IO_Handle
+import Data.Integer(Integer)
+import Foreign.Ptr(Ptr)
 import Text.Read
 
 readLn :: Read a => IO a
@@ -162,9 +168,57 @@ hIsWritable (Handle _ r _) = do
       HReadWrite -> True
       _ -> False
 
--- XXX This currently does nothing.
 hIsSeekable :: Handle -> IO Bool
-hIsSeekable _ = return False
+hIsSeekable h = do
+  s <- getHandleState h
+  case s of
+    HClosed     -> return False
+    HSemiClosed -> return False
+    _           -> withHandleAny h $ \ p -> (/= 0) <$> c_seekableb p
+
+foreign import ccall "seekb"     c_seekb     :: Ptr BFILE -> Int -> Int -> IO Int
+foreign import ccall "tellb"     c_tellb     :: Ptr BFILE -> IO Int
+foreign import ccall "seekableb" c_seekableb :: Ptr BFILE -> IO Int
+
+-- Run an action on an open, seekable handle's stream, raising a catchable
+-- IllegalOperation IOError (rather than aborting) when the handle is closed or
+-- not seekable.
+withSeekable :: forall a . String -> Handle -> (Ptr BFILE -> IO a) -> IO a
+withSeekable loc h act = do
+  s <- getHandleState h
+  case s of
+    HClosed     -> bad
+    HSemiClosed -> bad
+    _           -> withHandleAny h $ \ p -> do
+                     ok <- c_seekableb p
+                     if ok == 0 then bad else act p
+  where bad = ioError (mkIOError illegalOperationErrorType loc (Just h) Nothing)
+
+hSeek :: Handle -> SeekMode -> Integer -> IO ()
+hSeek h mode pos = withSeekable "hSeek" h $ \ p ->
+  if toInteger off /= pos                  -- offset doesn't fit in Int (32-bit/>2GB)
+    then ioError (mkIOError illegalOperationErrorType "hSeek: offset out of range" (Just h) Nothing)
+    else do
+      r <- c_seekb p off (fromEnum mode)
+      if r == 0 then return ()
+                else ioError (mkIOError illegalOperationErrorType "hSeek" (Just h) Nothing)
+  where off = fromInteger pos
+
+hTell :: Handle -> IO Integer
+hTell h = withSeekable "hTell" h $ \ p -> do
+  n <- c_tellb p
+  if n < 0 then ioError (mkIOError illegalOperationErrorType "hTell" (Just h) Nothing)
+           else return (toInteger n)
+
+hFileSize :: Handle -> IO Integer
+hFileSize h = withSeekable "hFileSize" h $ \ p -> do
+  cur <- c_tellb p
+  r1  <- c_seekb p 0 (fromEnum SeekFromEnd)
+  sz  <- c_tellb p
+  r2  <- c_seekb p cur (fromEnum AbsoluteSeek)   -- always attempt to restore position
+  if cur < 0 || sz < 0 || r1 /= 0 || r2 /= 0
+    then ioError (mkIOError illegalOperationErrorType "hFileSize" (Just h) Nothing)
+    else return (toInteger sz)
 
 -- XXX This currently does nothing.
 hGetEcho :: Handle -> IO Bool

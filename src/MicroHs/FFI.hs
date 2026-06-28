@@ -261,7 +261,7 @@ runtimeFFI = [
   "acosf", "asinf", "atanf", "atan2f", "cosf", "expf", "logf", "sinf", "sqrtf", "tanf",
   "scalbn", "scalbnf", "pow", "powf",
   "js_debug", "js_eval_run", "js_eval_call", "js_set_haskellCallback",
-  "readb", "writeb",
+  "readb", "writeb", "seekb", "tellb", "seekableb",
   "peekPtr", "pokePtr", "pokeWord", "peekWord",
   "add_lz77_compressor", "add_lz77_decompressor",
   "add_lzma_compressor", "add_lzma_decompressor",
