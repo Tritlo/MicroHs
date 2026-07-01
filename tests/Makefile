@@ -5,7 +5,7 @@ TMHS=$(MHS) $(MHSTARGET) $(MHSOUTPUT)
 EVAL=../bin/mhseval +RTS -H1M -RTS
 .PHONY: test nfib clean errtest alltest cache info
 
-alltest: info test errtest testforimp testforexp testforimpexp testapplysp testpipenonblockio
+alltest: info test errtest testforimp testforexp testforimpexp testapplysp testpipenonblockio testjsffi
 # interactivetest
 
 cache:
@@ -131,7 +131,13 @@ testforimp:
 	$(TMHS) ForeignC -of.exe && ./f.exe > ForeignC.out && diff ForeignC.ref ForeignC.out
 
 testforimpjs:
-	$(TMHS) -temscripten ForImpJS -of.js && node f.js > ForImpJS.out && diff ForImpJS.ref ForImpJS.out
+	$(TMHS) -temscripten_jsffi ForImpJS -of.js && node f.js > ForImpJS.out && diff ForImpJS.ref ForImpJS.out
+
+# JS FFI without emcc: the tokens end up in the combinator file, and C
+# generation must succeed without emitting anything for the JS imports.
+testjsffi:
+	$(TMHS) ForImpJS -oForImpJS.comb && grep -qa '~VP ' ForImpJS.comb && grep -qa '`III ' ForImpJS.comb
+	$(TMHS) ForImpJS -oForImpJS.c && ! grep -q EM_ASM ForImpJS.c && rm -f ForImpJS.c
 
 # `foreign export javascript`: the exports are EMSCRIPTEN_KEEPALIVE, so only
 # mhs_init needs listing; the program is compiled as a library (no main).
