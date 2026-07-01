@@ -52,10 +52,28 @@ ccflags = "-O3 -sEXPORTED_RUNTIME_METHODS=stringToNewUTF8 -sALLOW_MEMORY_GROWTH 
 cclibs = "-lm"
 conf = "unix"
 
+-- Generate JavaScript&Wasm, with the dynamic JavaScript FFI compiled in
+-- (foreign import javascript; see doc/javascript-ffi.md)
+[emscripten_jsffi]
+cc = "emcc"
+ccflags = "-O3 -DWANT_JSFFI=1 -sEXPORTED_RUNTIME_METHODS=stringToNewUTF8 -sALLOW_MEMORY_GROWTH -sTOTAL_STACK=5MB -sNODERAWFS -sSINGLE_FILE -DUSE_SYSTEM_RAW -sEXIT_RUNTIME -Wno-address-of-packed-member"
+cclibs = "-lm"
+conf = "unix"
+
 -- Generate JavaScript&Wasm, with xterm.js support
 [emscripten_web]
 cc = "emcc"
 ccflags = "-O3 -sASYNCIFY -sEXPORTED_FUNCTIONS=['_main','_set_input_char'] -sEXPORTED_RUNTIME_METHODS=['FS','ccall'] -sFORCE_FILESYSTEM=1 -sALLOW_MEMORY_GROWTH -sTOTAL_STACK=5MB -sSINGLE_FILE -DUSE_WEB_INPUT -Wno-address-of-packed-member"
+cclibs = "-lm"
+conf = "unix"
+
+-- Build the mhs compiler itself for IN-BROWSER compilation: MODULARIZE factory,
+-- MEMFS (FORCE_FILESYSTEM), FS+callMain exported, and NO EXIT_RUNTIME so the
+-- filesystem stays readable after callMain returns (the page reads the produced
+-- .comb back out).  Build the program with -z to dodge emcc's aggregate-init OOM.
+[emscripten_compile]
+cc = "emcc"
+ccflags = "-O3 -sEXPORTED_RUNTIME_METHODS=['FS','callMain'] -sFORCE_FILESYSTEM=1 -sALLOW_MEMORY_GROWTH -sTOTAL_STACK=5MB -sSINGLE_FILE -sMODULARIZE=1 -sEXPORT_NAME=MhsCompile -Wno-address-of-packed-member"
 cclibs = "-lm"
 conf = "unix"
 
