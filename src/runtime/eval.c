@@ -24,6 +24,14 @@
 #define WANT_SOCKET 0
 #endif /* defined(WANT_SOCKET) */
 
+/* Dynamic JavaScript FFI (foreign import javascript); needs emscripten. */
+#if !defined(WANT_JSFFI)
+#define WANT_JSFFI 0
+#endif /* defined(WANT_JSFFI) */
+#if WANT_JSFFI && !defined(__EMSCRIPTEN__)
+#error WANT_JSFFI requires emscripten
+#endif
+
 #if WANT_STDIO
 #include <stdio.h>
 #include <locale.h>
@@ -546,6 +554,8 @@ enum node_tag { T_FREE, T_IND, T_AP, T_INT, T_INT64, T_DBL, T_FLT32, T_PTR, T_FU
                 T_IO_GETARGREF,
                 T_IO_PERFORMIO, T_IO_ATOMIC, T_IO_PRINT, T_CATCH, T_CATCHR,
                 T_IO_CCALL,
+                T_IO_JSCALL,            /* dynamic `foreign import javascript`, see js_dyn_* below */
+                T_IO_JSWRAP,            /* `foreign import javascript "wrapper"`: closure -> JS function */
                 T_IO_GC, T_IO_STATS,
                 T_IO_LAZYBIND, T_IO_STRICT,
                 T_DYNSYM,
@@ -3694,6 +3704,183 @@ find_label(heapoffs_t label)
   }
 }
 
+/* Dynamic JavaScript FFI (WANT_JSFFI, emscripten only).  The compiler serializes
+ * a `foreign import javascript "body"` as a token  ~<tags> "<body>"  (tags[0] is
+ * the return tag, tags[1..] the args: I=Int U=Word/Char D=Double F=Float P=Ptr
+ * B=Bool J=JSVal S=ByteString V=unit(return only)).  At
+ * parse time the body is compiled to a JS function in globalThis.__mhs and the
+ * T_IO_JSCALL node holds its index; dispatch marshals by the tags.  The registry
+ * is append-only: parse_top is re-entered by IO.deserialize, so resetting it
+ * would invalidate live nodes. */
+#if WANT_JSFFI
+#define JS_MAX_ARGS 32
+struct js_dyn_entry { int arity; char *tags; struct bytestring body; }; /* body kept for printb */
+static struct js_dyn_entry *js_dyn_table = NULL;
+static int js_dyn_count = 0;
+static int js_dyn_cap = 0;
+/* `foreign import javascript "wrapper"` (T_IO_JSWRAP): the callback tag strings,
+ * indexed by the node value.  See mhs_wrapper_invoke. */
+static char **js_wrap_tags = NULL;
+static int js_wrap_count = 0;
+static int js_wrap_cap = 0;
+
+/* EM_JS (full JS bodies) not EM_ASM (which mishandles object literals).
+ * globalThis.__mhs holds: reg (registered JS functions, indexed by the
+ * T_IO_JSCALL value), argbuf (scratch args), err (last exception) and obj (the
+ * JSVal object-handle registry, obj[0] null / handles >= 1). */
+EM_JS(void, mhs_js_setup, (void), {
+  /* Fields set independently: __mhs is on globalThis and may be shared with
+   * another wasm module on the page. */
+  if (!globalThis.__mhs) globalThis.__mhs = {};
+  var m = globalThis.__mhs;
+  if (!m.reg)                      m.reg = [];
+  if (!m.argbuf)                   m.argbuf = [];
+  if (!m.wargs)                    m.wargs = [];
+  if (!('err' in m))               m.err = null;
+  if (!m.obj || m.obj[0] !== null) m.obj = [null];
+  if (!m.objfree)                  m.objfree = [];
+  if (!m.intern)                   m.intern = function(v) { var i = m.objfree.length ? m.objfree.pop() : m.obj.length; m.obj[i] = v; return i; };
+  /* JS bodies run in global scope, so publish the string helpers there; typeof
+   * guards builds that don't export them (e.g. the compiler). */
+  if (typeof UTF8ToString !== 'undefined')    globalThis.UTF8ToString    = UTF8ToString;
+  if (typeof stringToNewUTF8 !== 'undefined') globalThis.stringToNewUTF8 = stringToNewUTF8;
+});
+
+EM_JS(int, mhs_js_register, (const char *bodyp, int arity), {
+  var body = UTF8ToString(bodyp);
+  var names = [];
+  for (var k = 0; k < arity; k++) names.push('$' + k);
+  names.push(body);
+  var f;
+  try { f = Function.apply(null, names); }
+  catch (e) { var msg = String(e); f = function(){ throw new Error(msg); }; }
+  return globalThis.__mhs.reg.push(f) - 1;
+});
+
+EM_JS(void,   mhs_js_argreset,  (void),      { globalThis.__mhs.argbuf.length = 0; globalThis.__mhs.err = null; });
+EM_JS(void,   mhs_js_push_int,  (int v),     { globalThis.__mhs.argbuf.push(v); });
+EM_JS(void,   mhs_js_push_uint, (int v),     { globalThis.__mhs.argbuf.push(v >>> 0); });  /* Word/Char: unsigned */
+EM_JS(void,   mhs_js_push_dbl,  (double v),  { globalThis.__mhs.argbuf.push(v); });
+EM_JS(int,    mhs_js_call_int,  (int idx),   { try { return globalThis.__mhs.reg[idx].apply(null, globalThis.__mhs.argbuf); } catch (e) { globalThis.__mhs.err = String(e); return 0; } });
+EM_JS(double, mhs_js_call_dbl,  (int idx),   { try { return globalThis.__mhs.reg[idx].apply(null, globalThis.__mhs.argbuf); } catch (e) { globalThis.__mhs.err = String(e); return 0; } });
+EM_JS(void *, mhs_js_call_ptr,  (int idx),   { try { return globalThis.__mhs.reg[idx].apply(null, globalThis.__mhs.argbuf); } catch (e) { globalThis.__mhs.err = String(e); return 0; } });
+EM_JS(void,   mhs_js_call_void, (int idx),   { try { globalThis.__mhs.reg[idx].apply(null, globalThis.__mhs.argbuf); } catch (e) { globalThis.__mhs.err = String(e); } });
+EM_JS(int,    mhs_js_haserr,    (void),      { return globalThis.__mhs.err ? 1 : 0; });
+EM_JS(void,   mhs_js_logerr,    (void),      { console.error('MicroHs JavaScript FFI exception:', globalThis.__mhs.err); });
+EM_JS(void,   mhs_js_obj_free_slot, (int h), { var m = globalThis.__mhs; if (m && m.obj && h >= 1 && Object.prototype.hasOwnProperty.call(m.obj, h)) { delete m.obj[h]; m.objfree.push(h); } });
+EM_JS(void,   mhs_js_push_obj,  (int h),     { globalThis.__mhs.argbuf.push(globalThis.__mhs.obj[h]); });
+EM_JS(int,    mhs_js_call_bool, (int idx),   { try { return globalThis.__mhs.reg[idx].apply(null, globalThis.__mhs.argbuf) ? 1 : 0; } catch (e) { globalThis.__mhs.err = String(e); return 0; } });
+EM_JS(int,    mhs_js_call_obj,  (int idx),   { try { return globalThis.__mhs.intern(globalThis.__mhs.reg[idx].apply(null, globalThis.__mhs.argbuf)); } catch (e) { globalThis.__mhs.err = String(e); return 0; } });
+/* ByteString marshalling (packed, no per-char allocation): a Haskell ByteString's
+ * bytes (evalbstr) are decoded to a JS string; a JS string result is encoded into
+ * wasm memory (stringToNewUTF8) and wrapped as a ByteString whose ForeignPtr owns that
+ * buffer (freed on GC).  UTF8ToString/lengthBytesUTF8 use the exact byte length (the
+ * `true` = ignore-NUL) so embedded U+0000 round-trips; the byte length of a JS-string
+ * result is stashed in __mhs.slen for the C side to read (strlen would stop at a NUL). */
+EM_JS(void,   mhs_js_push_str,  (const char *p, int len), { globalThis.__mhs.argbuf.push(UTF8ToString(p, len, true)); });
+EM_JS(char *, mhs_js_call_str,  (int idx),   { try { var s = String(globalThis.__mhs.reg[idx].apply(null, globalThis.__mhs.argbuf)); globalThis.__mhs.slen = lengthBytesUTF8(s); return stringToNewUTF8(s); } catch (e) { globalThis.__mhs.err = String(e); globalThis.__mhs.slen = 0; return stringToNewUTF8(""); } });
+EM_JS(int,    mhs_js_slen,      (void),      { return globalThis.__mhs.slen; });
+/* `foreign import javascript "wrapper"` argument readers.  Each callback invocation
+ * pushes its args as a fresh frame on __mhs.wargs (a stack, kept separate from the
+ * `~`-import argbuf so a callback that re-enters a JS import can't clobber the args
+ * still being read); the Haskell result is handed back through the single `wres`
+ * slot.  Each coercion is guarded: a pathological argument (throwing valueOf/toString)
+ * must not throw a JS exception up through the C wrapper, which would unwind past the
+ * ffe stack cleanup and corrupt the runtime; it degrades to 0 / "" instead. */
+EM_JS(int,    mhs_js_arg_int,   (int i),     { try { var a = globalThis.__mhs.wargs; return a[a.length - 1][i] | 0; } catch (e) { return 0; } });
+EM_JS(double, mhs_js_arg_dbl,   (int i),     { try { var a = globalThis.__mhs.wargs; return +a[a.length - 1][i]; } catch (e) { return 0; } });
+EM_JS(int,    mhs_js_arg_obj,   (int i),     { try { var a = globalThis.__mhs.wargs; return globalThis.__mhs.intern(a[a.length - 1][i]); } catch (e) { return 0; } });
+EM_JS(char *, mhs_js_arg_str,   (int i),     { try { var a = globalThis.__mhs.wargs, s = String(a[a.length - 1][i]); globalThis.__mhs.slen = lengthBytesUTF8(s); return stringToNewUTF8(s); } catch (e) { globalThis.__mhs.slen = 0; return stringToNewUTF8(""); } });
+EM_JS(void,   mhs_js_set_res_num,  (double v),{ globalThis.__mhs.wres = v; });
+EM_JS(void,   mhs_js_set_res_obj,  (int h),   { globalThis.__mhs.wres = globalThis.__mhs.obj[h]; });
+EM_JS(void,   mhs_js_set_res_str,  (const char *p, int len), { globalThis.__mhs.wres = UTF8ToString(p, len, true); });
+EM_JS(void,   mhs_js_set_res_undef, (void),   { globalThis.__mhs.wres = undefined; });
+/* Build a JS function that marshals its arguments through argbuf, invokes the
+ * Haskell closure `sp` with the callback tags `widx`, and returns wres.  Interned
+ * as a JSVal handle. */
+EM_JS(int, mhs_js_make_wrapper, (int sp, int widx), {
+  var m = globalThis.__mhs;
+  var f = function() {
+    m.wargs.push(Array.prototype.slice.call(arguments));   /* own frame; isolated from argbuf + re-entrancy */
+    try { _mhs_wrapper_invoke(sp, widx); return m.wres; }  /* always sets wres (last write wins under nesting) */
+    finally { m.wargs.pop(); }
+  };
+  return m.intern(f);
+});
+
+/* GC finalizer for a JSVal (a ForeignPtr whose "pointer" is the object handle),
+ * set on the forptr by the J return path: free the registry slot so the JS value
+ * can be collected. */
+static void
+mhs_js_obj_free(void *p)
+{
+  mhs_js_obj_free_slot((int)(intptr_t)p);
+}
+
+/* Validate the tag string of a JS import: tags[0] is the return tag (may be V
+ * for unit), tags[1..] are argument tags.  I=Int U=Word/Char D=Double F=Float
+ * P=Ptr B=Bool J=JSVal S=ByteString. */
+static int
+js_dyn_tags_ok(const char *tags, int arity)
+{
+  if (arity < 0 || arity > JS_MAX_ARGS)
+    return 0;
+  for (int i = 0; tags[i]; i++) {
+    char t = tags[i];
+    if (!(t == 'I' || t == 'U' || t == 'D' || t == 'F' || t == 'P' || t == 'B' || t == 'J' || t == 'S' ||
+          (i == 0 && t == 'V')))
+      return 0;
+  }
+  return 1;
+}
+
+/* Compile <body> into a JS function, register it, record the tags and body
+ * (body is kept for re-serialization; takes ownership of body.bs_array), and
+ * return the registry index.  Append-only: never reset (see the header note). */
+static int
+js_dyn_register(const char *tags, struct bytestring body)
+{
+  int arity = (int)strlen(tags) - 1;
+  if (!js_dyn_tags_ok(tags, arity)) {
+    FREE(body.bs_array);
+    ERR("JavaScript FFI: malformed import descriptor");
+  }
+  mhs_js_setup();                               /* idempotent: create __mhs once */
+  int idx = mhs_js_register((const char *)body.bs_array, arity);
+  if (idx >= js_dyn_cap) {
+    js_dyn_cap = idx < 16 ? 16 : idx * 2;
+    js_dyn_table = js_dyn_table ? mrealloc(js_dyn_table, js_dyn_cap * sizeof(struct js_dyn_entry))
+                                : mmalloc(js_dyn_cap * sizeof(struct js_dyn_entry));
+  }
+  js_dyn_table[idx].arity = arity;
+  js_dyn_table[idx].tags = mmalloc(strlen(tags) + 1);
+  strcpy(js_dyn_table[idx].tags, tags);
+  js_dyn_table[idx].body = body;                /* take ownership */
+  if (idx >= js_dyn_count)
+    js_dyn_count = idx + 1;
+  return idx;
+}
+
+/* Record a `foreign import javascript "wrapper"` callback's tags (tags[0] is the
+ * result, tags[1..] the arguments), returning its index.  Append-only. */
+static int
+js_wrap_register(const char *tags)
+{
+  int arity = (int)strlen(tags) - 1;
+  if (!js_dyn_tags_ok(tags, arity))
+    ERR("JavaScript FFI: malformed wrapper descriptor");
+  mhs_js_setup();                               /* idempotent: create __mhs once */
+  if (js_wrap_count >= js_wrap_cap) {
+    js_wrap_cap = js_wrap_cap ? js_wrap_cap * 2 : 8;
+    js_wrap_tags = js_wrap_tags ? mrealloc(js_wrap_tags, js_wrap_cap * sizeof(char *))
+                                : mmalloc(js_wrap_cap * sizeof(char *));
+  }
+  js_wrap_tags[js_wrap_count] = mmalloc(strlen(tags) + 1);
+  strcpy(js_wrap_tags[js_wrap_count], tags);
+  return js_wrap_count++;
+}
+#endif  /* WANT_JSFFI */
+
 /* The memory allocated here is never freed.
  * This could be fixed by using a forptr and a
  * finalizer for read UTF-8 strings.
@@ -3921,6 +4108,44 @@ parse(BFILE *f)
         ;
       r = ffiNode(buf);
       PUSH(r);
+      break;
+    case '~':
+      /* Dynamic JavaScript FFI: ~<tags> "<jsbody>"  (see js_dyn_* above) */
+      for (j = 0; j + 1 < sizeof(buf); j++) {   /* read the tag string (bounded) */
+        int tc = getNT(f);
+        if (!tc) break;
+        buf[j] = tc;
+      }
+      buf[j] = 0;
+      if (!gobble(f, '"'))
+        ERR("parse ~ (JS FFI): malformed descriptor");
+      {
+        struct bytestring body = parse_string(f);
+#if WANT_JSFFI
+        r = alloc_node(T_IO_JSCALL);
+        SETVALUE(r, js_dyn_register(buf, body));  /* takes ownership of body */
+        PUSH(r);
+#else
+        FREE(body.bs_array);
+        ERR("JavaScript FFI is not supported in this runtime");
+#endif
+      }
+      break;
+    case '`':
+      /* `foreign import javascript "wrapper"`: `<cbtags>  (see js_wrap_* above) */
+      for (j = 0; j + 1 < sizeof(buf); j++) {
+        int tc = getNT(f);
+        if (!tc) break;
+        buf[j] = tc;
+      }
+      buf[j] = 0;
+#if WANT_JSFFI
+      r = alloc_node(T_IO_JSWRAP);
+      SETVALUE(r, js_wrap_register(buf));
+      PUSH(r);
+#else
+      ERR("JavaScript FFI is not supported in this runtime");
+#endif
       break;
     case ';':
       /* <name is a C function pointer to name */
@@ -4320,6 +4545,11 @@ case T_DBL: putb('&', f); putdblb(GETDBLVALUE(n), f); break;
     }
     break;
   case T_IO_CCALL: putb('^', f); putsb(FFI_IX(GETVALUE(n)).ffi_name, f); break;
+#if WANT_JSFFI
+  case T_IO_JSCALL: { struct js_dyn_entry *je = &js_dyn_table[GETVALUE(n)];
+                      putb('~', f); putsb(je->tags, f); putb(' ', f); print_string(f, je->body); break; }
+  case T_IO_JSWRAP: putb('`', f); putsb(js_wrap_tags[GETVALUE(n)], f); putb(' ', f); break;
+#endif  /* WANT_JSFFI */
   case T_BADDYN: putb('^', f); putsb(CSTR(n), f); break;
 #if WANT_TICK
   case T_TICK:
@@ -5998,6 +6228,107 @@ evali(NODEPTR an)
       GOPAIR(x);                  /* and this is the result */
     }
 
+  case T_IO_JSCALL:
+    /* Like T_IO_CCALL, but the target is a dynamically-registered JS function
+     * (see js_dyn_* above).  Arguments are marshalled into globalThis.__mhs.argbuf
+     * by tag, the function is applied, and the result is marshalled back. */
+    {
+#if WANT_JSFFI
+      GCCHECK(1);
+      int idx = (int)GETVALUE(n);
+      if (idx < 0 || idx >= js_dyn_count)
+        ERR("JavaScript FFI: bad registry index");
+      struct js_dyn_entry *e = &js_dyn_table[idx];
+      int arity = e->arity;
+      CHECK(arity);
+      PUSH(mkPtr(0));             /* placeholder for result, protected from GC */
+      /* Evaluate all args into C locals FIRST: forcing an arg may run a nested
+       * JS call that reuses argbuf, so we must not interleave eval with pushing. */
+      {
+        double         dvals[JS_MAX_ARGS];
+        value_t        ivals[JS_MAX_ARGS];
+        struct forptr *svals[JS_MAX_ARGS];
+        for (int i = 0; i < arity; i++) {
+          char t = e->tags[i + 1];
+          if      (t == 'D') dvals[i] = mhs_to_Double(stk, i);
+          else if (t == 'F') dvals[i] = (double)mhs_to_Float(stk, i);
+          else if (t == 'B') ivals[i] = mhs_to_Bool(stk, i);
+          else if (t == 'J') ivals[i] = (value_t)(intptr_t)evalforptr(ARG(TOP(i + 1)))->payload.bs_array;
+          else if (t == 'S') svals[i] = evalbstr(ARG(TOP(i + 1)));   /* ByteString: packed bytes, owned by the arg */
+          else               ivals[i] = (t == 'P') ? (value_t)mhs_to_Ptr(stk, i) : mhs_to_Int(stk, i);  /* I/U or P */
+        }
+        mhs_js_argreset();
+        for (int i = 0; i < arity; i++) {
+          char t = e->tags[i + 1];
+          if      (t == 'D' || t == 'F') mhs_js_push_dbl(dvals[i]);
+          else if (t == 'J')             mhs_js_push_obj((int)ivals[i]);
+          else if (t == 'U' || t == 'P') mhs_js_push_uint((int)ivals[i]); /* Word/Char/Ptr: unsigned (a wasm32 address >= 2^31 must not go negative) */
+          else if (t == 'S')             mhs_js_push_str(svals[i]->payload.bs_array, (int)svals[i]->payload.bs_size);
+          else                           mhs_js_push_int((int)ivals[i]);  /* I, B */
+        }
+      }
+      switch (e->tags[0]) {
+      case 'V': mhs_js_call_void(idx);                          mhs_from_Unit(stk, arity);           break;
+      case 'D': mhs_from_Double(stk, arity, mhs_js_call_dbl(idx));                                    break;
+      case 'F': mhs_from_Float(stk, arity, (flt32_t)mhs_js_call_dbl(idx));                            break;
+      case 'P': mhs_from_Ptr(stk, arity, mhs_js_call_ptr(idx));                                       break;
+      case 'B': mhs_from_Bool(stk, arity, mhs_js_call_bool(idx));                                     break;
+      case 'J': {                                                       /* intern + wrap as a JSVal */
+        struct forptr *fp = mkForPtrP((void *)(intptr_t)mhs_js_call_obj(idx));
+        fp->finalizer->final = (HsFunPtr)mhs_js_obj_free;               /* free the slot on GC */
+        SETFORPTR(TOP(0), fp);
+      } break;
+      case 'S': {                                                       /* JS string -> ByteString (owns the buffer) */
+        char *cs = mhs_js_call_str(idx);
+        SETBSTR(TOP(0), mkForPtrFree(mk_ro_bytestring((size_t)mhs_js_slen(), cs)));
+      } break;
+      default:  mhs_from_Int(stk, arity, mhs_js_call_int(idx));                                       break;  /* I/U: bit-preserved */
+      }
+      if (mhs_js_haserr()) {
+        mhs_js_logerr();
+        ERR("JavaScript FFI call threw an exception (see console)");
+      }
+      x = POPTOP();              /* pop actual result */
+      POP(arity);                /* pop the pushed arguments */
+      if (stack_ptr < 0)
+        ERR("JSCALL POP");
+      n = POPTOP();              /* node to update */
+      GOPAIR(x);                 /* and this is the result */
+#else
+      ERR("JavaScript FFI is not supported in this runtime");
+#endif
+    }
+
+  case T_IO_JSWRAP:
+    /* mkCB f :: IO JSVal: turn the Haskell closure f into a JS function.
+     * Keep f alive with a StablePtr (leaks until exit; see mhs_wrapper_invoke),
+     * build a JS function that marshals via the callback tags, and return it as
+     * a JSVal.  The JS function outliving this JSVal is fine (it holds the
+     * StablePtr, not the registry slot). */
+    {
+#if WANT_JSFFI
+      GCCHECK(2);
+      int widx = (int)GETVALUE(n);
+      if (widx < 0 || widx >= js_wrap_count)
+        ERR("JavaScript FFI: bad wrapper index");
+      CHECK(1);
+      PUSH(mkPtr(0));            /* placeholder for the result JSVal */
+      {
+        uvalue_t sp = new_stableptr(ARG(TOP(1)));       /* the closure argument */
+        int h = mhs_js_make_wrapper((int)sp, widx);
+        struct forptr *fp = mkForPtrP((void *)(intptr_t)h);
+        fp->finalizer->final = (HsFunPtr)mhs_js_obj_free;
+        SETFORPTR(TOP(0), fp);
+      }
+      x = POPTOP();              /* the result JSVal */
+      POP(1);                    /* pop the closure argument */
+      n = POPTOP();              /* node to update */
+      GOPAIR(x);
+#else
+      ERR("JavaScript FFI is not supported in this runtime");
+#endif
+    }
+
   case T_PACKCSTRING:
     {
       CHKARG2NP;                  /* sets x, y, n */
@@ -7343,6 +7674,63 @@ apply_sp(uvalue_t sp, void *arg)
   POP(1);
   return r;
 }
+
+#if WANT_JSFFI
+/* Called from JS when a "wrapper" function is invoked (see mhs_js_make_wrapper).
+ * Marshal the callback's arguments out of its __mhs.wargs frame into an application
+ * of the closure `sp`, run it (a fresh thread post-main, or the current stack if
+ * re-entered during evaluation, see ffe_eval), and hand the result back through
+ * __mhs.wres.  Arguments are read into Haskell nodes before running, since the
+ * callback may itself re-enter the runtime.  Mirrors the generated `foreign export`
+ * C wrappers.  KEEPALIVE makes it a wasm export whenever the feature is compiled in. */
+EMSCRIPTEN_KEEPALIVE void
+mhs_wrapper_invoke(int sp, int widx)
+{
+  if (widx < 0 || widx >= js_wrap_count)   /* exported: guard against bad JS calls */
+    ERR("JavaScript FFI: bad wrapper index");
+  const char *tags = js_wrap_tags[widx];
+  int arity = (int)strlen(tags) - 1;
+  GCCHECK(2 * arity + 4);
+  ffe_push(deref_stableptr((uvalue_t)sp));
+  for (int i = 0; i < arity; i++) {
+    switch (tags[i + 1]) {
+    case 'D': mhs_from_Double(ffe_alloc(), 0, mhs_js_arg_dbl(i)); ffe_apply(); break;
+    case 'F': mhs_from_Float(ffe_alloc(), 0, (flt32_t)mhs_js_arg_dbl(i)); ffe_apply(); break;
+    case 'B': mhs_from_Bool(ffe_alloc(), 0, mhs_js_arg_int(i)); ffe_apply(); break;
+    case 'P': mhs_from_Ptr(ffe_alloc(), 0, (void *)(intptr_t)mhs_js_arg_int(i)); ffe_apply(); break;
+    case 'J': {                                        /* intern the JS value + wrap as a JSVal */
+      int h = mhs_js_arg_obj(i);
+      ffe_alloc();
+      struct forptr *fp = mkForPtrP((void *)(intptr_t)h);
+      fp->finalizer->final = (HsFunPtr)mhs_js_obj_free;
+      SETFORPTR(TOP(0), fp);
+      ffe_apply();
+    } break;
+    case 'S': {                                        /* JS string -> ByteString (owns the buffer) */
+      char *cs = mhs_js_arg_str(i);
+      size_t len = (size_t)mhs_js_slen();
+      ffe_alloc();
+      SETBSTR(TOP(0), mkForPtrFree(mk_ro_bytestring(len, cs)));
+      ffe_apply();
+    } break;
+    default:  mhs_from_Int(ffe_alloc(), 0, mhs_js_arg_int(i)); ffe_apply(); break;  /* I/U: bit-preserved */
+    }
+  }
+  stackptr_t r = ffe_exec();            /* performIO (f a b ...); force to the result */
+  switch (tags[0]) {
+  case 'V': mhs_js_set_res_undef();                            break;  /* IO (): outer writes last */
+  case 'D': mhs_js_set_res_num(mhs_to_Double(r, -1));           break;
+  case 'F': mhs_js_set_res_num((double)mhs_to_Float(r, -1));    break;
+  case 'B': mhs_js_set_res_num(mhs_to_Bool(r, -1));             break;
+  case 'P': mhs_js_set_res_num((double)(uintptr_t)mhs_to_Ptr(r, -1)); break;  /* unsigned: address >= 2^31 must not go negative */
+  case 'J': mhs_js_set_res_obj((int)(intptr_t)evalforptr(ARG(TOP(0)))->payload.bs_array); break;
+  case 'S': { struct forptr *fp = evalbstr(ARG(TOP(0))); mhs_js_set_res_str(fp->payload.bs_array, (int)fp->payload.bs_size); } break;
+  case 'U': mhs_js_set_res_num((double)(uvalue_t)mhs_to_Int(r, -1)); break;  /* Word/Char: unsigned */
+  default:  mhs_js_set_res_num((double)mhs_to_Int(r, -1));      break;  /* I */
+  }
+  ffe_pop();
+}
+#endif  /* WANT_JSFFI */
 
 /*********************/
 /* FFI adapters      */
