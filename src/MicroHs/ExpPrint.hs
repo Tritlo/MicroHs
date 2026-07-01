@@ -128,13 +128,16 @@ toStringP ae =
     -- interpreter registers and dispatches dynamically (T_IO_JSCALL in eval.c).
     -- The special body "wrapper" turns a Haskell closure into a JS function
     -- (`(a -> .. -> IO r) -> IO JSVal`); it emits `<cbtags> (T_IO_JSWRAP), the
-    -- callback's tags, no body.
+    -- callback's tags, no body.  A body prefixed with "async " awaits a Promise:
+    -- it emits the ?<tags> token (T_IO_JSCALL is_async), runnable only on the
+    -- Asyncify runtime (mhseval-async.js).
     Lit (LForImp _ (ImpJS jsbody) _ (CType ty))
       | jsbody == "wrapper" -> (('`' : jsWrapperTags ty ++ " ") ++)
       | otherwise ->
-        let (as, rio) = getArrows ty
-            tags      = jsRetTag (dropIO rio) : map jsArgTag as
-        in  (('~' : tags ++ " ") ++) . (quoteString (utf8encode jsbody) ++) . (' ' :)
+        let (as, rio)   = getArrows ty
+            tags        = jsRetTag (dropIO rio) : map jsArgTag as
+            (tok, body) = if take 6 jsbody == "async " then ('?', drop 6 jsbody) else ('~', jsbody)
+        in  ((tok : tags ++ " ") ++) . (quoteString (utf8encode body) ++) . (' ' :)
     Lit l -> (showLit l ++) . (' ' :)
     Lam _x _e -> undefined -- (("(\\" ++ showIdent x ++ " ") ++) . toStringP e . (")" ++)
     --App f a -> ("(" ++) . toStringP f . (" " ++) . toStringP a . (")" ++)
