@@ -8,8 +8,11 @@ import Data.Maybe
 import MicroHs.Desugar(LDef)
 import MicroHs.EncodeData(encList)
 import MicroHs.Exp
-import MicroHs.Expr(Lit(..), showLit, errorMessage, HasLoc(..), CType)
-import MicroHs.Ident(Ident, showIdent, mkIdent, showSLoc)
+import MicroHs.Expr(Lit(..), showLit, errorMessage, HasLoc(..), CType(..), ImpEnt(..),
+                    Expr(EVar, EApp), EType, showEType, getArrows)
+import MicroHs.Ident(Ident, showIdent, mkIdent, showSLoc, unIdent)
+import MicroHs.Names(identIO, identPtr, identUnit, identInt, identWord, identDouble,
+                     identFloat, identBool, identByteString, identForeignPtr)
 import MicroHs.List(groupSort)
 import MicroHs.State
 import MicroHs.TypeCheck(isInstId)
@@ -122,6 +125,17 @@ toStringP ae =
     Lit (LInteger _) -> undefined
     Lit (LRat _) -> undefined
     Lit (LTick s) -> ('!':) . (quoteString s ++) . (' ' :)
+    -- A `foreign import javascript` becomes a token  ~<tags> "<jsbody>"  that the
+    -- interpreter registers and dispatches dynamically (T_IO_JSCALL in eval.c).
+    -- The special body "wrapper" turns a Haskell closure into a JS function
+    -- (`(a -> .. -> IO r) -> IO JSVal`); it emits `<cbtags> (T_IO_JSWRAP), the
+    -- callback's tags, no body.
+    Lit (LForImp _ (ImpJS jsbody) _ (CType ty))
+      | jsbody == "wrapper" -> (('`' : jsWrapperTags ty ++ " ") ++)
+      | otherwise ->
+        let (as, rio) = getArrows ty
+            tags      = jsRetTag (dropIO rio) : map jsArgTag as
+        in  (('~' : tags ++ " ") ++) . (quoteString (utf8encode jsbody) ++) . (' ' :)
     Lit l -> (showLit l ++) . (' ' :)
     Lam _x _e -> undefined -- (("(\\" ++ showIdent x ++ " ") ++) . toStringP e . (")" ++)
     --App f a -> ("(" ++) . toStringP f . (" " ++) . toStringP a . (")" ++)
@@ -155,6 +169,55 @@ quoteString s =
       | c < '\xff'             = ['|', chr (ord c - 0x80)]
       | otherwise              = "\\_"
   in  '"' : concatMap (\c -> achar (chr (ord c `rem` 256))) s ++ ['"']
+
+-- The result type of a `foreign import javascript` is `IO t`; strip the `IO`.
+dropIO :: EType -> EType
+dropIO (EApp (EVar io) t) | io == identIO = t
+dropIO t = t
+
+-- Single-character tags naming JS FFI marshalling types; must agree with the
+-- decoder for T_IO_JSCALL in src/runtime/eval.c.  I=Int U=Word/Char D=Double
+-- F=Float P=Ptr B=Bool J=JSVal S=ByteString(<->JS string), and V=() only as a
+-- return type, never an argument.
+jsRetTag :: EType -> Char
+jsRetTag (EVar i) | i == identUnit = 'V'
+jsRetTag t = jsScalarTag t
+
+jsArgTag :: EType -> Char
+jsArgTag = jsScalarTag
+
+jsScalarTag :: EType -> Char
+jsScalarTag (EApp (EVar p) _) | p == identPtr = 'P'
+-- JSVal is a newtype over `ForeignPtr JSValRep`, and newtypes are transparent,
+-- so the type reaches us as its representation.  The JSValRep phantom marks it.
+jsScalarTag (EApp (EVar fp) (EVar m))
+  | fp == identForeignPtr && unIdent m == "Mhs.JavaScript.JSValRep" = 'J'
+jsScalarTag (EVar i)
+  | i == identInt        = 'I'
+  | i == identWord       = 'U'   -- unsigned; also Char's representation (a codepoint)
+  | i == identDouble     = 'D'
+  | i == identFloat      = 'F'
+  | i == identBool       = 'B'
+  | i == identByteString = 'S'   -- packed bytes <-> JS string (UTF-8)
+jsScalarTag t = jsTagErr t
+
+jsTagErr :: EType -> a
+jsTagErr t = errorMessage (getSLoc t) $ "unsupported JavaScript FFI type: " ++ showEType t
+
+-- A `foreign import javascript "wrapper"` has type `(a -> .. -> IO r) -> IO JSVal`.
+-- The serialized tags describe the callback (its result then its arguments), so
+-- the runtime knows how to marshal when JS later calls the function.
+jsWrapperTags :: EType -> String
+jsWrapperTags ty =
+  case getArrows ty of
+    -- wrapper result must be `IO JSVal`, callback result must be `IO r` (the
+    -- runtime always performIO's the callback, so a pure callback is rejected).
+    ([cbty], EApp (EVar io1) rv)
+      | io1 == identIO, jsScalarTag rv == 'J'
+      , (cas, EApp (EVar io2) cr) <- getArrows cbty, io2 == identIO ->
+          jsRetTag cr : map jsArgTag cas
+    _ -> errorMessage (getSLoc ty) $
+           "foreign import javascript \"wrapper\" must have type (.. -> IO r) -> IO JSVal: " ++ showEType ty
 
 -- BaseStrings are encoded without quotations,
 -- using a length and raw data instead.
