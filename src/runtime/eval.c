@@ -3705,7 +3705,7 @@ find_label(heapoffs_t label)
  * is append-only: parse_top is re-entered by IO.deserialize, so resetting it
  * would invalidate live nodes. */
 #define JS_MAX_ARGS 32
-struct js_dyn_entry { int arity; char *tags; struct bytestring body; }; /* body kept for printb */
+struct js_dyn_entry { int arity; char *tags; struct bytestring body; int is_async; }; /* body kept for printb */
 #if defined(__EMSCRIPTEN__)
 static struct js_dyn_entry *js_dyn_table = NULL;
 static int js_dyn_count = 0;
@@ -3715,6 +3715,12 @@ static int js_dyn_cap = 0;
 static char **js_wrap_tags = NULL;
 static int js_wrap_count = 0;
 static int js_wrap_cap = 0;
+#if defined(MHS_JS_ASYNC)
+/* Depth of re-entrant callback execution (wrapper / event-pump).  An async import
+ * must not run inside a callback (which returns to JS synchronously); a counter,
+ * not a flag, because sync wrapper callbacks can nest (Phase B). */
+static int js_in_callback = 0;
+#endif
 #endif
 
 /* EM_JS (full JS bodies) not EM_ASM (which mishandles object literals).
@@ -3737,18 +3743,22 @@ EM_JS(void, mhs_js_setup, (void), {
    * guards builds that don't export them (e.g. the compiler). */
   if (typeof UTF8ToString !== 'undefined')    globalThis.UTF8ToString    = UTF8ToString;
   if (typeof stringToNewUTF8 !== 'undefined') globalThis.stringToNewUTF8 = stringToNewUTF8;
-  /* invoke(sp,v) drives a Haskell StablePtr (Int -> IO ()) from a JS event. */
+  /* invoke(sp,v) drives a Haskell StablePtr (Int -> IO ()) from a JS event.
+   * Refuse re-entry while an async import is suspended (the evaluator is not
+   * reentrant; async_suspended is only ever set by the async runtime). */
   if (!m.invoke && typeof _mhs_invoke_int !== 'undefined')
-    m.invoke = function(sp, v) { return _mhs_invoke_int(sp, v); };
+    m.invoke = function(sp, v) { if (m.async_suspended) return 0; return _mhs_invoke_int(sp, v); };
 });
 
-EM_JS(int, mhs_js_register, (const char *bodyp, int arity), {
+EM_JS(int, mhs_js_register, (const char *bodyp, int arity, int is_async), {
   var body = UTF8ToString(bodyp);
   var names = [];
   for (var k = 0; k < arity; k++) names.push('$' + k);
   names.push(body);
+  /* async imports compile to an async function so their body can `await`. */
+  var ctor = is_async ? Object.getPrototypeOf(async function(){}).constructor : Function;
   var f;
-  try { f = Function.apply(null, names); }
+  try { f = ctor.apply(null, names); }
   catch (e) { var msg = String(e); f = function(){ throw new Error(msg); }; }
   return globalThis.__mhs.reg.push(f) - 1;
 });
@@ -3781,12 +3791,30 @@ EM_JS(void,   mhs_js_set_res_undef, (void),   { globalThis.__mhs.wres = undefine
 EM_JS(int, mhs_js_make_wrapper, (int sp, int widx), {
   var m = globalThis.__mhs;
   var f = function() {
+    if (m.async_suspended) return undefined;   /* refuse re-entry during an async suspend */
     m.argbuf = Array.prototype.slice.call(arguments);
     _mhs_wrapper_invoke(sp, widx);   /* always sets wres (last write wins under nesting) */
     return m.wres;
   };
   return m.intern(f);
 });
+
+#if defined(MHS_JS_ASYNC)
+/* Async dynamic imports (?<tags> "<body>"): the body is an async function, so we
+ * await its Promise, suspending the C stack via Asyncify.  async_suspended is set
+ * across the await so JS-side re-entry (event pump, wrapper) is refused — the
+ * evaluator is not reentrant.  Errors are fatal, matching the sync bridge. */
+EM_ASYNC_JS(int,    mhs_js_call_async_int,  (int idx), { var m=globalThis.__mhs; m.async_suspended=true; try { return await m.reg[idx].apply(null, m.argbuf); } catch(e){ m.err=String(e); return 0; } finally { m.async_suspended=false; } });
+EM_ASYNC_JS(double, mhs_js_call_async_dbl,  (int idx), { var m=globalThis.__mhs; m.async_suspended=true; try { return await m.reg[idx].apply(null, m.argbuf); } catch(e){ m.err=String(e); return 0; } finally { m.async_suspended=false; } });
+EM_ASYNC_JS(void *, mhs_js_call_async_ptr,  (int idx), { var m=globalThis.__mhs; m.async_suspended=true; try { return await m.reg[idx].apply(null, m.argbuf); } catch(e){ m.err=String(e); return 0; } finally { m.async_suspended=false; } });
+EM_ASYNC_JS(void,   mhs_js_call_async_void, (int idx), { var m=globalThis.__mhs; m.async_suspended=true; try { await m.reg[idx].apply(null, m.argbuf); } catch(e){ m.err=String(e); } finally { m.async_suspended=false; } });
+EM_ASYNC_JS(int,    mhs_js_call_async_bool, (int idx), { var m=globalThis.__mhs; m.async_suspended=true; try { return (await m.reg[idx].apply(null, m.argbuf)) ? 1 : 0; } catch(e){ m.err=String(e); return 0; } finally { m.async_suspended=false; } });
+EM_ASYNC_JS(int,    mhs_js_call_async_obj,  (int idx), { var m=globalThis.__mhs; m.async_suspended=true; try { return m.intern(await m.reg[idx].apply(null, m.argbuf)); } catch(e){ m.err=String(e); return 0; } finally { m.async_suspended=false; } });
+/* Authoritative reentry guard: true while an async import is awaiting.  The JS-side
+ * checks (invoke, wrapper functions) are an optimization; every exported C callback
+ * entry checks this too, since a direct call would bypass the JS wrapper. */
+EM_JS(int, mhs_js_is_async_suspended, (void), { return (globalThis.__mhs && globalThis.__mhs.async_suspended) ? 1 : 0; });
+#endif  /* MHS_JS_ASYNC */
 #endif  /* __EMSCRIPTEN__ */
 
 /* GC finalizer for a JSVal (a ForeignPtr whose "pointer" is the object handle),
@@ -3824,7 +3852,7 @@ js_dyn_tags_ok(const char *tags, int arity)
  * (body is kept for re-serialization; takes ownership of body.bs_array), and
  * return the registry index.  Append-only: never reset (see the header note). */
 static int
-js_dyn_register(const char *tags, struct bytestring body)
+js_dyn_register(const char *tags, struct bytestring body, int is_async)
 {
   int arity = (int)strlen(tags) - 1;
   if (!js_dyn_tags_ok(tags, arity)) {
@@ -3832,7 +3860,7 @@ js_dyn_register(const char *tags, struct bytestring body)
     ERR("JavaScript FFI: malformed import descriptor");
   }
   mhs_js_setup();                               /* idempotent: create __mhs once */
-  int idx = mhs_js_register((const char *)body.bs_array, arity);
+  int idx = mhs_js_register((const char *)body.bs_array, arity, is_async);
   if (idx >= js_dyn_cap) {
     js_dyn_cap = idx < 16 ? 16 : idx * 2;
     js_dyn_table = js_dyn_table ? mrealloc(js_dyn_table, js_dyn_cap * sizeof(struct js_dyn_entry))
@@ -3842,6 +3870,7 @@ js_dyn_register(const char *tags, struct bytestring body)
   js_dyn_table[idx].tags = mmalloc(strlen(tags) + 1);
   strcpy(js_dyn_table[idx].tags, tags);
   js_dyn_table[idx].body = body;                /* take ownership */
+  js_dyn_table[idx].is_async = is_async;
   if (idx >= js_dyn_count)
     js_dyn_count = idx + 1;
   return idx;
@@ -4095,8 +4124,8 @@ parse(BFILE *f)
       r = ffiNode(buf);
       PUSH(r);
       break;
-    case '~':
-      /* Dynamic JavaScript FFI: ~<tags> "<jsbody>"  (see js_dyn_* above) */
+    case '~':          /* dynamic JS FFI:       ~<tags> "<jsbody>"  (sync)  */
+    case '?':          /* async dynamic JS FFI: ?<tags> "<jsbody>"  (async runtime only) */
       for (j = 0; j + 1 < sizeof(buf); j++) {   /* read the tag string (bounded) */
         int tc = getNT(f);
         if (!tc) break;
@@ -4104,14 +4133,21 @@ parse(BFILE *f)
       }
       buf[j] = 0;
       if (!gobble(f, '"'))
-        ERR("parse ~ (JS FFI): malformed descriptor");
+        ERR("parse JS FFI: malformed descriptor");
       {
         struct bytestring body = parse_string(f);
-#if defined(__EMSCRIPTEN__)
+        int is_async = (c == '?');
+#if defined(__EMSCRIPTEN__) && defined(MHS_JS_ASYNC)
         r = alloc_node(T_IO_JSCALL);
-        SETVALUE(r, js_dyn_register(buf, body));  /* takes ownership of body */
+        SETVALUE(r, js_dyn_register(buf, body, is_async));  /* takes ownership of body */
+        PUSH(r);
+#elif defined(__EMSCRIPTEN__)
+        if (is_async) { FREE(body.bs_array); ERR("async JavaScript FFI requires the async runtime (mhseval-async.js)"); }
+        r = alloc_node(T_IO_JSCALL);
+        SETVALUE(r, js_dyn_register(buf, body, 0));  /* takes ownership of body */
         PUSH(r);
 #else
+        (void)is_async;
         FREE(body.bs_array);
         ERR("JavaScript FFI is only supported in the emscripten runtime");
 #endif
@@ -4533,7 +4569,7 @@ case T_DBL: putb('&', f); putdblb(GETDBLVALUE(n), f); break;
   case T_IO_CCALL: putb('^', f); putsb(FFI_IX(GETVALUE(n)).ffi_name, f); break;
 #if defined(__EMSCRIPTEN__)
   case T_IO_JSCALL: { struct js_dyn_entry *je = &js_dyn_table[GETVALUE(n)];
-                      putb('~', f); putsb(je->tags, f); putb(' ', f); print_string(f, je->body); break; }
+                      putb(je->is_async ? '?' : '~', f); putsb(je->tags, f); putb(' ', f); print_string(f, je->body); break; }
   case T_IO_JSWRAP: putb('`', f); putsb(js_wrap_tags[GETVALUE(n)], f); putb(' ', f); break;
 #endif
   case T_BADDYN: putb('^', f); putsb(CSTR(n), f); break;
@@ -6243,6 +6279,27 @@ evali(NODEPTR an)
           else                           mhs_js_push_int((int)ivals[i]);  /* I, B, P */
         }
       }
+#if defined(MHS_JS_ASYNC)
+      if (e->is_async) {
+        /* Async import: await the Promise (Asyncify suspends the C stack).  Not
+         * allowed inside a callback, which must return to JS synchronously. */
+        if (js_in_callback)
+          ERR("async JavaScript FFI not allowed inside a callback");
+        switch (e->tags[0]) {
+        case 'V': mhs_js_call_async_void(idx);                    mhs_from_Unit(stk, arity);           break;
+        case 'D': mhs_from_Double(stk, arity, mhs_js_call_async_dbl(idx));                              break;
+        case 'F': mhs_from_Float(stk, arity, (flt32_t)mhs_js_call_async_dbl(idx));                      break;
+        case 'P': mhs_from_Ptr(stk, arity, mhs_js_call_async_ptr(idx));                                 break;
+        case 'B': mhs_from_Bool(stk, arity, mhs_js_call_async_bool(idx));                               break;
+        case 'J': {
+          struct forptr *fp = mkForPtrP((void *)(intptr_t)mhs_js_call_async_obj(idx));
+          fp->finalizer->final = (HsFunPtr)mhs_js_obj_free;
+          SETFORPTR(TOP(0), fp);
+        } break;
+        default:  mhs_from_Int(stk, arity, mhs_js_call_async_int(idx));                                 break;  /* I/U */
+        }
+      } else
+#endif
       switch (e->tags[0]) {
       case 'V': mhs_js_call_void(idx);                          mhs_from_Unit(stk, arity);           break;
       case 'D': mhs_from_Double(stk, arity, mhs_js_call_dbl(idx));                                    break;
@@ -7637,12 +7694,22 @@ ffe_exec(void)
 void *
 apply_sp(uvalue_t sp, void *arg)
 {
+#if defined(MHS_JS_ASYNC)
+  if (mhs_js_is_async_suspended())      /* refuse reentry while an async import awaits */
+    return NULL;
+#endif
   GCCHECK(3);
   NODEPTR f = deref_stableptr(sp);
   NODEPTR a = alloc_node(T_PTR);
   PTR(a) = arg;
   PUSH(new_ap(combPERFORMIO, new_ap(f, a)));
+#if defined(MHS_JS_ASYNC)
+  js_in_callback++;                     /* forbid async imports inside the callback */
+#endif
   void *r = evalptr(TOP(0));
+#if defined(MHS_JS_ASYNC)
+  js_in_callback--;
+#endif
   POP(1);
   return r;
 }
@@ -7658,11 +7725,21 @@ mhs_invoke_int(uvalue_t sp, value_t v)
 {
   if (main_thread)
     return 0;                   /* evaluator active — drop this event */
+#if defined(MHS_JS_ASYNC)
+  if (mhs_js_is_async_suspended())
+    return 0;                   /* refuse reentry while an async import awaits */
+#endif
   GCCHECK(2);
   NODEPTR f = deref_stableptr(sp);
   NODEPTR act = new_ap(f, mkInt(v));    /* f v :: IO () */
   PUSH(act);                            /* root across start_exec's allocation */
+#if defined(MHS_JS_ASYNC)
+  js_in_callback++;                     /* forbid async imports inside the callback */
+#endif
   start_exec(act);                      /* applies combWorld and runs to completion */
+#if defined(MHS_JS_ASYNC)
+  js_in_callback--;
+#endif
   CLEARSTK();                           /* back to the idle state */
   return 1;
 }
@@ -7679,6 +7756,12 @@ mhs_wrapper_invoke(int sp, int widx)
 {
   if (widx < 0 || widx >= js_wrap_count)   /* exported: guard against bad JS calls */
     ERR("JavaScript FFI: bad wrapper index");
+#if defined(MHS_JS_ASYNC)
+  if (mhs_js_is_async_suspended()) {       /* refuse reentry while an async import awaits */
+    mhs_js_set_res_undef();
+    return;
+  }
+#endif
   const char *tags = js_wrap_tags[widx];
   int arity = (int)strlen(tags) - 1;
   GCCHECK(2 * arity + 4);
@@ -7700,7 +7783,13 @@ mhs_wrapper_invoke(int sp, int widx)
     default:  mhs_from_Int(ffe_alloc(), 0, mhs_js_arg_int(i)); ffe_apply(); break;  /* I/U: bit-preserved */
     }
   }
+#if defined(MHS_JS_ASYNC)
+  js_in_callback++;                     /* forbid async imports inside the callback */
+#endif
   stackptr_t r = ffe_exec();            /* performIO (f a b ...); force to the result */
+#if defined(MHS_JS_ASYNC)
+  js_in_callback--;
+#endif
   switch (tags[0]) {
   case 'V': mhs_js_set_res_undef();                            break;  /* IO (): outer writes last */
   case 'D': mhs_js_set_res_num(mhs_to_Double(r, -1));           break;
