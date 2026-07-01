@@ -113,6 +113,15 @@ generated/mhseval.js:	$(RTS)/*.c $(RTS)/*.h $(RTS)/*/*.h
 	@mkdir -p bin
 	$(EMCCEVAL) $(RTS)/comb.c $(EMCCLIBS) -o generated/mhseval.js
 
+# Opt-in async runtime: Asyncify lets `foreign import javascript "async ..."` suspend
+# the interpreter across an awaited Promise.  ~2x slower on FFI-heavy code, so it is a
+# SEPARATE artifact from the fast default runtime above.  MHS_JS_ASYNC enables the async
+# token/dispatch; ccall is exported so a harness can await the suspendable entry.
+EMCCASYNCOPTS= $(EMCCOPTS) -sASYNCIFY -DMHS_JS_ASYNC -sEXPORTED_RUNTIME_METHODS=stringToNewUTF8,ccall
+generated/mhseval-async.js:	$(RTS)/*.c $(RTS)/*.h $(RTS)/*/*.h
+	@mkdir -p bin
+	emcc $(EMCCASYNCOPTS) $(RTSINC) $(MAINC) $(RTS)/eval.c $(RTS)/comb.c $(EMCCLIBS) -o generated/mhseval-async.js
+
 bin/mhs.js:	mhs.js
 	@mkdir -p bin
 	echo '#! /usr/bin/env node' > bin/mhs.js
