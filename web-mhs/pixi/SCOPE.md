@@ -38,6 +38,22 @@ can drive Haskell.
   may retain the function after the `JSVal` is collected), so there is no auto-free
   yet.  This is the interpreter-model analogue of a static `foreign export
   javascript` (which MicroHs can't do without per-program `emcc`).
+- **Async imports (opt-in runtime).** A `foreign import javascript "async <body>"`
+  compiles `<body>` to an *async* JS function and `await`s its Promise, suspending
+  the interpreter (via emscripten Asyncify) until it resolves, then resumes.  The
+  compiler emits a distinct `?<tags>` token (vs the sync `~`); only the async
+  runtime (`make generated/mhseval-async.js`, built with `-sASYNCIFY
+  -DMHS_JS_ASYNC`) executes it — the fast default runtime `ERR`s on a `?` token
+  (Asyncify costs ~2x on FFI-heavy code, so it is a separate artifact).  While a
+  call is suspended the evaluator is not reentrant, so every JS→Haskell entry
+  (event pump, wrapper, `apply_sp`) refuses re-entry (`__mhs.async_suspended`,
+  authoritative on the C side); and async imports are forbidden inside a callback
+  (a `js_in_callback` counter → `ERR`), since a callback must return to JS
+  synchronously.  **Harness:** the suspendable entry must be awaited — node's
+  auto-run resumes on its own (the event loop stays alive); a browser must await
+  the run, e.g. `Module.ccall('main', 'number', ['number','number'], [argc, argv],
+  {async: true})` (the async runtime exports `ccall`).  Promise-returning
+  callbacks (so a JS event handler can itself `await`) are the next step.
 - **First-class `JSVal` (GC-managed object handles).** A body can take and return
   `JSVal` (`Mhs.JavaScript`) directly: on return the runtime interns the JS value
   into `globalThis.__mhs.obj` and wraps the handle in a `ForeignPtr` whose
@@ -52,7 +68,7 @@ can drive Haskell.
 
 | Capability | GHC wasm | This bridge |
 |---|---|---|
-| Async / `await` a JS Promise | yes — forcing a thunk suspends the *thread*, other threads + GC continue | **not on this runtime** — `main` runs to completion synchronously.  Planned as an opt-in `-sASYNCIFY` runtime on a separate branch (`EM_ASYNC_JS` + an async token); kept off the default because Asyncify measured ~2x FFI slowdown, and the await must unwind the whole eval loop |
+| Async / `await` a JS Promise | yes — forcing a thunk suspends the *thread*, other threads + GC continue | **opt-in async runtime** (`mheval-async.js`, built with `-sASYNCIFY`) — a `foreign import javascript "async …"` awaits a Promise, suspending the interpreter across the event loop.  MVP: allowed only in the main computation, **forbidden inside callbacks** (which must return to JS synchronously).  Kept off the default runtime because Asyncify costs ~2x on FFI-heavy code |
 | `foreign export javascript` (general JS→HS) | yes (async default, `sync` opt-in, `"wrapper"`) | **`"wrapper"` done** — typed, multi-arg, result-returning closures→JS functions (sync only); static named `foreign export` not done (needs per-program `emcc`) |
 | `JSVal` with GC lifetime | GC-managed, `FinalizationRegistry` frees the JS slot | **done** — first-class `JSVal` (`Mhs.JavaScript`), runtime-owned ForeignPtr + finalizer, freed on GC; take/return directly in a body |
 | Marshalling breadth | Bool, Char, all Int/Word incl **Int64→`bigint`**, Ptr/FunPtr/StablePtr, JSVal, ByteArray# | Int (`I`), **Word/Char (unsigned `U`)**, Double, Float, Ptr, **Bool**, **JSVal**; strings via manual `Ptr`+UTF8 helpers. No Int64/Word64 (→`bigint`) yet (boxed on wasm32; they error at compile) |
@@ -91,14 +107,12 @@ time, which requires Content-Security-Policy `unsafe-eval`. Sites that forbid
    open: static named `foreign export javascript` (needs per-program `emcc`, so
    incompatible with the in-browser interpreter), and freeing a wrapper's
    `StablePtr` (needs JS-side finalization or an explicit `freeJSVal`).
-3. **Async** (the hard one, *on a separate branch*) — let `IO` `await` a Promise.
-   The plan: an opt-in `-sASYNCIFY` runtime (`mheval-async.js`) *alongside* the
-   fast default, with an async JS-FFI token and an `EM_ASYNC_JS` helper that
-   suspends the C stack across the `await`.  Kept off the default because Asyncify
-   measured ~2x on FFI-heavy work and +6% size, and the await must unwind the
-   whole eval loop (so `ASYNCIFY_ONLY` can't spare the hot path).  Needs a
-   no-reentry-while-suspended rule (browser events can fire mid-await).  JSPI is a
-   future alternative (lower overhead, but still experimental / less portable).
+3. ~~**Async** (the hard one) — let `IO` `await` a Promise~~ *(done on this branch:
+   the opt-in `-sASYNCIFY` `mheval-async.js` runtime + the `?<tags>` async token +
+   `EM_ASYNC_JS` await, with no-reentry-while-suspended enforced on the C side and
+   async forbidden inside callbacks — see "Async imports" above)*.  Remaining:
+   Promise-returning callbacks (a JS event handler that itself `await`s), and JSPI
+   as a lower-overhead alternative to Asyncify (still experimental / less portable).
 4. **Catchable JS exceptions** — map a JS exception to a catchable Haskell
    exception (at least on the async path; the sync path matches GHC's fatal one).
 5. **Avoid `unsafe-eval`** — precompile bodies or use a CSP nonce, for sites
