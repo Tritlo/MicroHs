@@ -65,7 +65,7 @@ read_file(const char *path, size_t *len)
 }
 
 static void
-init_runtime(void)
+init_runtime(int argc, char **argv)
 {
   heap_size = HEAP_CELLS;
   stack_size = STACK_SIZE;
@@ -75,7 +75,9 @@ init_runtime(void)
   init_stableptr();
 #if WANT_ARGS
   {
-    NODEPTR args = mkCons(mkStringC("mhsbench"), mkNil());
+    NODEPTR args = mkNil();
+    for (int i = argc - 1; i >= 0; i--)
+      args = mkCons(mkStringC(argv[i]), args);
     argarray = arr_alloc(1, args);
     argarray->permanent = true;
   }
@@ -157,13 +159,16 @@ bench_once(const uint8_t *input, size_t len, enum bench_mode mode)
   closeb(in);
   reset_iteration_state();
   CLEARSTK();
-  if (mode == BENCH_MAIN)
+  if (mode == BENCH_MAIN) {
     start_exec(prog);
-  else {
-    result = start_whnf(prog);
-    PUSH(result);
+    bench_sink += len;
+    if (len)
+      bench_sink += input[0];
+    return;
   }
 
+  result = start_whnf(prog);
+  PUSH(result);
   out = openb_wr_mem();
   printb(out, result, true);
   putb('\n', out);
@@ -172,14 +177,13 @@ bench_once(const uint8_t *input, size_t len, enum bench_mode mode)
   if (out_len)
     bench_sink += out_bytes[0];
   closeb(out);
-  if (mode == BENCH_WHNF)
-    POP(1);
+  POP(1);
 }
 
 static void
 usage(void)
 {
-  fprintf(stderr, "usage: mhsbench [--mode whnf|main] [--warmup-iters N] --iters N FILE\n");
+  fprintf(stderr, "usage: mhsbench [--mode whnf|main] [--warmup-iters N] --iters N FILE [-- PROGRAM ARGS...]\n");
 }
 
 static const char *
@@ -213,6 +217,9 @@ main(int argc, char **argv)
   size_t len;
   uint64_t start;
   uint64_t elapsed;
+  char *default_program_argv[1] = { "mhsbench" };
+  char **program_argv = default_program_argv;
+  int program_argc = 1;
 
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--iters") == 0 && i + 1 < argc) {
@@ -224,6 +231,14 @@ main(int argc, char **argv)
         usage();
         return 2;
       }
+    } else if (strcmp(argv[i], "--") == 0) {
+      program_argc = argc - i - 1;
+      program_argv = &argv[i + 1];
+      if (program_argc <= 0) {
+        usage();
+        return 2;
+      }
+      break;
     } else if (!path) {
       path = argv[i];
     } else {
@@ -237,7 +252,7 @@ main(int argc, char **argv)
   }
 
   input = read_file(path, &len);
-  init_runtime();
+  init_runtime(program_argc, program_argv);
 
   for (int i = 0; i < warmup_iters; i++)
     bench_once(input, len, mode);
