@@ -1577,6 +1577,11 @@ impl Program {
                 };
                 Node::Ptr(ptr)
             }
+            "remove" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let path = self.read_c_string(ptr)?;
+                Node::Int(remove_path_bytes(&path))
+            }
             "openb_wr_mem" => Node::Ptr(self.alloc_bfile(BFile {
                 bytes: Vec::new(),
                 pos: 0,
@@ -3690,13 +3695,50 @@ fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
     std::env::var_os(name).map(|value| value.to_string_lossy().into_owned().into_bytes())
 }
 
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn remove_path_bytes(path: &[u8]) -> i64 {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = std::path::Path::new(OsStr::from_bytes(path));
+    if std::fs::remove_file(path)
+        .or_else(|_| std::fs::remove_dir(path))
+        .is_ok()
+    {
+        0
+    } else {
+        -1
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn remove_path_bytes(path: &[u8]) -> i64 {
+    let _ = path;
+    -1
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn remove_path_bytes(path: &[u8]) -> i64 {
+    let Ok(path) = std::str::from_utf8(path) else {
+        return -1;
+    };
+    if std::fs::remove_file(path)
+        .or_else(|_| std::fs::remove_dir(path))
+        .is_ok()
+    {
+        0
+    } else {
+        -1
+    }
+}
+
 fn ffi_arity(name: &str) -> Option<usize> {
     Some(match name {
         "GETRAW" | "GETTIMEMICRO" | "islinux" | "ismacos" | "iswindows" | "sizeof_char"
         | "sizeof_short" | "sizeof_int" | "sizeof_long" | "sizeof_llong" | "sizeof_size_t"
         | "want_gmp" | "want_imath" | "&closeb" | "&free" | "openb_wr_mem" => 0,
-        "malloc" | "free" | "strlen" | "getenv" | "closeb" | "flushb" | "getb" | "peekPtr"
-        | "peekWord" | "peek_uint8" | "peek_uint16" | "peek_uint32" | "peek_uint64"
+        "malloc" | "free" | "strlen" | "getenv" | "remove" | "closeb" | "flushb" | "getb"
+        | "peekPtr" | "peekWord" | "peek_uint8" | "peek_uint16" | "peek_uint32" | "peek_uint64"
         | "peek_int8" | "peek_int16" | "peek_int32" | "peek_int64" | "peek_char" | "peek_schar"
         | "peek_uchar" | "peek_short" | "peek_ushort" | "peek_int" | "peek_uint" | "peek_long"
         | "peek_ulong" | "peek_llong" | "peek_ullong" | "peek_size_t" | "peek_flt32"
