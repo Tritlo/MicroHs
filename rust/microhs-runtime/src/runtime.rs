@@ -803,7 +803,7 @@ impl Program {
             };
             steps += step.reductions;
             self.reductions += step.reductions;
-            if !step.in_place {
+            if !step.in_place && step.node != current {
                 self.nodes[current.0] = Node::Indir(Some(step.node));
             }
             root = step.node;
@@ -1376,9 +1376,7 @@ impl Program {
                 app_step!(3, bxz, args[1]);
             }
             Some(Y) if !args.is_empty() => {
-                let y = self.prim("Y");
-                let yy = self.app(y, args[0]);
-                app_step!(1, args[0], yy);
+                app_step!(1, args[0], apps[0]);
             }
             Some(Tag(tag)) if args.len() >= 2 => {
                 let tag = self.push_node(Node::Int(i64::from(tag)));
@@ -6775,7 +6773,7 @@ impl Program {
             };
             steps += step.reductions;
             self.reductions += step.reductions;
-            if !step.in_place {
+            if !step.in_place && step.node != current {
                 self.nodes[current.0] = Node::Indir(Some(step.node));
             }
             root = step.node;
