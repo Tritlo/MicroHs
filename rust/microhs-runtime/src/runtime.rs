@@ -771,6 +771,10 @@ impl Program {
     }
 
     fn resolve_profiled(&mut self, mut id: NodeId) -> Result<NodeId, EvalError> {
+        if self.profile.is_none() {
+            return self.resolve(id);
+        }
+
         let mut depth = 0;
         loop {
             match self.nodes.get(id.0) {

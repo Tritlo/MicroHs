@@ -11,23 +11,23 @@ performance, or benchmark classification changes.
 |---|---|
 | branch | `microhs-rust` |
 | upstream tracking | `origin/microhs-rust` |
-| local commits ahead after this snapshot commit | 66 |
-| runtime code baseline | direct known primitive dispatch checkpoint |
+| local commits ahead after this snapshot commit | 69 |
+| runtime code baseline | no-profile resolve fast-path checkpoint |
 | dirty files after this snapshot commit | none expected |
 | dirty work | none in tracked runtime files |
 | matrix file | `MATRIX.md`, tracked from this snapshot |
 
 ## Verification Baseline
 
-Last fully verified state: direct known primitive dispatch checkpoint.
+Last fully verified state: no-profile resolve fast-path checkpoint.
 
 | gate | status |
 |---|---|
-| `cargo test -p microhs-runtime --quiet` | passed before direct known primitive dispatch commit; 27 tests |
-| `cargo check -p microhs-runtime --lib --quiet` | passed before direct known primitive dispatch commit |
-| `cargo check -p microhs-runtime --bins --quiet` | passed before direct known primitive dispatch commit |
-| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before direct known primitive dispatch commit |
-| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before direct known primitive dispatch commit |
+| `cargo test -p microhs-runtime --quiet` | passed before no-profile resolve fast-path commit; 27 tests |
+| `cargo check -p microhs-runtime --lib --quiet` | passed before no-profile resolve fast-path commit |
+| `cargo check -p microhs-runtime --bins --quiet` | passed before no-profile resolve fast-path commit |
+| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before no-profile resolve fast-path commit |
+| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before no-profile resolve fast-path commit |
 | `node --check rust/microhs-runtime/js/host.mjs` | passed at `f8b9e1d5` |
 | Node wasm core render smoke | passed at `9cbef47e`; host shim instantiated wasm, reduced `v8.4\n0\nI #5 @ }\n`, and rendered `5` |
 | Node wasm dynamic `~I` JS FFI smoke | passed at `58280b6e`; path-loaded wasm reduced `IO.performIO ~I "return 40 + 2" @` and rendered `42` |
@@ -36,11 +36,11 @@ Last fully verified state: direct known primitive dispatch checkpoint.
 | Node wasm wrapper tag coverage smoke | passed at `f8b9e1d5`; `II`, `UU`, `DD`, `FF`, `BB`, `SS`, `JJ`, and `PP` wrappers round-trip through JS and render expected values |
 | Node wasm unsigned/high-bit JS smoke | passed at `f8b9e1d5`; direct `~U` rendered `4294967295`; direct and wrapper `~P` rendered `Ptr#2147483648` |
 | Node wasm Response-source smoke | passed at `58280b6e`; `Response(bytes)` source reduced `~S "return 'hi'"` and rendered `"hi"` |
-| `cargo fmt --all --check` | passed before direct known primitive dispatch commit |
-| `git diff --check` | passed before direct known primitive dispatch commit |
+| `cargo fmt --all --check` | passed before no-profile resolve fast-path commit |
+| `git diff --check` | passed before no-profile resolve fast-path commit |
 | `make bin/mhsbench` | passed/up to date at `70eabf4d` |
-| `cargo build --release --bin mhs-rust-bench --quiet` | passed before direct known primitive dispatch commit |
-| `cargo build --release --bin mhs-rust --quiet` | passed before direct known primitive dispatch commit |
+| `cargo build --release --bin mhs-rust-bench --quiet` | passed before no-profile resolve fast-path commit |
+| `cargo build --release --bin mhs-rust --quiet` | passed before no-profile resolve fast-path commit |
 | signed `i64::MIN` comb parser smoke | passed before checkpoint commit; Rust now parses the self-host compiler comb containing `##-9223372036854775808` |
 | unbounded internal force budget smoke | passed before checkpoint commit; self-hosting no longer trips the old internal `10_000` WHNF cap |
 | main-mode benchmark harness smoke | passed before checkpoint commit; Rust and C support `--mode main -- PROGRAM ARGS...`; main mode measures execution and validates external output instead of serializing the whole root graph |
@@ -65,6 +65,7 @@ Last fully verified state: direct known primitive dispatch checkpoint.
 | resolve/shortcut profiler probe | passed before checkpoint commit; runtime profile now reports resolve-call count, total/max indirection hops, resolve-depth histogram, and shortcut-hit counts; self-host `--help` has 5,566,726 profiled resolve calls but only 99,382 followed indirections and max chain 4, so repeated node classification/spine traversal is a larger signal than deep indirection chains |
 | tagged primitive representation perf probe | passed before checkpoint commit; parsed/created primitives now store `KnownPrim` tags for the hot combinator/IO/tag/tuple set and preserve names for render/serialize; canaries sink-match C; `zoo-chain:300` and `data-chain:300` drop to ~64 us/iter in this run, and self-host `--help` drops to `78,222,728` ns/iter with the same 312,558 reductions and 648,345 profile nodes |
 | direct known primitive dispatch perf probe | passed before checkpoint commit; `Program::step` now dispatches hot combinator/IO/tag/tuple primitives on `KnownPrim` instead of string names; sequential canaries sink-match C, with `arith`, `zoo`, `data`, `io`, and `ffi` faster than C in this run and `bfile-read` still behind; self-host `--help` improved to `72,272,334` ns/iter with the same 312,558 reductions and 648,345 profile nodes |
+| no-profile resolve fast-path perf probe | passed before checkpoint commit; normal runs now bypass the dynamic resolve-profile hook instead of making a cold no-op call for each resolve, while `--profile` keeps the same resolve-depth histogram; sequential canaries sink-match C, with `arith`, `zoo`, `data`, `io`, and `ffi` in-band or slightly better than the direct-dispatch checkpoint; same-session absolute-path self-host `--help` comparison was `75,119,651` ns/iter vs `76,337,245` for `b0685b62`, and the usual local `./bin/mhs` proxy was `73,041,815` ns/iter with the same 312,558 reductions and 648,345 profile nodes |
 | ignored IO action shortcut perf probe | passed before checkpoint commit; `io-chain`, `io-control-chain`, `argref-chain`, `ffi-chain`, `ffi-math-chain`, `ffi-const-chain`, `env-set-chain`, and `remove-missing-chain` improved with matching sinks; `ffi-mem-chain` and `bfile-read-chain` canaries stayed in the same band |
 | direct lazyBind FFI-continuation perf probe | passed before checkpoint commit; against a clean `50e11139` temp worktree, `ffi-mem-chain` improved from ~1.31 ms to ~0.18 ms and `bfile-read-chain` improved from ~1.50 ms to ~0.34 ms with matching sinks; direct BFILE/env rows improved, while complex continuation canaries stayed in the same noisy band |
 | reducer inline-spine perf probe | passed at `63d03844`; against `f8b9e1d5` temp build, current Rust improved `arith-chain`, `io-chain`, `ffi-chain`, `ffi-mem-chain`, and `bfile-read-chain` by roughly 4-13% |
@@ -139,7 +140,7 @@ Last fully verified state: direct known primitive dispatch checkpoint.
 | C-compatible graph serializer spacing | passed at `6438ec82`; `argref-chain`, `mvar-chain`, `weak-chain` sinks match |
 | benchmark StablePtr harness reset | passed at `6438ec82`; `stableptr-chain` sink matches |
 
-Latest tracked runtime behavior change is direct known primitive dispatch; it keeps `.comb` text names at parse/render boundaries while avoiding cloned strings and string matching for known primitive reducer heads.
+Latest tracked runtime behavior change is the no-profile resolve fast path; normal reducer runs avoid paying the dynamic profiling hook on every resolve, while explicit `--profile` runs still collect the same resolve-depth counters.
 
 ## Tier Status
 
@@ -200,7 +201,7 @@ runtime primitives.
 | scenario | Rust ns/iter | C ns/iter | ratio | sink match |
 |---|---:|---:|---:|---|
 | `identity-chain:1000` | 37,794 | 140,241 | 0.27 | yes |
-| `arith-chain:200` | 58,456 | 102,469 | 0.57 | yes |
+| `arith-chain:200` | 57,717 | 104,469 | 0.55 | yes |
 | `int64-chain:200` | 49,591 | 112,916 | 0.44 | yes |
 | `float64-chain:200` | 61,633 | 112,001 | 0.55 | yes |
 | `float32-chain:200` | 63,676 | 116,081 | 0.55 | yes |
@@ -210,14 +211,14 @@ runtime primitives.
 | `unpack-chain:200` | 8,678 | 97,157 | 0.09 | yes |
 | `fromutf8-chain:200` | 9,939 | 97,162 | 0.10 | yes |
 | `array-chain:200` | 3,572 | 91,485 | 0.04 | yes |
-| `io-chain:200` | 61,122 | 121,148 | 0.50 | yes |
+| `io-chain:200` | 61,047 | 120,485 | 0.51 | yes |
 | `io-array-chain:200` | 3,747 | 92,561 | 0.04 | yes |
 | `io-bytes-chain:200` | 1,814 | 90,873 | 0.02 | yes |
 | `io-control-chain:200` | 75,528 | 142,687 | 0.53 | yes |
 | `performio-apply-chain:200` | 114,126 | 123,407 | 0.92 | yes |
 | `argref-chain:200` | 55,481 | 128,597 | 0.43 | yes |
 | `stdio-chain:200` | 143,397 | 112,014 | 1.28 | yes |
-| `ffi-chain:200` | 62,791 | 150,314 | 0.42 | yes |
+| `ffi-chain:200` | 62,712 | 151,342 | 0.41 | yes |
 | `ffi-math-chain:200` | 82,002 | 170,476 | 0.48 | yes |
 | `ffi-const-chain:200` | 76,276 | 200,473 | 0.38 | yes |
 | `ffi-mem-chain:200` | 183,052 | 233,483 | 0.78 | yes |
@@ -225,7 +226,7 @@ runtime primitives.
 | `ffi-word-mem-chain:200` | 3,996,918 | 373,408 | 10.70 | yes |
 | `ffi-ptr-mem-chain:200` | 1,975,729 | 359,302 | 5.50 | yes |
 | `ffi-strcpy-chain:200` | 4,358,649 | 401,217 | 10.86 | yes |
-| `bfile-read-chain:200` | 294,998 | 261,539 | 1.13 | yes |
+| `bfile-read-chain:200` | 298,996 | 261,267 | 1.14 | yes |
 | `getenv-chain:200` | 930,970 | 370,071 | 2.52 | yes |
 | `env-set-chain:200` | 675,467 | 646,157 | 1.05 | yes |
 | `getcwd-chain:200` | 3,972,309 | 1,174,708 | 3.38 | yes |
@@ -238,8 +239,8 @@ runtime primitives.
 | `rnf-chain:200` | 75,782 | 3,801,194 | 0.02 | yes |
 | `stableptr-chain:200` | 11,719 | 118,789 | 0.10 | yes |
 | `weak-chain:200` | 20,320 | 115,161 | 0.18 | yes |
-| `zoo-chain:300` | 60,655 | 122,834 | 0.49 | yes |
-| `data-chain:300` | 61,743 | 132,555 | 0.47 | yes |
+| `zoo-chain:300` | 60,120 | 124,798 | 0.48 | yes |
+| `data-chain:300` | 59,465 | 132,820 | 0.45 | yes |
 
 ### Comparable Rare/Specialized
 
@@ -269,7 +270,7 @@ section only measures the C and Rust runtimes executing that compiler.
 | check | C runtime | Rust runtime | status |
 |---|---:|---:|---|
 | compiler comb input | 647 KiB `/tmp/mhs-selfhost.comb`; generated by native `bin/mhs` | parses after signed-`i64::MIN` parser fix | input ready |
-| `--help` main smoke | 10,810,951 ns/iter; sink `661902` | 72,272,334 ns/iter; sink `960903` | both run and print usage; not a full compile; refreshed with `--warmup-iters 1 --iters 3` after direct known primitive dispatch; profile canary still sink-matches at `960903` with 312,558 WHNF steps and 648,345 profile nodes after run, but raw timing was noisy |
+| `--help` main smoke | 10,810,951 ns/iter; sink `661902` | 73,041,815 ns/iter; sink `960903` | both run and print usage; not a full compile; refreshed with `--warmup-iters 1 --iters 3` after no-profile resolve fast path; same-session absolute-path comparison was `75,119,651` ns/iter Rust vs `76,337,245` at `b0685b62`; profile canary still sink-matches at `960903` with 312,558 WHNF steps and 648,345 profile nodes after run, but raw timing was noisy |
 | self-host compiler smoke | 56,387,928,187 ns/iter; output `/tmp/mhs-selfhost-c-refresh.comb` is a 647 KiB `v8.4` comb | latest full run at `4f6fa095` hit `timeout 600s` with exit `124`; no output comb at `/tmp/mhs-selfhost-rust-4f6fa095.comb` | not at parity |
 
 ### Self-Host Comb Static Profile
@@ -295,7 +296,7 @@ quoted strings and `$len` byte payloads.
 
 These counts are from:
 
-`timeout 60s target/release/mhs-rust-bench --input /tmp/mhs-selfhost.comb --mode main --warmup-iters 0 --iters 1 --profile --profile-top 12 -- ./bin/mhs --help > /tmp/mhs-selfhost-knowndispatch-profile-final.out`
+`timeout 60s target/release/mhs-rust-bench --input /tmp/mhs-selfhost.comb --mode main --warmup-iters 0 --iters 1 --profile --profile-top 12 -- ./bin/mhs --help > /tmp/mhs-selfhost-resolve-fastpath-profile-local.out`
 
 In the bench harness, `--profile` runs one extra profiled iteration after normal
 timing, so the normal benchmark output stays comparable. The standalone
@@ -304,7 +305,7 @@ while leaving the rendered result on stdout.
 
 | measure | count | implication |
 |---|---:|---|
-| profiled iteration time | 109.153 ms | instrumentation overhead is separate from normal timing; raw time is noisy |
+| profiled iteration time | 104.640 ms | instrumentation overhead is separate from normal timing; raw time is noisy |
 | reductions | 312,558 | same reduction count as the normal `--help` smoke |
 | step attempts | 338,053 | only 28,358 attempts do not reduce; most work is real reduction |
 | successful step heads | 309,695 | optimized multi-reduction steps account for the gap to total reductions |
@@ -416,13 +417,13 @@ performance intent, not merely behaviorally emulated.
 | Use arity-specific rewrite code for tuple constructors and hot combinators | `T_T3`..`T_T16`, `T_TAG0`..`T_TAG32`, `B`, `C`, `C'B`, `P`, etc. are direct switch arms with hand-shaped allocations | Rust now has direct `KnownPrim` arms and some app reuse, but generic tuple/app-spine rebuild still costs more than C's macro-shaped rewrites | partial |
 | Simplify graph fragments during GC when cheap and safe | `GCRED` can fold `A/K/I`, `B I`, `B x I`, `C op`, and related shapes while marking | Rust has no equivalent parse/GC simplification pass; dynamic counts suggest this is secondary to reducer shape, but it is a real C trick to remember | no |
 | Encode ordinary IO combinators as ordinary combinator rewrites | `T_IO_BIND` jumps to `T_C`, `T_IO_RETURN` jumps to `T_P`, and `T_IO_THEN` builds bind plus `K` | Rust mirrors the behavior and has additional `IO.>>`/`IO.>>=` shortcuts; remaining IO work should be justified by self-host/profile counts, not assumed | partial |
-| Keep runtime counters/profiling close to the evaluator | C's `-v`, `WANT_KPERF`, `GCRED`, and special-reduction counters expose reductions, allocation, GC, and selected rewrite counts | Rust now has bench/standalone dynamic profiles and LLVM hot counts; native sampling is still blocked by kernel perf settings | partial |
+| Keep runtime counters/profiling close to the evaluator | C's `-v`, `WANT_KPERF`, `GCRED`, and special-reduction counters expose reductions, allocation, GC, and selected rewrite counts | Rust now has bench/standalone dynamic profiles and LLVM hot counts, and normal runs bypass the resolve-depth profiling hook; native sampling is still blocked by kernel perf settings | partial |
 
 ### Comment
 
 | topic | current theory |
 |---|---|
-| Rust/C performance gap | The ignored-action, direct lazyBind, performIO extra-spine, direct Scott-pair selector, UTF-8 ASCII refill, direct `IO.return` bind, uninitialized 16-slot inline spine, hot/generalized combinator app-reuse probes, tuple first-field selector shortcut, dynamic runtime counters, resolve-depth counters, tagged primitive representation, direct `KnownPrim` dispatch, and Rust/LLVM hot-count profile confirm the gap is mostly evaluator overhead, not parity noise. Simple `IO.>>`, direct FFI, unary result-fed FFI/BFILE chains, lazy performIO application, ASCII text reads, trivial returned binds, constructor first-field selectors, tagged primitive clone avoidance, direct known-head dispatch, and most self-host `--help` spine traversals are now close to C or materially better than before. The static, dynamic, LLVM, and `eval.c` reads point away from IO/array/FFI as the main full-compiler blocker. Because this machine may be busy, raw timings are treated as indicative only; the stronger signal is the count distribution. The active theory is compile-scale reducer/runtime throughput: Rust now avoids known-primitive string dispatch, but it still pays for owned spine construction/reversal, repeated resolve/node-classification, helper-return dispatch, extra-argument rebuild, and transient app allocation where C stays in one stack/goto evaluator loop and mutates the redex cell directly. |
+| Rust/C performance gap | The ignored-action, direct lazyBind, performIO extra-spine, direct Scott-pair selector, UTF-8 ASCII refill, direct `IO.return` bind, uninitialized 16-slot inline spine, hot/generalized combinator app-reuse probes, tuple first-field selector shortcut, dynamic runtime counters, resolve-depth counters, tagged primitive representation, direct `KnownPrim` dispatch, no-profile resolve fast path, and Rust/LLVM hot-count profile confirm the gap is mostly evaluator overhead, not parity noise. Simple `IO.>>`, direct FFI, unary result-fed FFI/BFILE chains, lazy performIO application, ASCII text reads, trivial returned binds, constructor first-field selectors, tagged primitive clone avoidance, direct known-head dispatch, and most self-host `--help` spine traversals are now close to C or materially better than before. The static, dynamic, LLVM, and `eval.c` reads point away from IO/array/FFI as the main full-compiler blocker. Because this machine may be busy, raw timings are treated as indicative only; the stronger signal is the count distribution. The active theory is compile-scale reducer/runtime throughput: Rust now avoids known-primitive string dispatch and normal-run resolve profiling overhead, but it still pays for owned spine construction/reversal, repeated resolve/node-classification, helper-return dispatch, extra-argument rebuild, and transient app allocation where C stays in one stack/goto evaluator loop. Start-node resolve-chain compression and saturated-redex root updates looked C-shaped but regressed the self-host proxy, so the next work should be a more structural reducer-loop/spine representation change, not more isolated writes. |
 
 ### Compiler-Generated Compressor Write Smokes
 
@@ -442,12 +443,12 @@ Rows in this section are generated from temporary pure Haskell programs compiled
 | compression BFILE write-path benchmarks | decompressor rows existed; compiler-generated high-level compressor smokes now cover RLE/LZ77/BWT/LZMA write paths | partial done; built-in repeat scenarios still pending |
 | MD5 broader coverage | committed runtime covers all three FFI names; only `md5String` has a repeat benchmark | pending full high-level `System.IO.MD5` test once the compiler binary is available |
 | directory iteration FFI | committed runtime covers `opendir`, `readdir`, `closedir`, `c_d_name` | pending full high-level `System.Directory` test once the compiler binary is available |
-| self-hosting parity | C runtime can execute the compiler comb and produce a new compiler comb | Rust main-mode harness exists and lazy file IO now matches the C CPP scan smoke; latest full-compile run at `4f6fa095` still hit the 600s timeout with no output comb; inline spine work removed almost all `--help` heap-spine spills, generalized combinator app reuse cuts self-host `--help` node growth by ~27%, and direct known-head dispatch keeps the short self-host proxy at ~72.3 ms, but full self-host parity still needs more reducer throughput work |
+| self-hosting parity | C runtime can execute the compiler comb and produce a new compiler comb | Rust main-mode harness exists and lazy file IO now matches the C CPP scan smoke; latest full-compile run at `4f6fa095` still hit the 600s timeout with no output comb; inline spine work removed almost all `--help` heap-spine spills, generalized combinator app reuse cuts self-host `--help` node growth by ~27%, direct known-head dispatch and the no-profile resolve fast path keep the short self-host proxy around ~73 ms, but full self-host parity still needs more reducer throughput work |
 | high-level environment tests | runtime now covers `getenv`, `setenv`, `unsetenv`, `environ`; benchmark covers mutation plus lookup | pending full high-level `System.Environment` test once the compiler binary is available |
 | high-level errno/error tests | runtime now covers errno constants, `&errno`, `strerror_r`, and errno recording for implemented host failures | pending full high-level `Foreign.C.Error` / `throwErrnoIf*` tests once the compiler binary is available |
 | high-level temp/CPU tests | runtime now covers `tmpname` and `getcpu`; direct smokes cover the raw FFI actions only | pending full high-level `System.IO.openTmpFile` / `System.CPUTime` tests once the compiler binary is available |
 | commit runtime parity checkpoint | `63702f10 Add Rust mpz and JS FFI coverage` | done |
 | JS full parity | runtimeFFI missing-symbol coverage is zero; `JSVal` object result/argument handles, wrapper creation boundary, owning-program handle plumbing, wrapper tag registry, internal StablePtr callback trampoline, typed JS wrapper callback API, real Rust `.wasm` build artifact, wasm embedding exports, browser-loadable JS host shim, direct wasm dynamic JS FFI smoke, same-program wrapper callback smoke, and broad wrapper tag coverage are in place, but high-level `foreign import javascript` browser parity is not complete; `.combffi` probing did not expose enough JavaScript import metadata for a runtime-only bridge | pending compiler-emitted metadata or generated glue path |
-| performance phase | nineteen performance checkpoints plus one benchmark parity checkpoint plus static, dynamic, Rust/LLVM, resolve/shortcut profile, and `eval.c` lesson checkpoints committed; numeric benchmark matrix rows now all sink-match C; rows are split into common-case and rare/specialized; common-operation targets should shift from narrow IO/FFI/data-constructor probes to C-shaped reducer work: stack-like spine traversal, repeated resolve/node-classification traffic, helper-return dispatch, app allocation/update mechanics, and only profile-justified IO-specific reductions | active |
+| performance phase | twenty performance checkpoints plus one benchmark parity checkpoint plus static, dynamic, Rust/LLVM, resolve/shortcut profile, and `eval.c` lesson checkpoints committed; numeric benchmark matrix rows now all sink-match C; rows are split into common-case and rare/specialized; common-operation targets should shift from narrow IO/FFI/data-constructor probes to C-shaped reducer work: stack-like spine traversal, repeated resolve/node-classification traffic, helper-return dispatch, app allocation/update mechanics, and only profile-justified IO-specific reductions | active |
 | rejected performance probes | `KnownFfi` enum/symbol specialization, single-pass BFILE read dispatch, direct unit-return FFI pairing, direct Unix `getcwd` into guest allocation, head-node clone collapse in `step`, primitive-node cache, broad fixed-primitive borrowed classifier, pre-clone `IO.>>` branch, broad borrowed C-string host paths, borrowed `md5String`, over-broad pointer FFI pre-dispatch, generic-arm `peekPtr`/`pokePtr` direct returns, zero-arity FFI candidate guard, direct zero-arity FFI under `IO.>>`, direct FFI shortcut under `IO.lazyBind`, borrowed fixed-size peeks, runtime handle-table free lists, shared `Rc<str>` node symbols, `IO.>>=` direct array-action execution, the `IO.return`/`K` continuation collapse, broad fast-combinator pre-dispatch, skipping outer-app rethreading after reduction, always-inlining the hot small reducer helpers, 12-slot inline spine storage, 8-slot uninitialized-only spine storage, lazy argument resolution in `spine`, broad IO final-app reuse, start-node resolve-chain compression, and in-reducer saturated-redex root updates were measured and reverted or not selected because important end-to-end rows were neutral or slower | done, do not reapply blindly |
 | keep compiler Haskell | scope is C runtime/evaluator rewrite; Haskell compiler remains authoritative `.comb` producer | ongoing |
