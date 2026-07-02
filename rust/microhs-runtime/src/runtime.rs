@@ -647,6 +647,19 @@ impl Program {
         } else {
             None
         };
+        macro_rules! app_step {
+            ($used:expr, $fun:expr, $arg:expr) => {
+                return Ok(Some(self.step_app_result(
+                    &profile_head,
+                    $used,
+                    args,
+                    apps,
+                    $fun,
+                    $arg,
+                    1,
+                )));
+            };
+        }
         if let Node::Ffi(name) = self.nodes[head.0].clone() {
             let Some((used, mut node)) = self.ffi_call(&name, &args)? else {
                 return Ok(None);
@@ -716,15 +729,7 @@ impl Program {
             "K" if args.len() >= 2 => Some((2, args[0])),
             "A" if args.len() >= 2 => Some((2, args[1])),
             "U" if args.len() >= 2 => {
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    2,
-                    args,
-                    apps,
-                    args[1],
-                    args[0],
-                    1,
-                )));
+                app_step!(2, args[1], args[0]);
             }
             "IO.performIO" if !args.is_empty() => {
                 let world = self.world();
@@ -920,281 +925,105 @@ impl Program {
                 let x = args[2];
                 let left = self.app(args[0], x);
                 let right = self.app(args[1], x);
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    3,
-                    args,
-                    apps,
-                    left,
-                    right,
-                    1,
-                )));
+                app_step!(3, left, right);
             }
             "S'" if args.len() >= 4 => {
                 let yw = self.app(args[1], args[3]);
                 let zw = self.app(args[2], args[3]);
                 let left = self.app(args[0], yw);
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    4,
-                    args,
-                    apps,
-                    left,
-                    zw,
-                    1,
-                )));
+                app_step!(4, left, zw);
             }
             "B" if args.len() >= 3 => {
                 let yz = self.app(args[1], args[2]);
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    3,
-                    args,
-                    apps,
-                    args[0],
-                    yz,
-                    1,
-                )));
+                app_step!(3, args[0], yz);
             }
             "B'" if args.len() >= 4 => {
                 let zw = self.app(args[2], args[3]);
                 let xy = self.app(args[0], args[1]);
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    4,
-                    args,
-                    apps,
-                    xy,
-                    zw,
-                    1,
-                )));
+                app_step!(4, xy, zw);
             }
             "B'" if args.len() >= 2 => {
                 let xy = self.app(args[0], args[1]);
                 let b = self.prim("B");
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    2,
-                    args,
-                    apps,
-                    b,
-                    xy,
-                    1,
-                )));
+                app_step!(2, b, xy);
             }
             "Z" if args.len() >= 3 => {
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    3,
-                    args,
-                    apps,
-                    args[0],
-                    args[1],
-                    1,
-                )));
+                app_step!(3, args[0], args[1]);
             }
             "Z" if args.len() >= 2 => {
                 let xy = self.app(args[0], args[1]);
                 let k = self.prim("K");
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    2,
-                    args,
-                    apps,
-                    k,
-                    xy,
-                    1,
-                )));
+                app_step!(2, k, xy);
             }
             "J" if args.len() >= 3 => {
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    3,
-                    args,
-                    apps,
-                    args[2],
-                    args[0],
-                    1,
-                )));
+                app_step!(3, args[2], args[0]);
             }
             "L" if args.len() >= 3 => {
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    3,
-                    args,
-                    apps,
-                    args[1],
-                    args[0],
-                    1,
-                )));
+                app_step!(3, args[1], args[0]);
             }
             "KK" if args.len() >= 3 => Some((3, args[1])),
             "KA" if args.len() >= 3 => Some((3, args[2])),
             "C" if args.len() >= 3 => {
                 let xz = self.app(args[0], args[2]);
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    3,
-                    args,
-                    apps,
-                    xz,
-                    args[1],
-                    1,
-                )));
+                app_step!(3, xz, args[1]);
             }
             "C'" if args.len() >= 4 => {
                 let yw = self.app(args[1], args[3]);
                 let xyw = self.app(args[0], yw);
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    4,
-                    args,
-                    apps,
-                    xyw,
-                    args[2],
-                    1,
-                )));
+                app_step!(4, xyw, args[2]);
             }
             "P" if args.len() >= 3 => {
                 let zx = self.app(args[2], args[0]);
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    3,
-                    args,
-                    apps,
-                    zx,
-                    args[1],
-                    1,
-                )));
+                app_step!(3, zx, args[1]);
             }
             "R" if args.len() >= 3 => {
                 let yz = self.app(args[1], args[2]);
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    3,
-                    args,
-                    apps,
-                    yz,
-                    args[0],
-                    1,
-                )));
+                app_step!(3, yz, args[0]);
             }
             "R" if args.len() >= 2 => {
                 let c = self.prim("C");
                 let cy = self.app(c, args[1]);
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    2,
-                    args,
-                    apps,
-                    cy,
-                    args[0],
-                    1,
-                )));
+                app_step!(2, cy, args[0]);
             }
             "O" if args.len() >= 4 => {
                 let wx = self.app(args[3], args[0]);
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    4,
-                    args,
-                    apps,
-                    wx,
-                    args[1],
-                    1,
-                )));
+                app_step!(4, wx, args[1]);
             }
             "K2" if args.len() >= 3 => Some((3, args[0])),
             "K2" if args.len() >= 2 => {
                 let k = self.prim("K");
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    2,
-                    args,
-                    apps,
-                    k,
-                    args[0],
-                    1,
-                )));
+                app_step!(2, k, args[0]);
             }
             "K3" if args.len() >= 4 => Some((4, args[0])),
             "K3" if args.len() >= 2 => {
                 let k2 = self.prim("K2");
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    2,
-                    args,
-                    apps,
-                    k2,
-                    args[0],
-                    1,
-                )));
+                app_step!(2, k2, args[0]);
             }
             "K4" if args.len() >= 5 => Some((5, args[0])),
             "K4" if args.len() >= 2 => {
                 let k3 = self.prim("K3");
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    2,
-                    args,
-                    apps,
-                    k3,
-                    args[0],
-                    1,
-                )));
+                app_step!(2, k3, args[0]);
             }
             "C'B" if args.len() >= 4 => {
                 let yw = self.app(args[1], args[3]);
                 let xz = self.app(args[0], args[2]);
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    4,
-                    args,
-                    apps,
-                    xz,
-                    yw,
-                    1,
-                )));
+                app_step!(4, xz, yw);
             }
             "C'B" if args.len() >= 3 => {
                 let xz = self.app(args[0], args[2]);
                 let b = self.prim("B");
                 let bxz = self.app(b, xz);
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    3,
-                    args,
-                    apps,
-                    bxz,
-                    args[1],
-                    1,
-                )));
+                app_step!(3, bxz, args[1]);
             }
             "Y" if !args.is_empty() => {
                 let y = self.prim("Y");
                 let yy = self.app(y, args[0]);
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    1,
-                    args,
-                    apps,
-                    args[0],
-                    yy,
-                    1,
-                )));
+                app_step!(1, args[0], yy);
             }
             name if args.len() >= 2 && tag_index(name).is_some() => {
                 let tag = self.push_node(Node::Int(tag_index(name).expect("checked tag") as i64));
                 let ytag = self.app(args[1], tag);
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    2,
-                    args,
-                    apps,
-                    ytag,
-                    args[0],
-                    1,
-                )));
+                app_step!(2, ytag, args[0]);
             }
             name if tuple_fields(name).is_some_and(|fields| args.len() > fields) => {
                 let fields = tuple_fields(name).expect("checked tuple constructor");
@@ -1202,15 +1031,7 @@ impl Program {
                 for arg in &args[..fields - 1] {
                     n = self.app(n, *arg);
                 }
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    fields + 1,
-                    args,
-                    apps,
-                    n,
-                    args[fields - 1],
-                    1,
-                )));
+                app_step!(fields + 1, n, args[fields - 1]);
             }
             name if args.len() >= 2 => self
                 .array_op(name, &args)?
