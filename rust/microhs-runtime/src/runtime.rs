@@ -1645,6 +1645,35 @@ impl Program {
                 let len = self.read_c_string(ptr)?.len();
                 Node::Int(i64::try_from(len).map_err(|_| EvalError::Overflow)?)
             }
+            "md5String" => {
+                let input = self.eval_pointer_value(args[0])?;
+                let result = self.eval_pointer_value(args[1])?;
+                let bytes = self.read_c_string(input)?;
+                self.write_pointer_bytes(result, &md5_bytes(&bytes))?;
+                Node::Prim("I".to_owned())
+            }
+            "md5Array" => {
+                let input = self.eval_pointer_value(args[0])?;
+                let result = self.eval_pointer_value(args[1])?;
+                let len = int_to_usize(self.eval_int(args[2])?)?;
+                let bytes = self.read_pointer_bytes(input, len)?;
+                self.write_pointer_bytes(result, &md5_bytes(&bytes))?;
+                Node::Prim("I".to_owned())
+            }
+            "md5BFILE" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let result = self.eval_pointer_value(args[1])?;
+                let mut ctx = Md5Context::new();
+                loop {
+                    let bytes = self.read_bfile_bytes(ptr, 1024)?;
+                    if bytes.is_empty() {
+                        break;
+                    }
+                    ctx.update(&bytes);
+                }
+                self.write_pointer_bytes(result, &ctx.finalize())?;
+                Node::Prim("I".to_owned())
+            }
             "getenv" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let name = self.read_c_string(ptr)?;
@@ -5216,6 +5245,128 @@ fn int_to_usize(n: i64) -> Result<usize, EvalError> {
     usize::try_from(n).map_err(|_| EvalError::InvalidByteString)
 }
 
+const MD5_S: [u32; 64] = [
+    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9,
+    14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15,
+    21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+];
+
+const MD5_K: [u32; 64] = [
+    0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
+    0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
+    0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+    0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
+    0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
+    0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
+    0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+    0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
+];
+
+struct Md5Context {
+    size: u64,
+    state: [u32; 4],
+    input: [u8; 64],
+}
+
+impl Md5Context {
+    fn new() -> Self {
+        Self {
+            size: 0,
+            state: [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476],
+            input: [0; 64],
+        }
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        let mut offset = (self.size % 64) as usize;
+        self.size = self.size.wrapping_add(bytes.len() as u64);
+        for &byte in bytes {
+            self.input[offset] = byte;
+            offset += 1;
+            if offset == 64 {
+                md5_step(&mut self.state, &md5_block_words(&self.input));
+                offset = 0;
+            }
+        }
+    }
+
+    fn finalize(mut self) -> [u8; 16] {
+        let offset = (self.size % 64) as usize;
+        let padding_len = if offset < 56 {
+            56 - offset
+        } else {
+            120 - offset
+        };
+        let mut padding = [0; 64];
+        padding[0] = 0x80;
+        self.update(&padding[..padding_len]);
+        self.size = self.size.wrapping_sub(padding_len as u64);
+
+        let mut block = md5_block_words(&self.input);
+        let bit_len = self.size.wrapping_mul(8);
+        block[14] = bit_len as u32;
+        block[15] = (bit_len >> 32) as u32;
+        md5_step(&mut self.state, &block);
+
+        let mut digest = [0; 16];
+        for (idx, word) in self.state.iter().enumerate() {
+            digest[idx * 4..idx * 4 + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        digest
+    }
+}
+
+fn md5_bytes(bytes: &[u8]) -> [u8; 16] {
+    let mut ctx = Md5Context::new();
+    ctx.update(bytes);
+    ctx.finalize()
+}
+
+fn md5_block_words(input: &[u8; 64]) -> [u32; 16] {
+    let mut out = [0; 16];
+    for (idx, word) in out.iter_mut().enumerate() {
+        let start = idx * 4;
+        *word = u32::from_le_bytes([
+            input[start],
+            input[start + 1],
+            input[start + 2],
+            input[start + 3],
+        ]);
+    }
+    out
+}
+
+fn md5_step(state: &mut [u32; 4], input: &[u32; 16]) {
+    let mut a = state[0];
+    let mut b = state[1];
+    let mut c = state[2];
+    let mut d = state[3];
+
+    for idx in 0..64 {
+        let (e, word_idx) = match idx / 16 {
+            0 => ((b & c) | (!b & d), idx),
+            1 => ((b & d) | (c & !d), (idx * 5 + 1) % 16),
+            2 => (b ^ c ^ d, (idx * 3 + 5) % 16),
+            _ => (c ^ (b | !d), (idx * 7) % 16),
+        };
+        let old_d = d;
+        d = c;
+        c = b;
+        b = b.wrapping_add(
+            a.wrapping_add(e)
+                .wrapping_add(MD5_K[idx])
+                .wrapping_add(input[word_idx])
+                .rotate_left(MD5_S[idx]),
+        );
+        a = old_d;
+    }
+
+    state[0] = state[0].wrapping_add(a);
+    state[1] = state[1].wrapping_add(b);
+    state[2] = state[2].wrapping_add(c);
+    state[3] = state[3].wrapping_add(d);
+}
+
 fn rle_pending_bytes(count: usize, byte: i64) -> Result<Vec<u8>, EvalError> {
     if count == 0 {
         return Ok(Vec::new());
@@ -5849,14 +6000,14 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "sinf"
         | "sqrtf"
         | "tanf" => 1,
-        "calloc" | "realloc" | "strcpy" | "fopen" | "add_buf" | "pokePtr" | "pokeWord"
-        | "poke_uint8" | "poke_uint16" | "poke_uint32" | "poke_uint64" | "poke_int8"
-        | "poke_int16" | "poke_int32" | "poke_int64" | "poke_char" | "poke_schar"
+        "calloc" | "realloc" | "strcpy" | "fopen" | "add_buf" | "md5BFILE" | "md5String"
+        | "pokePtr" | "pokeWord" | "poke_uint8" | "poke_uint16" | "poke_uint32" | "poke_uint64"
+        | "poke_int8" | "poke_int16" | "poke_int32" | "poke_int64" | "poke_char" | "poke_schar"
         | "poke_uchar" | "poke_short" | "poke_ushort" | "poke_int" | "poke_uint" | "poke_long"
         | "poke_ulong" | "poke_llong" | "poke_ullong" | "poke_size_t" | "poke_flt32"
         | "poke_flt64" | "openb_rd_mem" | "putb" | "ungetb" | "atan2" | "pow" | "scalbn"
         | "atan2f" | "powf" | "scalbnf" => 2,
-        "memcpy" | "memmove" | "get_mem" | "readb" | "writeb" => 3,
+        "memcpy" | "memmove" | "md5Array" | "get_mem" | "readb" | "writeb" => 3,
         _ => return None,
     })
 }

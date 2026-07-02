@@ -46,7 +46,7 @@ impl CBenchMode {
 
 fn usage() {
     eprintln!(
-        "usage: mhs-rust-bench [--iters N] [--input FILE | --scenario identity-chain:N|arith-chain:N|int64-chain:N|float64-chain:N|float32-chain:N|bytes-chain:N|foreignptr-slice:N|cstring-pack:N|unpack-chain:N|fromutf8-chain:N|array-chain:N|io-chain:N|io-array-chain:N|io-bytes-chain:N|io-control-chain:N|argref-chain:N|stdio-chain:N|ffi-chain:N|ffi-math-chain:N|ffi-const-chain:N|ffi-mem-chain:N|ffi-wide-mem-chain:N|ffi-word-mem-chain:N|ffi-ptr-mem-chain:N|ffi-strcpy-chain:N|getenv-chain:N|remove-missing-chain:N|file-read-close-chain:N|utf8-bfile-read-chain:N|crlf-bfile-read-chain:N|base64-bfile-read-chain:N|lz77-bfile-read-chain:N|bwt-bfile-read-chain:N|lzma-bfile-read-chain:N|rle-bfile-read-chain:N|buf-bfile-read-chain:N|bfile-read-chain:N|mvar-chain:N|ptr-chain:N|rnf-chain:N|stableptr-chain:N|weak-chain:N|zoo-chain:N|data-chain:N]\n\
+        "usage: mhs-rust-bench [--iters N] [--input FILE | --scenario identity-chain:N|arith-chain:N|int64-chain:N|float64-chain:N|float32-chain:N|bytes-chain:N|foreignptr-slice:N|cstring-pack:N|unpack-chain:N|fromutf8-chain:N|array-chain:N|io-chain:N|io-array-chain:N|io-bytes-chain:N|io-control-chain:N|argref-chain:N|stdio-chain:N|ffi-chain:N|ffi-math-chain:N|ffi-const-chain:N|ffi-mem-chain:N|ffi-wide-mem-chain:N|ffi-word-mem-chain:N|ffi-ptr-mem-chain:N|ffi-strcpy-chain:N|md5-string-chain:N|getenv-chain:N|remove-missing-chain:N|file-read-close-chain:N|utf8-bfile-read-chain:N|crlf-bfile-read-chain:N|base64-bfile-read-chain:N|lz77-bfile-read-chain:N|bwt-bfile-read-chain:N|lzma-bfile-read-chain:N|rle-bfile-read-chain:N|buf-bfile-read-chain:N|bfile-read-chain:N|mvar-chain:N|ptr-chain:N|rnf-chain:N|stableptr-chain:N|weak-chain:N|zoo-chain:N|data-chain:N]\n\
                                   [--warmup-iters N]\n\
                                   [--c-mhseval PATH] [--c-mhsbench PATH] [--c-mhsbench-mode whnf|main]\n\
          default: --scenario {DEFAULT_SCENARIO} --iters {DEFAULT_ITERS}"
@@ -416,6 +416,21 @@ fn make_scenario(scenario: &str) -> Result<Vec<u8>, String> {
         source.push_str(" @ @");
         let action = format!(
             "IO.lazyBind ^calloc #1 @ #17 @ @ S S K IO.>> @ @ S S K ^strcpy @ @ I @ @ K {source} @ @ @ @ S K ^strlen @ @ I @ @ @"
+        );
+        let mut expr = action.clone();
+        for _ in 1..size {
+            expr = format!("IO.>> {expr} @ {action} @");
+        }
+        return Ok(format!("v8.4\n0\nIO.performIO {expr} @ }}\n").into_bytes());
+    }
+    if let Some(size) = scenario.strip_prefix("md5-string-chain:") {
+        let size = parse_scenario_size("md5-string-chain", size)?;
+        let text = "The quick fox jumps over the lazy dog.";
+        let mut source = format!("fp2p bs2fp ${} {text}", text.len() + 1);
+        source.push('\0');
+        source.push_str(" @ @");
+        let action = format!(
+            "IO.lazyBind ^calloc #1 @ #16 @ @ S S K IO.>> @ @ S S K ^md5String @ @ K {source} @ @ @ I @ @ @ S K ^peek_uint8 @ @ I @ @ @"
         );
         let mut expr = action.clone();
         for _ in 1..size {
