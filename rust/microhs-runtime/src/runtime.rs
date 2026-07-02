@@ -92,6 +92,18 @@ enum BFileKind {
         byte: i64,
         unget: Option<i64>,
     },
+    Base64 {
+        inner: i64,
+        read: bool,
+        encbuf: [u8; 3],
+        encpos: usize,
+        linelen: usize,
+        outcol: usize,
+        unget: Option<i64>,
+        outbuf: [u8; 3],
+        outpos: usize,
+        outlen: usize,
+    },
     Buf {
         inner: i64,
         unget: Option<i64>,
@@ -1664,6 +1676,14 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 Node::Ptr(self.add_rle_bfile(ptr, false)?)
             }
+            "add_base64_decoder" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Ptr(self.add_base64_bfile(ptr, true)?)
+            }
+            "add_base64_encoder" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Ptr(self.add_base64_bfile(ptr, false)?)
+            }
             "add_buf" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let size = self.eval_int(args[1])?;
@@ -2347,6 +2367,26 @@ impl Program {
         })
     }
 
+    fn add_base64_bfile(&mut self, ptr: i64, read: bool) -> Result<i64, EvalError> {
+        let (inner_readable, inner_writable) = self.bfile_permissions(ptr)?;
+        self.alloc_bfile(BFile {
+            kind: BFileKind::Base64 {
+                inner: ptr,
+                read,
+                encbuf: [0; 3],
+                encpos: 0,
+                linelen: if read { 0 } else { 76 },
+                outcol: 0,
+                unget: None,
+                outbuf: [0; 3],
+                outpos: 0,
+                outlen: 0,
+            },
+            readable: read && inner_readable,
+            writable: !read && inner_writable,
+        })
+    }
+
     fn add_buf_bfile(&mut self, ptr: i64, bufsize: i64) -> Result<i64, EvalError> {
         let (readable, writable) = self.bfile_permissions(ptr)?;
         let linebuf = bufsize < 0;
@@ -2629,11 +2669,39 @@ impl Program {
                 .ok_or(EvalError::InvalidHandle)?;
             matches!(
                 &bfile.kind,
-                BFileKind::Buf { read: false, .. } | BFileKind::Rle { read: false, .. }
+                BFileKind::Buf { read: false, .. }
+                    | BFileKind::Rle { read: false, .. }
+                    | BFileKind::Base64 { read: false, .. }
             )
         };
         if flush_self {
             self.flush_bfile(ptr)?;
+        }
+        let close_extra = {
+            let bfile = self
+                .bfiles
+                .get_mut(slot)
+                .and_then(Option::as_mut)
+                .ok_or(EvalError::InvalidHandle)?;
+            match &mut bfile.kind {
+                BFileKind::Base64 {
+                    inner,
+                    read,
+                    linelen,
+                    outcol,
+                    ..
+                } if !*read && *linelen != 0 && *outcol != 0 => {
+                    *outcol = 0;
+                    Some((*inner, vec![b'\n']))
+                }
+                _ => None,
+            }
+        };
+        if let Some((inner, bytes)) = close_extra {
+            let written = self.write_bfile_bytes(inner, &bytes)?;
+            if written != bytes.len() {
+                return Err(EvalError::InvalidHandle);
+            }
         }
         let close_inner = {
             let bfile = self
@@ -2645,6 +2713,7 @@ impl Program {
                 BFileKind::Utf8 { inner, .. }
                 | BFileKind::Crlf { inner }
                 | BFileKind::Rle { inner, .. }
+                | BFileKind::Base64 { inner, .. }
                 | BFileKind::Buf { inner, .. } => Some(*inner),
                 _ => None,
             }
@@ -2689,6 +2758,23 @@ impl Program {
                     } else {
                         let bytes = rle_pending_bytes(*count, *byte)?;
                         *count = 0;
+                        Some((*inner, bytes))
+                    }
+                }
+                BFileKind::Base64 {
+                    inner,
+                    read,
+                    encbuf,
+                    encpos,
+                    linelen,
+                    outcol,
+                    ..
+                } => {
+                    if *read {
+                        None
+                    } else {
+                        let bytes = base64_pending_bytes(encbuf, encpos, *linelen, outcol)?;
+                        *encpos = 0;
                         Some((*inner, bytes))
                     }
                 }
@@ -2742,6 +2828,7 @@ impl Program {
             Utf8(i64),
             Crlf(i64),
             Rle,
+            Base64,
             Buf,
         }
         let special = {
@@ -2758,6 +2845,7 @@ impl Program {
                 }
                 BFileKind::Crlf { inner } => Some(SpecialBFileRead::Crlf(*inner)),
                 BFileKind::Rle { read, .. } if *read => Some(SpecialBFileRead::Rle),
+                BFileKind::Base64 { read, .. } if *read => Some(SpecialBFileRead::Base64),
                 BFileKind::Buf { .. } => Some(SpecialBFileRead::Buf),
                 _ => None,
             }
@@ -2766,6 +2854,7 @@ impl Program {
             Some(SpecialBFileRead::Utf8(inner)) => return self.get_utf8_bfile_byte(inner),
             Some(SpecialBFileRead::Crlf(inner)) => return self.get_crlf_bfile_byte(inner),
             Some(SpecialBFileRead::Rle) => return self.get_rle_bfile_byte(ptr),
+            Some(SpecialBFileRead::Base64) => return self.get_base64_bfile_byte(ptr),
             Some(SpecialBFileRead::Buf) => return self.get_buf_bfile_byte(ptr),
             None => {}
         }
@@ -2796,6 +2885,7 @@ impl Program {
             BFileKind::Utf8 { .. } => unreachable!("handled above"),
             BFileKind::Crlf { .. } => unreachable!("handled above"),
             BFileKind::Rle { .. } => unreachable!("handled above"),
+            BFileKind::Base64 { .. } => unreachable!("handled above"),
             BFileKind::Buf { .. } => unreachable!("handled above"),
         }
     }
@@ -2889,6 +2979,114 @@ impl Program {
                 .checked_mul(128)
                 .and_then(|n| n.checked_add(digit))
                 .ok_or(EvalError::Overflow)?;
+        }
+    }
+
+    fn get_base64_bfile_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
+        let inner = {
+            let bfile = self.bfile_mut(ptr)?;
+            if !bfile.readable {
+                return Err(EvalError::InvalidHandle);
+            }
+            match &mut bfile.kind {
+                BFileKind::Base64 {
+                    inner,
+                    read,
+                    unget,
+                    outbuf,
+                    outpos,
+                    outlen,
+                    ..
+                } => {
+                    if !*read {
+                        return Err(EvalError::InvalidHandle);
+                    }
+                    if let Some(byte) = unget.take() {
+                        return Ok(byte);
+                    }
+                    if *outpos < *outlen {
+                        let byte = outbuf[*outpos];
+                        *outpos += 1;
+                        return Ok(i64::from(byte));
+                    }
+                    *inner
+                }
+                _ => return Err(EvalError::InvalidHandle),
+            }
+        };
+
+        let Some(v) = self.get_base64_quartet(inner)? else {
+            return Ok(-1);
+        };
+        if v[0] < 0 || v[1] < 0 {
+            return Err(EvalError::InvalidByteString);
+        }
+        let mut outbuf = [0; 3];
+        let outlen;
+        let mut triple = ((v[0] as u32) << 18) | ((v[1] as u32) << 12);
+        if v[2] == -3 {
+            outbuf[0] = ((triple >> 16) & 0xff) as u8;
+            outlen = 1;
+        } else {
+            if v[2] < 0 {
+                return Err(EvalError::InvalidByteString);
+            }
+            triple |= (v[2] as u32) << 6;
+            if v[3] == -3 {
+                outbuf[0] = ((triple >> 16) & 0xff) as u8;
+                outbuf[1] = ((triple >> 8) & 0xff) as u8;
+                outlen = 2;
+            } else {
+                if v[3] < 0 {
+                    return Err(EvalError::InvalidByteString);
+                }
+                triple |= v[3] as u32;
+                outbuf[0] = ((triple >> 16) & 0xff) as u8;
+                outbuf[1] = ((triple >> 8) & 0xff) as u8;
+                outbuf[2] = (triple & 0xff) as u8;
+                outlen = 3;
+            }
+        }
+
+        let bfile = self.bfile_mut(ptr)?;
+        match &mut bfile.kind {
+            BFileKind::Base64 {
+                outbuf: buffer,
+                outpos,
+                outlen: len,
+                ..
+            } => {
+                *buffer = outbuf;
+                *outpos = 1;
+                *len = outlen;
+                Ok(i64::from(outbuf[0]))
+            }
+            _ => Err(EvalError::InvalidHandle),
+        }
+    }
+
+    fn get_base64_quartet(&mut self, inner: i64) -> Result<Option<[i32; 4]>, EvalError> {
+        let mut v = [0; 4];
+        let mut got = 0;
+        loop {
+            let byte = self.get_bfile_byte(inner)?;
+            if byte < 0 {
+                if got == 0 {
+                    return Ok(None);
+                }
+                return Err(EvalError::InvalidByteString);
+            }
+            match base64_decode_value(byte as u8) {
+                Base64Input::Whitespace => continue,
+                Base64Input::Invalid => return Err(EvalError::InvalidByteString),
+                Base64Input::Value(value) => {
+                    v[got] = value;
+                    got += 1;
+                    if got == 4 {
+                        return Ok(Some(v));
+                    }
+                }
+            }
         }
     }
 
@@ -3003,6 +3201,13 @@ impl Program {
                 *unget = Some(byte);
                 Ok(())
             }
+            BFileKind::Base64 { unget, .. } => {
+                if unget.is_some() {
+                    return Err(EvalError::InvalidHandle);
+                }
+                *unget = Some(byte);
+                Ok(())
+            }
             BFileKind::Buf { unget, .. } => {
                 if unget.is_some() {
                     return Err(EvalError::InvalidHandle);
@@ -3021,6 +3226,7 @@ impl Program {
             Utf8(i64),
             Crlf(i64),
             Rle,
+            Base64,
             Buf,
         }
         let special = {
@@ -3032,6 +3238,7 @@ impl Program {
                 BFileKind::Utf8 { inner, .. } => Some(SpecialBFileWrite::Utf8(*inner)),
                 BFileKind::Crlf { inner } => Some(SpecialBFileWrite::Crlf(*inner)),
                 BFileKind::Rle { read, .. } if !*read => Some(SpecialBFileWrite::Rle),
+                BFileKind::Base64 { read, .. } if !*read => Some(SpecialBFileWrite::Base64),
                 BFileKind::Buf { .. } => Some(SpecialBFileWrite::Buf),
                 _ => None,
             }
@@ -3040,6 +3247,7 @@ impl Program {
             Some(SpecialBFileWrite::Utf8(inner)) => return self.put_utf8_bfile_byte(inner, byte),
             Some(SpecialBFileWrite::Crlf(inner)) => return self.put_crlf_bfile_byte(inner, byte),
             Some(SpecialBFileWrite::Rle) => return self.put_rle_bfile_byte(ptr, byte),
+            Some(SpecialBFileWrite::Base64) => return self.put_base64_bfile_byte(ptr, byte),
             Some(SpecialBFileWrite::Buf) => return self.put_buf_bfile_byte(ptr, byte),
             None => {}
         }
@@ -3067,6 +3275,7 @@ impl Program {
             BFileKind::Utf8 { .. } => unreachable!("handled above"),
             BFileKind::Crlf { .. } => unreachable!("handled above"),
             BFileKind::Rle { .. } => unreachable!("handled above"),
+            BFileKind::Base64 { .. } => unreachable!("handled above"),
             BFileKind::Buf { .. } => unreachable!("handled above"),
         }
     }
@@ -3123,6 +3332,50 @@ impl Program {
             }
             let suffix_written = self.write_bfile_bytes(inner, &suffix)?;
             if suffix_written != suffix.len() {
+                return Err(EvalError::InvalidHandle);
+            }
+        }
+        Ok(())
+    }
+
+    fn put_base64_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
+        if byte < 0 {
+            return Err(EvalError::InvalidByteString);
+        }
+        let action = {
+            let bfile = self.bfile_mut(ptr)?;
+            if !bfile.writable {
+                return Err(EvalError::InvalidHandle);
+            }
+            match &mut bfile.kind {
+                BFileKind::Base64 {
+                    inner,
+                    read,
+                    encbuf,
+                    encpos,
+                    linelen,
+                    outcol,
+                    ..
+                } => {
+                    if *read {
+                        return Err(EvalError::InvalidHandle);
+                    }
+                    encbuf[*encpos] = byte as u8;
+                    *encpos += 1;
+                    if *encpos == 3 {
+                        let bytes = base64_full_quad_bytes(encbuf, *linelen, outcol);
+                        *encpos = 0;
+                        Some((*inner, bytes))
+                    } else {
+                        None
+                    }
+                }
+                _ => return Err(EvalError::InvalidHandle),
+            }
+        };
+        if let Some((inner, bytes)) = action {
+            let written = self.write_bfile_bytes(inner, &bytes)?;
+            if written != bytes.len() {
                 return Err(EvalError::InvalidHandle);
             }
         }
@@ -3233,6 +3486,7 @@ impl Program {
                 BFileKind::Utf8 { .. }
                     | BFileKind::Crlf { .. }
                     | BFileKind::Rle { .. }
+                    | BFileKind::Base64 { .. }
                     | BFileKind::Buf { .. }
             )
         };
@@ -3283,6 +3537,7 @@ impl Program {
             BFileKind::Utf8 { .. }
             | BFileKind::Crlf { .. }
             | BFileKind::Rle { .. }
+            | BFileKind::Base64 { .. }
             | BFileKind::Buf { .. } => unreachable!("handled above"),
         }
     }
@@ -3307,6 +3562,7 @@ impl Program {
                 BFileKind::Utf8 { .. }
                     | BFileKind::Crlf { .. }
                     | BFileKind::Rle { .. }
+                    | BFileKind::Base64 { .. }
                     | BFileKind::Buf { .. }
             )
         };
@@ -3337,6 +3593,7 @@ impl Program {
             BFileKind::Utf8 { .. }
             | BFileKind::Crlf { .. }
             | BFileKind::Rle { .. }
+            | BFileKind::Base64 { .. }
             | BFileKind::Buf { .. } => unreachable!("handled above"),
         }
         Ok(bytes.len())
@@ -3354,6 +3611,7 @@ impl Program {
             BFileKind::Utf8 { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Crlf { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Rle { .. } => Err(EvalError::InvalidHandle),
+            BFileKind::Base64 { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Buf { .. } => Err(EvalError::InvalidHandle),
         }
     }
@@ -4521,6 +4779,94 @@ fn push_rle_rep(n: usize, out: &mut Vec<u8>) -> Result<(), EvalError> {
     Ok(())
 }
 
+enum Base64Input {
+    Value(i32),
+    Whitespace,
+    Invalid,
+}
+
+const BASE64_ALPHABET: &[u8; 65] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+const BASE64_PAD: usize = 64;
+
+fn base64_decode_value(byte: u8) -> Base64Input {
+    match byte {
+        b'A'..=b'Z' => Base64Input::Value(i32::from(byte - b'A')),
+        b'a'..=b'z' => Base64Input::Value(i32::from(byte - b'a') + 26),
+        b'0'..=b'9' => Base64Input::Value(i32::from(byte - b'0') + 52),
+        b'+' => Base64Input::Value(62),
+        b'/' => Base64Input::Value(63),
+        b'=' => Base64Input::Value(-3),
+        b' ' | b'\t' | b'\n' | b'\r' => Base64Input::Whitespace,
+        _ => Base64Input::Invalid,
+    }
+}
+
+fn base64_full_quad_bytes(encbuf: &[u8; 3], linelen: usize, outcol: &mut usize) -> Vec<u8> {
+    let x = ((u32::from(encbuf[0])) << 16) | ((u32::from(encbuf[1])) << 8) | u32::from(encbuf[2]);
+    base64_quad_bytes(
+        [
+            ((x >> 18) & 0x3f) as usize,
+            ((x >> 12) & 0x3f) as usize,
+            ((x >> 6) & 0x3f) as usize,
+            (x & 0x3f) as usize,
+        ],
+        linelen,
+        outcol,
+    )
+}
+
+fn base64_pending_bytes(
+    encbuf: &[u8; 3],
+    encpos: &usize,
+    linelen: usize,
+    outcol: &mut usize,
+) -> Result<Vec<u8>, EvalError> {
+    Ok(match *encpos {
+        0 => Vec::new(),
+        1 => {
+            let x = (u32::from(encbuf[0])) << 16;
+            base64_quad_bytes(
+                [
+                    ((x >> 18) & 0x3f) as usize,
+                    ((x >> 12) & 0x3f) as usize,
+                    BASE64_PAD,
+                    BASE64_PAD,
+                ],
+                linelen,
+                outcol,
+            )
+        }
+        2 => {
+            let x = ((u32::from(encbuf[0])) << 16) | ((u32::from(encbuf[1])) << 8);
+            base64_quad_bytes(
+                [
+                    ((x >> 18) & 0x3f) as usize,
+                    ((x >> 12) & 0x3f) as usize,
+                    ((x >> 6) & 0x3f) as usize,
+                    BASE64_PAD,
+                ],
+                linelen,
+                outcol,
+            )
+        }
+        _ => return Err(EvalError::InvalidHandle),
+    })
+}
+
+fn base64_quad_bytes(indices: [usize; 4], linelen: usize, outcol: &mut usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(5);
+    if linelen != 0 && *outcol + 4 > linelen {
+        out.push(b'\n');
+        *outcol = 0;
+    }
+    for index in indices {
+        out.push(BASE64_ALPHABET[index]);
+    }
+    *outcol += 4;
+    out
+}
+
 fn int_to_i32(n: i64) -> Result<i32, EvalError> {
     i32::try_from(n).map_err(|_| EvalError::Overflow)
 }
@@ -4723,6 +5069,8 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "add_crlf"
         | "add_rle_compressor"
         | "add_rle_decompressor"
+        | "add_base64_encoder"
+        | "add_base64_decoder"
         | "closeb"
         | "flushb"
         | "getb"
