@@ -82,6 +82,15 @@ enum BFileKind {
         inner: i64,
         unget: Option<i64>,
     },
+    Buf {
+        inner: i64,
+        unget: Option<i64>,
+        buffer: Vec<u8>,
+        cur: usize,
+        pos: usize,
+        linebuf: bool,
+        read: bool,
+    },
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1633,6 +1642,11 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 Node::Ptr(self.add_utf8_bfile(ptr)?)
             }
+            "add_buf" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let size = self.eval_int(args[1])?;
+                Node::Ptr(self.add_buf_bfile(ptr, size)?)
+            }
             "openb_wr_mem" => Node::Ptr(self.alloc_bfile(BFile {
                 kind: BFileKind::Memory {
                     bytes: Vec::new(),
@@ -2264,20 +2278,47 @@ impl Program {
         self.pointer_for_bfile(slot)
     }
 
-    fn add_utf8_bfile(&mut self, ptr: i64) -> Result<i64, EvalError> {
-        let (readable, writable) = if let Some(handle) = handle_from_ptr(ptr) {
-            match handle {
+    fn bfile_permissions(&self, ptr: i64) -> Result<(bool, bool), EvalError> {
+        if let Some(handle) = handle_from_ptr(ptr) {
+            return Ok(match handle {
                 StdHandle::Stdin => (true, false),
                 StdHandle::Stdout | StdHandle::Stderr => (false, true),
-            }
-        } else {
-            let bfile = self.bfile(ptr)?;
-            (bfile.readable, bfile.writable)
-        };
+            });
+        }
+        let bfile = self.bfile(ptr)?;
+        Ok((bfile.readable, bfile.writable))
+    }
+
+    fn add_utf8_bfile(&mut self, ptr: i64) -> Result<i64, EvalError> {
+        let (readable, writable) = self.bfile_permissions(ptr)?;
         self.alloc_bfile(BFile {
             kind: BFileKind::Utf8 {
                 inner: ptr,
                 unget: None,
+            },
+            readable,
+            writable,
+        })
+    }
+
+    fn add_buf_bfile(&mut self, ptr: i64, bufsize: i64) -> Result<i64, EvalError> {
+        let (readable, writable) = self.bfile_permissions(ptr)?;
+        let linebuf = bufsize < 0;
+        let size = if linebuf {
+            bufsize.checked_neg().ok_or(EvalError::Overflow)?
+        } else {
+            bufsize
+        };
+        let size = int_to_usize(size)?;
+        self.alloc_bfile(BFile {
+            kind: BFileKind::Buf {
+                inner: ptr,
+                unget: None,
+                buffer: vec![0; size],
+                cur: 0,
+                pos: 0,
+                linebuf,
+                read: false,
             },
             readable,
             writable,
@@ -2534,6 +2575,17 @@ impl Program {
             return self.flush_io_handle(handle);
         }
         let slot = self.decode_bfile_pointer(ptr)?;
+        let flush_self = {
+            let bfile = self
+                .bfiles
+                .get(slot)
+                .and_then(Option::as_ref)
+                .ok_or(EvalError::InvalidHandle)?;
+            matches!(&bfile.kind, BFileKind::Buf { read: false, .. })
+        };
+        if flush_self {
+            self.flush_bfile(ptr)?;
+        }
         let close_inner = {
             let bfile = self
                 .bfiles
@@ -2541,7 +2593,7 @@ impl Program {
                 .and_then(Option::as_ref)
                 .ok_or(EvalError::InvalidHandle)?;
             match &bfile.kind {
-                BFileKind::Utf8 { inner, .. } => Some(*inner),
+                BFileKind::Utf8 { inner, .. } | BFileKind::Buf { inner, .. } => Some(*inner),
                 _ => None,
             }
         };
@@ -2564,19 +2616,48 @@ impl Program {
         Ok(())
     }
 
-    fn flush_bfile(&self, ptr: i64) -> Result<(), EvalError> {
+    fn flush_bfile(&mut self, ptr: i64) -> Result<(), EvalError> {
         if let Some(handle) = handle_from_ptr(ptr) {
             return self.flush_io_handle(handle);
         }
-        let bfile = self.bfile(ptr)?;
-        if let BFileKind::Utf8 { inner, .. } = &bfile.kind {
-            return self.flush_bfile(*inner);
+        let flush_inner = {
+            let bfile = self.bfile_mut(ptr)?;
+            match &mut bfile.kind {
+                BFileKind::Utf8 { inner, .. } => Some((*inner, Vec::new())),
+                BFileKind::Buf {
+                    inner,
+                    buffer,
+                    pos,
+                    read,
+                    ..
+                } => {
+                    let bytes = if !*read && *pos > 0 {
+                        let bytes = buffer[..*pos].to_vec();
+                        *pos = 0;
+                        bytes
+                    } else {
+                        Vec::new()
+                    };
+                    Some((*inner, bytes))
+                }
+                _ => None,
+            }
+        };
+        if let Some((inner, bytes)) = flush_inner {
+            if !bytes.is_empty() {
+                let written = self.write_bfile_bytes(inner, &bytes)?;
+                if written != bytes.len() {
+                    return Err(EvalError::InvalidHandle);
+                }
+            }
+            return self.flush_bfile(inner);
         }
+        let _bfile = self.bfile(ptr)?;
         #[cfg(not(target_arch = "wasm32"))]
-        if let BFileKind::NativeFile { file, .. } = &bfile.kind {
+        if let BFileKind::NativeFile { file, .. } = &_bfile.kind {
             use std::io::Write as _;
 
-            if bfile.writable {
+            if _bfile.writable {
                 file.borrow_mut()
                     .flush()
                     .map_err(|_| EvalError::InvalidHandle)?;
@@ -2589,7 +2670,11 @@ impl Program {
         if handle_from_ptr(ptr) == Some(StdHandle::Stdin) {
             return self.read_stdin_byte();
         }
-        let utf8_inner = {
+        enum SpecialBFileRead {
+            Utf8(i64),
+            Buf,
+        }
+        let special = {
             let bfile = self.bfile_mut(ptr)?;
             if !bfile.readable {
                 return Err(EvalError::InvalidHandle);
@@ -2599,13 +2684,16 @@ impl Program {
                     if let Some(byte) = unget.take() {
                         return Ok(byte);
                     }
-                    Some(*inner)
+                    Some(SpecialBFileRead::Utf8(*inner))
                 }
+                BFileKind::Buf { .. } => Some(SpecialBFileRead::Buf),
                 _ => None,
             }
         };
-        if let Some(inner) = utf8_inner {
-            return self.get_utf8_bfile_byte(inner);
+        match special {
+            Some(SpecialBFileRead::Utf8(inner)) => return self.get_utf8_bfile_byte(inner),
+            Some(SpecialBFileRead::Buf) => return self.get_buf_bfile_byte(ptr),
+            None => {}
         }
         let bfile = self.bfile_mut(ptr)?;
         match &mut bfile.kind {
@@ -2632,6 +2720,71 @@ impl Program {
                 }
             }
             BFileKind::Utf8 { .. } => unreachable!("handled above"),
+            BFileKind::Buf { .. } => unreachable!("handled above"),
+        }
+    }
+
+    fn get_buf_bfile_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
+        loop {
+            enum BufReadAction {
+                Direct(i64),
+                Refill { inner: i64, size: usize },
+            }
+            let action = {
+                let bfile = self.bfile_mut(ptr)?;
+                if !bfile.readable {
+                    return Err(EvalError::InvalidHandle);
+                }
+                match &mut bfile.kind {
+                    BFileKind::Buf {
+                        inner,
+                        unget,
+                        buffer,
+                        cur,
+                        pos,
+                        read,
+                        ..
+                    } => {
+                        *read = true;
+                        if let Some(byte) = unget.take() {
+                            return Ok(byte);
+                        }
+                        if buffer.is_empty() {
+                            BufReadAction::Direct(*inner)
+                        } else if *pos >= *cur {
+                            BufReadAction::Refill {
+                                inner: *inner,
+                                size: buffer.len(),
+                            }
+                        } else {
+                            let byte = buffer[*pos];
+                            *pos += 1;
+                            return Ok(i64::from(byte));
+                        }
+                    }
+                    _ => return Err(EvalError::InvalidHandle),
+                }
+            };
+            match action {
+                BufReadAction::Direct(inner) => return self.get_bfile_byte(inner),
+                BufReadAction::Refill { inner, size } => {
+                    let bytes = self.read_bfile_bytes(inner, size)?;
+                    if bytes.is_empty() {
+                        return Ok(-1);
+                    }
+                    let bfile = self.bfile_mut(ptr)?;
+                    match &mut bfile.kind {
+                        BFileKind::Buf {
+                            buffer, cur, pos, ..
+                        } => {
+                            buffer[..bytes.len()].copy_from_slice(&bytes);
+                            *cur = bytes.len();
+                            *pos = 0;
+                        }
+                        _ => return Err(EvalError::InvalidHandle),
+                    }
+                }
+            }
         }
     }
 
@@ -2664,6 +2817,13 @@ impl Program {
                 *unget = Some(byte);
                 Ok(())
             }
+            BFileKind::Buf { unget, .. } => {
+                if unget.is_some() {
+                    return Err(EvalError::InvalidHandle);
+                }
+                *unget = Some(byte);
+                Ok(())
+            }
         }
     }
 
@@ -2671,18 +2831,25 @@ impl Program {
         if let Some(handle) = handle_from_ptr(ptr) {
             return self.write_io_handle_bytes(handle, &[byte as u8]);
         }
-        let utf8_inner = {
+        enum SpecialBFileWrite {
+            Utf8(i64),
+            Buf,
+        }
+        let special = {
             let bfile = self.bfile_mut(ptr)?;
             if !bfile.writable {
                 return Err(EvalError::InvalidHandle);
             }
             match &bfile.kind {
-                BFileKind::Utf8 { inner, .. } => Some(*inner),
+                BFileKind::Utf8 { inner, .. } => Some(SpecialBFileWrite::Utf8(*inner)),
+                BFileKind::Buf { .. } => Some(SpecialBFileWrite::Buf),
                 _ => None,
             }
         };
-        if let Some(inner) = utf8_inner {
-            return self.put_utf8_bfile_byte(inner, byte);
+        match special {
+            Some(SpecialBFileWrite::Utf8(inner)) => return self.put_utf8_bfile_byte(inner, byte),
+            Some(SpecialBFileWrite::Buf) => return self.put_buf_bfile_byte(ptr, byte),
+            None => {}
         }
         let bfile = self.bfile_mut(ptr)?;
         match &mut bfile.kind {
@@ -2706,10 +2873,83 @@ impl Program {
                     .map_err(|_| EvalError::InvalidHandle)
             }
             BFileKind::Utf8 { .. } => unreachable!("handled above"),
+            BFileKind::Buf { .. } => unreachable!("handled above"),
+        }
+    }
+
+    fn put_buf_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
+        if byte < 0 {
+            return Err(EvalError::InvalidByteString);
+        }
+        let byte = byte as u8;
+        loop {
+            enum BufWriteAction {
+                Direct(i64),
+                Flush { inner: i64, bytes: Vec<u8> },
+                Done,
+            }
+            let action = {
+                let bfile = self.bfile_mut(ptr)?;
+                if !bfile.writable {
+                    return Err(EvalError::InvalidHandle);
+                }
+                match &mut bfile.kind {
+                    BFileKind::Buf {
+                        inner,
+                        buffer,
+                        pos,
+                        linebuf,
+                        ..
+                    } => {
+                        if buffer.is_empty() {
+                            BufWriteAction::Direct(*inner)
+                        } else if *pos >= buffer.len() {
+                            let bytes = buffer.clone();
+                            *pos = 0;
+                            BufWriteAction::Flush {
+                                inner: *inner,
+                                bytes,
+                            }
+                        } else {
+                            buffer[*pos] = byte;
+                            *pos += 1;
+                            if *linebuf && byte == b'\n' {
+                                let bytes = buffer[..*pos].to_vec();
+                                *pos = 0;
+                                BufWriteAction::Flush {
+                                    inner: *inner,
+                                    bytes,
+                                }
+                            } else {
+                                BufWriteAction::Done
+                            }
+                        }
+                    }
+                    _ => return Err(EvalError::InvalidHandle),
+                }
+            };
+            match action {
+                BufWriteAction::Direct(inner) => {
+                    return self.put_bfile_byte(inner, i64::from(byte));
+                }
+                BufWriteAction::Flush { inner, bytes } => {
+                    let written = self.write_bfile_bytes(inner, &bytes)?;
+                    if written != bytes.len() {
+                        return Err(EvalError::InvalidHandle);
+                    }
+                }
+                BufWriteAction::Done => return Ok(()),
+            }
         }
     }
 
     fn read_bfile(&mut self, ptr: i64, dst: i64, len: usize) -> Result<usize, EvalError> {
+        let bytes = self.read_bfile_bytes(ptr, len)?;
+        self.write_pointer_bytes(dst, &bytes)?;
+        Ok(bytes.len())
+    }
+
+    fn read_bfile_bytes(&mut self, ptr: i64, len: usize) -> Result<Vec<u8>, EvalError> {
         if let Some(handle) = handle_from_ptr(ptr) {
             if handle != StdHandle::Stdin {
                 return Err(EvalError::InvalidHandle);
@@ -2723,22 +2963,22 @@ impl Program {
                     .lock()
                     .read(&mut bytes)
                     .map_err(|_| EvalError::InvalidHandle)?;
-                self.write_pointer_bytes(dst, &bytes[..read])?;
-                return Ok(read);
+                bytes.truncate(read);
+                return Ok(bytes);
             }
             #[cfg(target_arch = "wasm32")]
             {
-                return Ok(0);
+                return Ok(Vec::new());
             }
         }
-        let is_utf8 = {
-            let bfile = self.bfile_mut(ptr)?;
+        let uses_getb_fallback = {
+            let bfile = self.bfile(ptr)?;
             if !bfile.readable {
                 return Err(EvalError::InvalidHandle);
             }
-            matches!(&bfile.kind, BFileKind::Utf8 { .. })
+            matches!(&bfile.kind, BFileKind::Utf8 { .. } | BFileKind::Buf { .. })
         };
-        if is_utf8 {
+        if uses_getb_fallback {
             let mut bytes = Vec::with_capacity(len);
             for _ in 0..len {
                 let byte = self.get_bfile_byte(ptr)?;
@@ -2747,65 +2987,64 @@ impl Program {
                 }
                 bytes.push(byte as u8);
             }
-            self.write_pointer_bytes(dst, &bytes)?;
-            return Ok(bytes.len());
+            return Ok(bytes);
         }
-        let bytes = {
-            let bfile = self.bfile_mut(ptr)?;
-            match &mut bfile.kind {
-                BFileKind::Memory { bytes, pos } => {
-                    let end = pos
-                        .checked_add(len)
-                        .map(|end| end.min(bytes.len()))
-                        .ok_or(EvalError::Overflow)?;
-                    let out = bytes[*pos..end].to_vec();
-                    *pos = end;
-                    out
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                BFileKind::NativeFile { file, ungot } => {
-                    use std::io::Read as _;
-
-                    let mut bytes = vec![0; len];
-                    let mut read = 0;
-                    while read < len {
-                        let Some(byte) = ungot.pop() else {
-                            break;
-                        };
-                        bytes[read] = byte;
-                        read += 1;
-                    }
-                    if read < len {
-                        read += file
-                            .borrow_mut()
-                            .read(&mut bytes[read..])
-                            .map_err(|_| EvalError::InvalidHandle)?;
-                    }
-                    bytes.truncate(read);
-                    bytes
-                }
-                BFileKind::Utf8 { .. } => unreachable!("handled above"),
+        let bfile = self.bfile_mut(ptr)?;
+        match &mut bfile.kind {
+            BFileKind::Memory { bytes, pos } => {
+                let end = pos
+                    .checked_add(len)
+                    .map(|end| end.min(bytes.len()))
+                    .ok_or(EvalError::Overflow)?;
+                let out = bytes[*pos..end].to_vec();
+                *pos = end;
+                Ok(out)
             }
-        };
-        self.write_pointer_bytes(dst, &bytes)?;
-        Ok(bytes.len())
+            #[cfg(not(target_arch = "wasm32"))]
+            BFileKind::NativeFile { file, ungot } => {
+                use std::io::Read as _;
+
+                let mut bytes = vec![0; len];
+                let mut read = 0;
+                while read < len {
+                    let Some(byte) = ungot.pop() else {
+                        break;
+                    };
+                    bytes[read] = byte;
+                    read += 1;
+                }
+                if read < len {
+                    read += file
+                        .borrow_mut()
+                        .read(&mut bytes[read..])
+                        .map_err(|_| EvalError::InvalidHandle)?;
+                }
+                bytes.truncate(read);
+                Ok(bytes)
+            }
+            BFileKind::Utf8 { .. } | BFileKind::Buf { .. } => unreachable!("handled above"),
+        }
     }
 
     fn write_bfile(&mut self, ptr: i64, src: i64, len: usize) -> Result<usize, EvalError> {
         let bytes = self.read_pointer_bytes(src, len)?;
+        self.write_bfile_bytes(ptr, &bytes)
+    }
+
+    fn write_bfile_bytes(&mut self, ptr: i64, bytes: &[u8]) -> Result<usize, EvalError> {
         if let Some(handle) = handle_from_ptr(ptr) {
-            self.write_io_handle_bytes(handle, &bytes)?;
+            self.write_io_handle_bytes(handle, bytes)?;
             return Ok(bytes.len());
         }
-        let is_utf8 = {
-            let bfile = self.bfile_mut(ptr)?;
+        let uses_putb_fallback = {
+            let bfile = self.bfile(ptr)?;
             if !bfile.writable {
                 return Err(EvalError::InvalidHandle);
             }
-            matches!(&bfile.kind, BFileKind::Utf8 { .. })
+            matches!(&bfile.kind, BFileKind::Utf8 { .. } | BFileKind::Buf { .. })
         };
-        if is_utf8 {
-            for byte in &bytes {
+        if uses_putb_fallback {
+            for byte in bytes {
                 self.put_bfile_byte(ptr, i64::from(*byte))?;
             }
             return Ok(bytes.len());
@@ -2825,10 +3064,10 @@ impl Program {
                 use std::io::Write as _;
 
                 file.borrow_mut()
-                    .write_all(&bytes)
+                    .write_all(bytes)
                     .map_err(|_| EvalError::InvalidHandle)?;
             }
-            BFileKind::Utf8 { .. } => unreachable!("handled above"),
+            BFileKind::Utf8 { .. } | BFileKind::Buf { .. } => unreachable!("handled above"),
         }
         Ok(bytes.len())
     }
@@ -2843,6 +3082,7 @@ impl Program {
             #[cfg(not(target_arch = "wasm32"))]
             BFileKind::NativeFile { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Utf8 { .. } => Err(EvalError::InvalidHandle),
+            BFileKind::Buf { .. } => Err(EvalError::InvalidHandle),
         }
     }
 
@@ -4182,13 +4422,13 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "peek_ullong" | "peek_size_t" | "peek_flt32" | "peek_flt64" | "acos" | "asin"
         | "atan" | "cos" | "exp" | "log" | "sin" | "sqrt" | "tan" | "acosf" | "asinf" | "atanf"
         | "cosf" | "expf" | "logf" | "sinf" | "sqrtf" | "tanf" => 1,
-        "calloc" | "realloc" | "strcpy" | "fopen" | "pokePtr" | "pokeWord" | "poke_uint8"
-        | "poke_uint16" | "poke_uint32" | "poke_uint64" | "poke_int8" | "poke_int16"
-        | "poke_int32" | "poke_int64" | "poke_char" | "poke_schar" | "poke_uchar"
-        | "poke_short" | "poke_ushort" | "poke_int" | "poke_uint" | "poke_long" | "poke_ulong"
-        | "poke_llong" | "poke_ullong" | "poke_size_t" | "poke_flt32" | "poke_flt64"
-        | "openb_rd_mem" | "putb" | "ungetb" | "atan2" | "pow" | "scalbn" | "atan2f" | "powf"
-        | "scalbnf" => 2,
+        "calloc" | "realloc" | "strcpy" | "fopen" | "add_buf" | "pokePtr" | "pokeWord"
+        | "poke_uint8" | "poke_uint16" | "poke_uint32" | "poke_uint64" | "poke_int8"
+        | "poke_int16" | "poke_int32" | "poke_int64" | "poke_char" | "poke_schar"
+        | "poke_uchar" | "poke_short" | "poke_ushort" | "poke_int" | "poke_uint" | "poke_long"
+        | "poke_ulong" | "poke_llong" | "poke_ullong" | "poke_size_t" | "poke_flt32"
+        | "poke_flt64" | "openb_rd_mem" | "putb" | "ungetb" | "atan2" | "pow" | "scalbn"
+        | "atan2f" | "powf" | "scalbnf" => 2,
         "memcpy" | "memmove" | "get_mem" | "readb" | "writeb" => 3,
         _ => return None,
     })
