@@ -3,7 +3,7 @@ use std::fs;
 use std::hint::black_box;
 use std::process::Command;
 use std::process::ExitCode;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use microhs_runtime::parse_program;
 
@@ -46,7 +46,7 @@ impl CBenchMode {
 
 fn usage() {
     eprintln!(
-        "usage: mhs-rust-bench [--iters N] [--input FILE | --scenario identity-chain:N|arith-chain:N|int64-chain:N|float64-chain:N|float32-chain:N|bytes-chain:N|foreignptr-slice:N|cstring-pack:N|unpack-chain:N|fromutf8-chain:N|array-chain:N|io-chain:N|io-array-chain:N|io-bytes-chain:N|io-control-chain:N|argref-chain:N|stdio-chain:N|ffi-chain:N|ffi-math-chain:N|ffi-const-chain:N|ffi-mem-chain:N|ffi-wide-mem-chain:N|ffi-strcpy-chain:N|mvar-chain:N|ptr-chain:N|rnf-chain:N|stableptr-chain:N|weak-chain:N|zoo-chain:N|data-chain:N]\n\
+        "usage: mhs-rust-bench [--iters N] [--input FILE | --scenario identity-chain:N|arith-chain:N|int64-chain:N|float64-chain:N|float32-chain:N|bytes-chain:N|foreignptr-slice:N|cstring-pack:N|unpack-chain:N|fromutf8-chain:N|array-chain:N|io-chain:N|io-array-chain:N|io-bytes-chain:N|io-control-chain:N|argref-chain:N|stdio-chain:N|ffi-chain:N|ffi-math-chain:N|ffi-const-chain:N|ffi-mem-chain:N|ffi-wide-mem-chain:N|ffi-word-mem-chain:N|ffi-ptr-mem-chain:N|ffi-strcpy-chain:N|mvar-chain:N|ptr-chain:N|rnf-chain:N|stableptr-chain:N|weak-chain:N|zoo-chain:N|data-chain:N]\n\
                                   [--warmup-iters N]\n\
                                   [--c-mhseval PATH] [--c-mhsbench PATH] [--c-mhsbench-mode whnf|main]\n\
          default: --scenario {DEFAULT_SCENARIO} --iters {DEFAULT_ITERS}"
@@ -93,7 +93,7 @@ fn main() -> ExitCode {
         "whnf_steps_per_s: {:.1}",
         eval.steps as f64 / eval.elapsed.as_secs_f64()
     );
-    println!("render_sink: {}", eval.render_sink);
+    println!("serialize_sink: {}", eval.serialize_sink);
 
     if let Some(c_mhseval) = &config.c_mhseval {
         match bench_c_mhseval(&config.input, c_mhseval, config.iters) {
@@ -389,6 +389,26 @@ fn make_scenario(scenario: &str) -> Result<Vec<u8>, String> {
         }
         return Ok(format!("v8.4\n0\nIO.performIO {expr} @ }}\n").into_bytes());
     }
+    if let Some(size) = scenario.strip_prefix("ffi-word-mem-chain:") {
+        let size = parse_scenario_size("ffi-word-mem-chain", size)?;
+        let action = "IO.lazyBind ^calloc #1 @ #8 @ @ S S K IO.>> @ @ S S K ^pokeWord @ @ I @ @ K #123456789 @ @ @ @ S K ^peekWord @ @ I @ @ @";
+        let mut expr = action.to_owned();
+        for _ in 1..size {
+            expr = format!("IO.>> {expr} @ {action} @");
+        }
+        return Ok(format!("v8.4\n0\nIO.performIO {expr} @ }}\n").into_bytes());
+    }
+    if let Some(size) = scenario.strip_prefix("ffi-ptr-mem-chain:") {
+        let size = parse_scenario_size("ffi-ptr-mem-chain", size)?;
+        let ptr_action = "IO.lazyBind ^calloc #1 @ #8 @ @ S S K IO.>> @ @ S S K ^pokePtr @ @ I @ @ K toPtr #42 @ @ @ @ @ S K ^peekPtr @ @ I @ @ @";
+        let convert = "S K IO.return @ @ S K toInt @ @ I @ @";
+        let action = format!("IO.lazyBind {ptr_action} @ {convert} @");
+        let mut expr = action.to_owned();
+        for _ in 1..size {
+            expr = format!("IO.>> {expr} @ {action} @");
+        }
+        return Ok(format!("v8.4\n0\nIO.performIO {expr} @ }}\n").into_bytes());
+    }
     if let Some(size) = scenario.strip_prefix("ffi-strcpy-chain:") {
         let size = parse_scenario_size("ffi-strcpy-chain", size)?;
         let mut source = String::from("fp2p bs2fp $17 microhs-rust-ffi");
@@ -531,7 +551,7 @@ fn parse_once(input: &[u8]) -> usize {
 struct EvalBench {
     elapsed: Duration,
     steps: usize,
-    render_sink: usize,
+    serialize_sink: usize,
 }
 
 fn bench_eval(input: &[u8], warmup_iters: usize, iters: usize) -> EvalBench {
@@ -541,17 +561,17 @@ fn bench_eval(input: &[u8], warmup_iters: usize, iters: usize) -> EvalBench {
 
     let started = Instant::now();
     let mut steps = 0;
-    let mut render_sink = 0usize;
+    let mut serialize_sink = 0usize;
     for _ in 0..iters {
         let (n, sink) = eval_once(input);
         steps += n;
-        render_sink = render_sink.wrapping_add(sink);
+        serialize_sink = serialize_sink.wrapping_add(sink);
     }
-    black_box(render_sink);
+    black_box(serialize_sink);
     EvalBench {
         elapsed: started.elapsed(),
         steps,
-        render_sink,
+        serialize_sink,
     }
 }
 
@@ -560,9 +580,11 @@ fn eval_once(input: &[u8]) -> (usize, usize) {
     let (root, steps) = program
         .reduce_whnf(usize::MAX)
         .expect("reduce benchmark input");
-    let rendered = program.render(root);
-    let sink = bytes_sink(rendered.as_bytes());
-    black_box(&rendered);
+    let serialized = program
+        .serialize_program(root)
+        .expect("serialize benchmark result");
+    let sink = bytes_sink(serialized.as_bytes());
+    black_box(&serialized);
     (steps, sink)
 }
 
@@ -585,7 +607,7 @@ struct CInProcessBench {
 }
 
 fn bench_c_mhseval(input: &[u8], c_mhseval: &str, iters: usize) -> Result<CBench, String> {
-    let file = env::temp_dir().join(format!("mhs-rust-bench-{}.comb", std::process::id()));
+    let file = temp_comb_file();
     fs::write(&file, input).map_err(|err| format!("{}: {err}", file.display()))?;
     let file_arg = format!("-r{}", file.display());
 
@@ -612,7 +634,7 @@ fn bench_c_mhsbench(
     warmup_iters: usize,
     iters: usize,
 ) -> Result<CInProcessBench, String> {
-    let file = env::temp_dir().join(format!("mhs-rust-bench-{}.comb", std::process::id()));
+    let file = temp_comb_file();
     fs::write(&file, input).map_err(|err| format!("{}: {err}", file.display()))?;
     let iters_arg = iters.to_string();
     let warmup_iters_arg = warmup_iters.to_string();
@@ -659,6 +681,17 @@ fn bench_c_mhsbench(
         ns_per_iter,
         sink,
     })
+}
+
+fn temp_comb_file() -> std::path::PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    env::temp_dir().join(format!(
+        "mhs-rust-bench-{}-{stamp}.comb",
+        std::process::id()
+    ))
 }
 
 fn millis(duration: Duration) -> f64 {

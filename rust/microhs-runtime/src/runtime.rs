@@ -1550,6 +1550,26 @@ impl Program {
                 let len = self.read_c_string(ptr)?.len();
                 Node::Int(i64::try_from(len).map_err(|_| EvalError::Overflow)?)
             }
+            "peekPtr" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Ptr(self.peek_signed(ptr, 8)?)
+            }
+            "pokePtr" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let value = self.eval_pointer_value(args[1])?;
+                self.poke_signed(ptr, 8, value)?;
+                Node::Prim("I".to_owned())
+            }
+            "peekWord" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Int(self.peek_unsigned(ptr, 8)? as i64)
+            }
+            "pokeWord" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let value = self.eval_int(args[1])?;
+                self.poke_unsigned(ptr, 8, value as u64)?;
+                Node::Prim("I".to_owned())
+            }
             "peek_uint8" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 Node::Int(self.peek_unsigned(ptr, 1)? as i64)
@@ -2321,7 +2341,7 @@ impl Program {
         Ok(())
     }
 
-    fn serialize_program(&self, root: NodeId) -> Result<String, EvalError> {
+    pub fn serialize_program(&self, root: NodeId) -> Result<String, EvalError> {
         let mut out = String::from("v8.4\n0\n");
         self.serialize_comb_into(root, 0, &mut out)?;
         out.push_str(" }\n");
@@ -3335,19 +3355,19 @@ fn ffi_arity(name: &str) -> Option<usize> {
         "GETRAW" | "GETTIMEMICRO" | "islinux" | "ismacos" | "iswindows" | "sizeof_char"
         | "sizeof_short" | "sizeof_int" | "sizeof_long" | "sizeof_llong" | "sizeof_size_t"
         | "want_gmp" | "want_imath" => 0,
-        "malloc" | "free" | "strlen" | "peek_uint8" | "peek_uint16" | "peek_uint32"
-        | "peek_uint64" | "peek_int8" | "peek_int16" | "peek_int32" | "peek_int64"
-        | "peek_char" | "peek_schar" | "peek_uchar" | "peek_short" | "peek_ushort" | "peek_int"
-        | "peek_uint" | "peek_long" | "peek_ulong" | "peek_llong" | "peek_ullong"
-        | "peek_size_t" | "peek_flt32" | "peek_flt64" | "acos" | "asin" | "atan" | "cos"
-        | "exp" | "log" | "sin" | "sqrt" | "tan" | "acosf" | "asinf" | "atanf" | "cosf"
-        | "expf" | "logf" | "sinf" | "sqrtf" | "tanf" => 1,
-        "calloc" | "realloc" | "strcpy" | "poke_uint8" | "poke_uint16" | "poke_uint32"
-        | "poke_uint64" | "poke_int8" | "poke_int16" | "poke_int32" | "poke_int64"
-        | "poke_char" | "poke_schar" | "poke_uchar" | "poke_short" | "poke_ushort" | "poke_int"
-        | "poke_uint" | "poke_long" | "poke_ulong" | "poke_llong" | "poke_ullong"
-        | "poke_size_t" | "poke_flt32" | "poke_flt64" | "atan2" | "pow" | "scalbn" | "atan2f"
-        | "powf" | "scalbnf" => 2,
+        "malloc" | "free" | "strlen" | "peekPtr" | "peekWord" | "peek_uint8" | "peek_uint16"
+        | "peek_uint32" | "peek_uint64" | "peek_int8" | "peek_int16" | "peek_int32"
+        | "peek_int64" | "peek_char" | "peek_schar" | "peek_uchar" | "peek_short"
+        | "peek_ushort" | "peek_int" | "peek_uint" | "peek_long" | "peek_ulong" | "peek_llong"
+        | "peek_ullong" | "peek_size_t" | "peek_flt32" | "peek_flt64" | "acos" | "asin"
+        | "atan" | "cos" | "exp" | "log" | "sin" | "sqrt" | "tan" | "acosf" | "asinf" | "atanf"
+        | "cosf" | "expf" | "logf" | "sinf" | "sqrtf" | "tanf" => 1,
+        "calloc" | "realloc" | "strcpy" | "pokePtr" | "pokeWord" | "poke_uint8" | "poke_uint16"
+        | "poke_uint32" | "poke_uint64" | "poke_int8" | "poke_int16" | "poke_int32"
+        | "poke_int64" | "poke_char" | "poke_schar" | "poke_uchar" | "poke_short"
+        | "poke_ushort" | "poke_int" | "poke_uint" | "poke_long" | "poke_ulong" | "poke_llong"
+        | "poke_ullong" | "poke_size_t" | "poke_flt32" | "poke_flt64" | "atan2" | "pow"
+        | "scalbn" | "atan2f" | "powf" | "scalbnf" => 2,
         "memcpy" | "memmove" => 3,
         _ => return None,
     })
