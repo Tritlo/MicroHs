@@ -5,7 +5,7 @@ use std::process::Command;
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use microhs_runtime::parse_program;
+use microhs_runtime::{EvalError, parse_program};
 
 const DEFAULT_ITERS: usize = 1_000;
 const DEFAULT_WARMUP_ITERS: usize = 0;
@@ -14,25 +14,28 @@ const DEFAULT_SCENARIO: &str = "identity-chain:1000";
 struct Config {
     input: Vec<u8>,
     name: String,
+    mode: BenchMode,
     iters: usize,
     warmup_iters: usize,
+    program_args: Vec<Vec<u8>>,
+    executable_path: Option<Vec<u8>>,
     c_mhseval: Option<String>,
     c_mhsbench: Option<String>,
-    c_mhsbench_mode: CBenchMode,
+    c_mhsbench_mode: BenchMode,
 }
 
 #[derive(Clone, Copy)]
-enum CBenchMode {
+enum BenchMode {
     Whnf,
     Main,
 }
 
-impl CBenchMode {
+impl BenchMode {
     fn parse(text: &str) -> Result<Self, String> {
         match text {
             "whnf" => Ok(Self::Whnf),
             "main" => Ok(Self::Main),
-            _ => Err(format!("invalid --c-mhsbench-mode value: {text}")),
+            _ => Err(format!("invalid benchmark mode: {text}")),
         }
     }
 
@@ -47,8 +50,10 @@ impl CBenchMode {
 fn usage() {
     eprintln!(
         "usage: mhs-rust-bench [--iters N] [--input FILE | --scenario identity-chain:N|arith-chain:N|int64-chain:N|float64-chain:N|float32-chain:N|bytes-chain:N|foreignptr-slice:N|cstring-pack:N|unpack-chain:N|fromutf8-chain:N|array-chain:N|io-chain:N|io-array-chain:N|io-bytes-chain:N|io-control-chain:N|argref-chain:N|stdio-chain:N|ffi-chain:N|ffi-math-chain:N|ffi-const-chain:N|ffi-mem-chain:N|ffi-wide-mem-chain:N|ffi-word-mem-chain:N|ffi-ptr-mem-chain:N|ffi-strcpy-chain:N|md5-string-chain:N|getenv-chain:N|env-set-chain:N|errno-chain:N|getcwd-chain:N|dir-read-chain:N|remove-missing-chain:N|file-read-close-chain:N|utf8-bfile-read-chain:N|crlf-bfile-read-chain:N|base64-bfile-read-chain:N|lz77-bfile-read-chain:N|bwt-bfile-read-chain:N|lzma-bfile-read-chain:N|rle-bfile-read-chain:N|buf-bfile-read-chain:N|bfile-read-chain:N|mvar-chain:N|ptr-chain:N|rnf-chain:N|stableptr-chain:N|weak-chain:N|zoo-chain:N|data-chain:N]\n\
+                                  [--mode whnf|main]\n\
                                   [--warmup-iters N]\n\
                                   [--c-mhseval PATH] [--c-mhsbench PATH] [--c-mhsbench-mode whnf|main]\n\
+                                  [-- PROGRAM ARGS...]\n\
          default: --scenario {DEFAULT_SCENARIO} --iters {DEFAULT_ITERS}"
     );
 }
@@ -64,10 +69,18 @@ fn main() -> ExitCode {
     };
 
     let parse = bench_parse(&config.input, config.warmup_iters, config.iters);
-    let eval = bench_eval(&config.input, config.warmup_iters, config.iters);
+    let eval = bench_eval(
+        &config.input,
+        config.mode,
+        &config.program_args,
+        config.executable_path.as_deref(),
+        config.warmup_iters,
+        config.iters,
+    );
     let bytes = config.input.len();
 
     println!("input: {}", config.name);
+    println!("mode: {}", config.mode.as_str());
     println!("bytes: {bytes}");
     println!("iters: {}", config.iters);
     println!("warmup_iters: {}", config.warmup_iters);
@@ -117,6 +130,7 @@ fn main() -> ExitCode {
             &config.input,
             c_mhsbench,
             config.c_mhsbench_mode,
+            &config.program_args,
             config.warmup_iters,
             config.iters,
         ) {
@@ -139,15 +153,27 @@ fn main() -> ExitCode {
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Config, String> {
     let mut iters = DEFAULT_ITERS;
     let mut warmup_iters = DEFAULT_WARMUP_ITERS;
+    let mut mode = BenchMode::Whnf;
     let mut input = None;
     let mut name = None;
+    let mut program_args = vec![b"mhsbench".to_vec()];
+    let mut executable_path = None;
     let mut c_mhseval = None;
     let mut c_mhsbench = None;
-    let mut c_mhsbench_mode = CBenchMode::Whnf;
+    let mut c_mhsbench_mode = BenchMode::Whnf;
     let mut args = args.peekable();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--" => {
+                let raw_args: Vec<String> = args.collect();
+                if raw_args.is_empty() {
+                    return Err("-- requires at least argv[0]".to_owned());
+                }
+                executable_path = raw_args.first().map(|arg| canonical_program_path(arg));
+                program_args = raw_args.into_iter().map(String::into_bytes).collect();
+                break;
+            }
             "--iters" => {
                 let value = args.next().ok_or("--iters requires a value")?;
                 iters = value
@@ -162,6 +188,10 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Config, String> {
                 warmup_iters = value
                     .parse()
                     .map_err(|_| format!("invalid --warmup-iters value: {value}"))?;
+            }
+            "--mode" => {
+                let value = args.next().ok_or("--mode requires a value")?;
+                mode = BenchMode::parse(&value)?;
             }
             "--input" => {
                 let file = args.next().ok_or("--input requires a file")?;
@@ -182,7 +212,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Config, String> {
             }
             "--c-mhsbench-mode" => {
                 let mode = args.next().ok_or("--c-mhsbench-mode requires a value")?;
-                c_mhsbench_mode = CBenchMode::parse(&mode)?;
+                c_mhsbench_mode = BenchMode::parse(&mode)?;
             }
             "-h" | "--help" => return Err(String::new()),
             _ => return Err(format!("unknown argument: {arg}")),
@@ -201,12 +231,21 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Config, String> {
     Ok(Config {
         input,
         name,
+        mode,
         iters,
         warmup_iters,
+        program_args,
+        executable_path,
         c_mhseval,
         c_mhsbench,
         c_mhsbench_mode,
     })
+}
+
+fn canonical_program_path(arg: &str) -> Vec<u8> {
+    fs::canonicalize(arg)
+        .map(|path| path.to_string_lossy().into_owned().into_bytes())
+        .unwrap_or_else(|_| arg.as_bytes().to_vec())
 }
 
 fn make_scenario(scenario: &str) -> Result<Vec<u8>, String> {
@@ -865,16 +904,23 @@ struct EvalBench {
     serialize_sink: usize,
 }
 
-fn bench_eval(input: &[u8], warmup_iters: usize, iters: usize) -> EvalBench {
+fn bench_eval(
+    input: &[u8],
+    mode: BenchMode,
+    program_args: &[Vec<u8>],
+    executable_path: Option<&[u8]>,
+    warmup_iters: usize,
+    iters: usize,
+) -> EvalBench {
     for _ in 0..warmup_iters {
-        black_box(eval_once(input));
+        black_box(eval_once(input, mode, program_args, executable_path));
     }
 
     let started = Instant::now();
     let mut steps = 0;
     let mut serialize_sink = 0usize;
     for _ in 0..iters {
-        let (n, sink) = eval_once(input);
+        let (n, sink) = eval_once(input, mode, program_args, executable_path);
         steps += n;
         serialize_sink = serialize_sink.wrapping_add(sink);
     }
@@ -886,18 +932,39 @@ fn bench_eval(input: &[u8], warmup_iters: usize, iters: usize) -> EvalBench {
     }
 }
 
-fn eval_once(input: &[u8]) -> (usize, usize) {
+fn eval_once(
+    input: &[u8],
+    mode: BenchMode,
+    program_args: &[Vec<u8>],
+    executable_path: Option<&[u8]>,
+) -> (usize, usize) {
     let mut program = parse_program(black_box(input)).expect("reduce benchmark input");
-    program.set_program_args(vec![b"mhsbench".to_vec()]);
-    let (root, steps) = program
-        .reduce_whnf(usize::MAX)
-        .expect("reduce benchmark input");
-    let serialized = program
-        .serialize_program(root)
-        .expect("serialize benchmark result");
-    let sink = bytes_sink(&serialized);
-    black_box(&serialized);
-    (steps, sink)
+    program.set_program_args(program_args.to_vec());
+    program.set_executable_path(executable_path.map(Vec::from));
+    match mode {
+        BenchMode::Whnf => {
+            let (root, steps) = program
+                .reduce_whnf(usize::MAX)
+                .expect("reduce benchmark input");
+            let serialized = program
+                .serialize_program(root)
+                .expect("serialize benchmark result");
+            let sink = bytes_sink(&serialized);
+            black_box(&serialized);
+            (steps, sink)
+        }
+        BenchMode::Main => {
+            let (_, steps) = match program.reduce_main(usize::MAX) {
+                Ok(result) => result,
+                Err(EvalError::Raised(exn)) => {
+                    panic!("run benchmark main: {}", program.render(exn))
+                }
+                Err(err) => panic!("run benchmark main: {err}"),
+            };
+            let sink = steps.wrapping_add(program.nodes().len());
+            (steps, sink)
+        }
+    }
 }
 
 fn bytes_sink(bytes: &[u8]) -> usize {
@@ -913,7 +980,7 @@ struct CBench {
 }
 
 struct CInProcessBench {
-    mode: CBenchMode,
+    mode: BenchMode,
     ns_per_iter: f64,
     sink: usize,
 }
@@ -942,7 +1009,8 @@ fn bench_c_mhseval(input: &[u8], c_mhseval: &str, iters: usize) -> Result<CBench
 fn bench_c_mhsbench(
     input: &[u8],
     c_mhsbench: &str,
-    mode: CBenchMode,
+    mode: BenchMode,
+    program_args: &[Vec<u8>],
     warmup_iters: usize,
     iters: usize,
 ) -> Result<CInProcessBench, String> {
@@ -961,6 +1029,12 @@ fn bench_c_mhsbench(
         &iters_arg,
         file_arg,
     ]);
+    if !program_args.is_empty() {
+        command.arg("--");
+        for arg in program_args {
+            command.arg(String::from_utf8_lossy(arg).as_ref());
+        }
+    }
     let output = command
         .output()
         .map_err(|err| format!("{c_mhsbench}: {err}"))?;

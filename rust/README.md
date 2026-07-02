@@ -96,6 +96,19 @@ is `c_parse_eval_serialize_ns_per_iter`; the comparable Rust number is
 outer WHNF rewrites; strict primitive argument evaluation is included in elapsed
 time but not counted as separate steps.
 
+For main-program benchmarks, pass exact program argv after `--`, including
+`argv[0]`, for example:
+
+```sh
+target/release/mhs-rust-bench --input /tmp/mhs-selfhost.comb --mode main \
+  --warmup-iters 0 --iters 1 \
+  --c-mhsbench ./bin/mhsbench --c-mhsbench-mode main \
+  -- ./bin/mhs -i -imhs -isrc -ilib MicroHs.Main -o/tmp/mhs-selfhost-out.comb
+```
+
+In `main` mode both harnesses measure parse plus execution and avoid serializing
+the whole post-run root graph; validate the output artifact separately.
+
 Treat `parse_ns_per_iter` as a parser diagnostic, not as a clean component of
 `parse_reduce_render_ns_per_iter`. The reduce path mutates the graph before
 Rust drops it, while parse-only drops the original graph, so the two rows can

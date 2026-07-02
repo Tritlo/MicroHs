@@ -273,7 +273,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_i64(&mut self) -> Result<i64, ParseError> {
-        let sign = if self.gobble(b'-') { -1 } else { 1 };
+        let negative = self.gobble(b'-');
         let mut saw_digit = false;
         let mut value: i64 = 0;
         while let Some(c) = self.peek() {
@@ -282,15 +282,23 @@ impl<'a> Parser<'a> {
             }
             saw_digit = true;
             self.pos += 1;
-            value = value
-                .checked_mul(10)
-                .and_then(|v| v.checked_add((c - b'0') as i64))
-                .ok_or(ParseError::InvalidNumber)?;
+            let digit = (c - b'0') as i64;
+            value = if negative {
+                value
+                    .checked_mul(10)
+                    .and_then(|v| v.checked_sub(digit))
+                    .ok_or(ParseError::InvalidNumber)?
+            } else {
+                value
+                    .checked_mul(10)
+                    .and_then(|v| v.checked_add(digit))
+                    .ok_or(ParseError::InvalidNumber)?
+            };
         }
         if !saw_digit {
             return Err(ParseError::InvalidNumber);
         }
-        Ok(value * sign)
+        Ok(value)
     }
 
     fn parse_usize(&mut self) -> Result<usize, ParseError> {
