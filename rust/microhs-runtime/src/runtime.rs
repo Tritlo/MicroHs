@@ -2908,6 +2908,11 @@ impl Program {
                 let len = self.c_string_len(ptr)?;
                 Node::Int(i64::try_from(len).map_err(|_| EvalError::Overflow)?)
             }
+            "putchar" => {
+                let byte = self.eval_int(args[0])?;
+                self.write_io_handle_bytes(StdHandle::Stdout, &[byte as u8])?;
+                Node::prim("I")
+            }
             "md5String" => {
                 let input = self.eval_pointer_value(args[0])?;
                 let result = self.eval_pointer_value(args[1])?;
@@ -3340,6 +3345,17 @@ impl Program {
                     i64::try_from(self.write_bfile(ptr, src, len)?)
                         .map_err(|_| EvalError::Overflow)?,
                 )
+            }
+            "lz77c" => {
+                let src = self.eval_pointer_value(args[0])?;
+                let len = int_to_usize(self.eval_int(args[1])?)?;
+                let out_ptr = self.eval_pointer_value(args[2])?;
+                let bytes = self.read_pointer_bytes(src, len)?;
+                let compressed = lz77_compress(&bytes)?;
+                let compressed_ptr = self.alloc_memory(compressed.len())?;
+                self.write_pointer_bytes(compressed_ptr, &compressed)?;
+                self.poke_signed(out_ptr, 8, compressed_ptr)?;
+                Node::Int(i64::try_from(compressed.len()).map_err(|_| EvalError::Overflow)?)
             }
             "peekPtr" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -9967,6 +9983,7 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "strlen"
         | "getenv"
         | "unsetenv"
+        | "putchar"
         | "remove"
         | "system"
         | "chdir"
@@ -10056,8 +10073,9 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "mpz_neg" | "mpz_tstbit" | "putb" | "ungetb" | "atan2" | "pow" | "scalbn" | "atan2f"
         | "powf" | "scalbnf" => 2,
         "memcpy" | "memmove" | "setenv" | "md5Array" | "get_mem" | "readb" | "writeb" | "open"
-        | "accept" | "bind" | "connect" | "fcntl" | "mpz_add" | "mpz_and" | "mpz_fdiv_q_2exp"
-        | "mpz_ior" | "mpz_mul" | "mpz_mul_2exp" | "mpz_sub" | "mpz_xor" | "socket" => 3,
+        | "accept" | "bind" | "connect" | "fcntl" | "lz77c" | "mpz_add" | "mpz_and"
+        | "mpz_fdiv_q_2exp" | "mpz_ior" | "mpz_mul" | "mpz_mul_2exp" | "mpz_sub" | "mpz_xor"
+        | "socket" => 3,
         "recv" | "send" => 4,
         "mpz_tdiv_qr" => 4,
         "getsockopt" | "setsockopt" => 5,
@@ -10276,7 +10294,7 @@ fn nibble(n: u8) -> char {
 
 #[cfg(test)]
 mod tests {
-    use super::{IGNORED_IO_SHORTCUT_RECURSION_LIMIT, serialize_bytes_quoted};
+    use super::{IGNORED_IO_SHORTCUT_RECURSION_LIMIT, lz77_decompress, serialize_bytes_quoted};
     use crate::{EvalError, Node, NodeId, Program, parse_program};
 
     fn whnf(input: &[u8]) -> String {
@@ -10709,6 +10727,7 @@ mod tests {
         let is_linux = if cfg!(target_os = "linux") { "1" } else { "0" };
         assert_eq!(whnf(b"v8.4\n0\nIO.performIO ^islinux @ }"), is_linux);
         assert_eq!(whnf(b"v8.4\n0\nIO.performIO ^GETRAW @ }"), "-1");
+        assert_eq!(whnf(b"v8.4\n0\nIO.performIO ^putchar #10 @ @ }"), "I");
         assert_eq!(whnf(b"v8.4\n0\nIO.performIO ^sizeof_char @ }"), "1");
         assert_eq!(
             whnf(b"v8.4\n0\nIO.performIO ^sizeof_int @ }"),
@@ -10738,6 +10757,41 @@ mod tests {
             Node::Int(n) => assert!(n >= 0),
             _ => panic!("GETTIMEMICRO did not return an Int"),
         }
+    }
+
+    #[test]
+    fn lz77c_ffi_compresses_to_guest_buffer() {
+        let mut program = parse_program(b"v8.4\n0\nI }\n").unwrap();
+        let input = b"AAAAAAAAAAAAAAAAzzzzzzzzzzzzzzzz";
+        let src = program.alloc_memory(input.len()).unwrap();
+        program.write_pointer_bytes(src, input).unwrap();
+        let out_ptr = program.alloc_memory(8).unwrap();
+
+        let src_node = program.push_node(Node::Ptr(src));
+        let len_node = program.push_node(Node::Int(input.len() as i64));
+        let out_ptr_node = program.push_node(Node::Ptr(out_ptr));
+        let world = program.prim("I");
+        let Some((used, pair)) = program
+            .ffi_call("lz77c", &[src_node, len_node, out_ptr_node, world])
+            .unwrap()
+        else {
+            panic!("lz77c did not reduce");
+        };
+        assert_eq!(used, 4);
+
+        let Some((compressed_len, returned_world)) = program.pair_fields(pair).unwrap() else {
+            panic!("lz77c did not return a pair");
+        };
+        assert_eq!(returned_world, world);
+        let compressed_len = match program.nodes()[compressed_len.0] {
+            Node::Int(n) => usize::try_from(n).unwrap(),
+            ref other => panic!("lz77c length returned {other:?}"),
+        };
+        let compressed_ptr = program.peek_signed(out_ptr, 8).unwrap();
+        let compressed = program
+            .read_pointer_bytes(compressed_ptr, compressed_len)
+            .unwrap();
+        assert_eq!(lz77_decompress(&compressed).unwrap(), input);
     }
 
     #[test]
