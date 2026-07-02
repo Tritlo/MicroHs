@@ -579,6 +579,19 @@ impl Program {
             }));
         }
 
+        if name == "IO.>>=" && args.len() >= 3 {
+            if let Some(result) = self.io_return_action_result(args[0])? {
+                let next = self.app(args[1], result);
+                let mut node = self.app(next, args[2]);
+                let in_place = self.apply_reduction_spine(&mut node, 3, args, apps);
+                return Ok(Some(StepResult {
+                    node,
+                    in_place,
+                    reductions: 2,
+                }));
+            }
+        }
+
         let rewrite = match name.as_str() {
             "I" | "ord" | "chr" if !args.is_empty() => Some((1, args[0])),
             "K" if args.len() >= 2 => Some((2, args[0])),
@@ -1043,6 +1056,18 @@ impl Program {
         world: NodeId,
     ) -> Result<Option<NodeId>, EvalError> {
         Ok(self.run_io_action(action, world)?.map(|(_, world)| world))
+    }
+
+    fn io_return_action_result(&self, action: NodeId) -> Result<Option<NodeId>, EvalError> {
+        let action = self.resolve(action)?;
+        let Node::App(fun, result) = self.nodes[action.0] else {
+            return Ok(None);
+        };
+        let fun = self.resolve(fun)?;
+        Ok(match &self.nodes[fun.0] {
+            Node::Prim(name) if name == "IO.return" => Some(result),
+            _ => None,
+        })
     }
 
     fn run_io_action(
