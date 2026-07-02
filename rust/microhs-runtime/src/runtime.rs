@@ -2091,7 +2091,7 @@ impl Program {
             }
             "strlen" => {
                 let ptr = self.eval_pointer_value(args[0])?;
-                let len = self.read_c_string(ptr)?.len();
+                let len = self.c_string_len(ptr)?;
                 Node::Int(i64::try_from(len).map_err(|_| EvalError::Overflow)?)
             }
             "md5String" => {
@@ -4075,11 +4075,12 @@ impl Program {
 
     fn read_c_string(&self, ptr: i64) -> Result<Vec<u8>, EvalError> {
         let bytes = self.pointer_bytes(ptr)?;
-        let len = bytes
-            .iter()
-            .position(|byte| *byte == 0)
-            .unwrap_or(bytes.len());
+        let len = c_string_len(bytes);
         Ok(bytes[..len].to_vec())
+    }
+
+    fn c_string_len(&self, ptr: i64) -> Result<usize, EvalError> {
+        Ok(c_string_len(self.pointer_bytes(ptr)?))
     }
 
     fn bfile(&self, ptr: i64) -> Result<&BFile, EvalError> {
@@ -9185,6 +9186,13 @@ fn is_unary_math_ffi_candidate(name: &str) -> bool {
         Some(b't') => bytes.starts_with(b"ta"),
         _ => false,
     }
+}
+
+fn c_string_len(bytes: &[u8]) -> usize {
+    bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len())
 }
 
 fn std_handle(name: &str) -> Option<StdHandle> {
