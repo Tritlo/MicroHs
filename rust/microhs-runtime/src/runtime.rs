@@ -285,6 +285,25 @@ pub struct Program {
     reductions: usize,
     js_program_handle: Option<u32>,
     js_wrapper_tags: Vec<String>,
+    prim_cache: PrimCache,
+}
+
+#[derive(Clone, Debug, Default)]
+struct PrimCache {
+    a: Option<NodeId>,
+    b: Option<NodeId>,
+    c: Option<NodeId>,
+    i: Option<NodeId>,
+    k: Option<NodeId>,
+    k2: Option<NodeId>,
+    k3: Option<NodeId>,
+    o: Option<NodeId>,
+    p: Option<NodeId>,
+    u: Option<NodeId>,
+    y: Option<NodeId>,
+    z: Option<NodeId>,
+    io_bind: Option<NodeId>,
+    io_perform_io: Option<NodeId>,
 }
 
 struct Spine {
@@ -343,6 +362,7 @@ impl Program {
             reductions: 0,
             js_program_handle: None,
             js_wrapper_tags: Vec::new(),
+            prim_cache: PrimCache::default(),
         }
     }
 
@@ -971,7 +991,46 @@ impl Program {
     }
 
     fn prim(&mut self, name: &str) -> NodeId {
-        self.push_node(Node::Prim(name.to_owned()))
+        let cached = match name {
+            "A" => self.prim_cache.a,
+            "B" => self.prim_cache.b,
+            "C" => self.prim_cache.c,
+            "I" => self.prim_cache.i,
+            "K" => self.prim_cache.k,
+            "K2" => self.prim_cache.k2,
+            "K3" => self.prim_cache.k3,
+            "O" => self.prim_cache.o,
+            "P" => self.prim_cache.p,
+            "U" => self.prim_cache.u,
+            "Y" => self.prim_cache.y,
+            "Z" => self.prim_cache.z,
+            "IO.>>=" => self.prim_cache.io_bind,
+            "IO.performIO" => self.prim_cache.io_perform_io,
+            _ => None,
+        };
+        if let Some(id) = cached {
+            return id;
+        }
+
+        let id = self.push_node(Node::Prim(name.to_owned()));
+        match name {
+            "A" => self.prim_cache.a = Some(id),
+            "B" => self.prim_cache.b = Some(id),
+            "C" => self.prim_cache.c = Some(id),
+            "I" => self.prim_cache.i = Some(id),
+            "K" => self.prim_cache.k = Some(id),
+            "K2" => self.prim_cache.k2 = Some(id),
+            "K3" => self.prim_cache.k3 = Some(id),
+            "O" => self.prim_cache.o = Some(id),
+            "P" => self.prim_cache.p = Some(id),
+            "U" => self.prim_cache.u = Some(id),
+            "Y" => self.prim_cache.y = Some(id),
+            "Z" => self.prim_cache.z = Some(id),
+            "IO.>>=" => self.prim_cache.io_bind = Some(id),
+            "IO.performIO" => self.prim_cache.io_perform_io = Some(id),
+            _ => {}
+        }
+        id
     }
 
     fn world(&mut self) -> NodeId {
