@@ -1856,6 +1856,13 @@ impl Program {
         name: &str,
         args: &[NodeId],
     ) -> Result<Option<(usize, NodeId)>, EvalError> {
+        if !args.is_empty() {
+            if let Some(result) = self.zero_arity_ffi_result(name)? {
+                let result = self.push_node(result);
+                return Ok(Some((1, self.pair(result, args[0]))));
+            }
+        }
+
         let arity = ffi_arity(name).ok_or_else(|| EvalError::UnknownFfi(name.to_owned()))?;
         if args.len() < arity + 1 {
             return Ok(None);
@@ -2794,6 +2801,35 @@ impl Program {
         };
         let result = self.push_node(result);
         Ok(Some((arity + 1, self.pair(result, args[arity]))))
+    }
+
+    fn zero_arity_ffi_result(&mut self, name: &str) -> Result<Option<Node>, EvalError> {
+        if let Some(value) = errno_constant(name) {
+            return Ok(Some(Node::Int(value)));
+        }
+        if let Some(value) = host_constant(name) {
+            return Ok(Some(Node::Int(value)));
+        }
+        let result = match name {
+            "GETRAW" => Node::Int(-1),
+            "GETTIMEMICRO" => Node::Int(current_time_micro()),
+            "islinux" => Node::Int(i64::from(cfg!(target_os = "linux"))),
+            "ismacos" => Node::Int(i64::from(cfg!(target_os = "macos"))),
+            "iswindows" => Node::Int(i64::from(cfg!(target_os = "windows"))),
+            "sizeof_char" => Node::Int(size_of_i64::<std::os::raw::c_char>()),
+            "sizeof_short" => Node::Int(size_of_i64::<std::os::raw::c_short>()),
+            "sizeof_int" => Node::Int(size_of_i64::<std::os::raw::c_int>()),
+            "sizeof_long" => Node::Int(size_of_i64::<std::os::raw::c_long>()),
+            "sizeof_llong" => Node::Int(size_of_i64::<std::os::raw::c_longlong>()),
+            "sizeof_size_t" => Node::Int(size_of_i64::<usize>()),
+            "want_gmp" => Node::Int(0),
+            "want_imath" => Node::Int(1),
+            "&closeb" => Node::FunPtr("closeb".to_owned()),
+            "&free" => Node::FunPtr("free".to_owned()),
+            "&errno" | "errno" => Node::Ptr(self.errno_ptr()?),
+            _ => return Ok(None),
+        };
+        Ok(Some(result))
     }
 
     fn js_call(
