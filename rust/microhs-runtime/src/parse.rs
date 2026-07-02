@@ -102,7 +102,7 @@ impl<'a> Parser<'a> {
                     return Ok(root);
                 }
                 b'%' => {
-                    self.expect(b'"')?;
+                    self.gobble(b'"');
                     let digits = self.parse_string()?;
                     let node = self.push(Node::BigInt(digits));
                     self.stack.push(node);
