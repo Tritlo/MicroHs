@@ -1,3 +1,4 @@
+use std::alloc::{Layout, alloc, dealloc};
 use std::cell::RefCell;
 
 use crate::{JsValue, Program, parse_program};
@@ -6,6 +7,30 @@ const CALLBACK_LIMIT: usize = 100_000;
 
 thread_local! {
     static PROGRAMS: RefCell<Vec<Option<Program>>> = const { RefCell::new(Vec::new()) };
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mhs_rust_alloc(len: usize) -> *mut u8 {
+    if len == 0 {
+        return std::ptr::null_mut();
+    }
+    let Ok(layout) = Layout::from_size_align(len, 1) else {
+        return std::ptr::null_mut();
+    };
+    unsafe { alloc(layout) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mhs_rust_dealloc(ptr: *mut u8, len: usize) {
+    if ptr.is_null() || len == 0 {
+        return;
+    }
+    let Ok(layout) = Layout::from_size_align(len, 1) else {
+        return;
+    };
+    unsafe {
+        dealloc(ptr, layout);
+    }
 }
 
 #[unsafe(no_mangle)]
