@@ -420,12 +420,15 @@ impl Program {
         args: &[JsValue],
         limit: usize,
     ) -> Result<JsValue, EvalError> {
-        let tags = self
-            .js_wrapper_tags
-            .get(usize::try_from(wrapper_index).map_err(|_| EvalError::Overflow)?)
-            .ok_or(EvalError::InvalidArray)?
-            .clone();
+        let tags = self.js_wrapper_tags(wrapper_index)?.to_owned();
         self.apply_js_wrapper(&tags, stable_ptr, args, limit)
+    }
+
+    pub fn js_wrapper_tags(&self, wrapper_index: u32) -> Result<&str, EvalError> {
+        self.js_wrapper_tags
+            .get(usize::try_from(wrapper_index).map_err(|_| EvalError::Overflow)?)
+            .map(String::as_str)
+            .ok_or(EvalError::InvalidArray)
     }
 
     fn step(&mut self, root: NodeId, budget: usize) -> Result<Option<StepResult>, EvalError> {
