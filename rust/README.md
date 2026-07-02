@@ -1,6 +1,7 @@
 # MicroHs Rust Rewrite
 
-This directory is the staged Rust rewrite of the MicroHs runtime.
+This directory is the staged Rust rewrite of the MicroHs runtime. The Haskell
+compiler stays Haskell and remains the authoritative `.comb` producer.
 
 The compatibility boundary is the existing combinator file format. Tier 0 keeps
 the C runtime as the oracle and teaches Rust to parse and reduce small pure
@@ -51,6 +52,7 @@ cargo run --release --bin mhs-rust-bench -- --scenario ffi-ptr-mem-chain:200 --i
 cargo run --release --bin mhs-rust-bench -- --scenario ffi-strcpy-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario md5-string-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario getenv-chain:200 --iters 1000
+cargo run --release --bin mhs-rust-bench -- --scenario env-set-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario getcwd-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario dir-read-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario remove-missing-chain:200 --iters 1000
