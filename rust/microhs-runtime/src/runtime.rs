@@ -359,6 +359,7 @@ const BFILE_PTR_STRIDE: i64 = 1_i64 << 32;
 const DIR_PTR_BASE: i64 = i64::MIN + (1_i64 << 61);
 const DIR_PTR_STRIDE: i64 = 1_i64 << 32;
 const INLINE_SPINE: usize = 16;
+const IGNORED_IO_SHORTCUT_RECURSION_LIMIT: usize = 256;
 const UTF8_ASCII_REFILL: usize = 1024;
 
 #[derive(Clone, Debug)]
@@ -1471,15 +1472,16 @@ impl Program {
         action: NodeId,
         budget: usize,
     ) -> Result<Option<usize>, EvalError> {
-        self.io_action_reductions(action, budget)
+        self.io_action_reductions(action, budget, IGNORED_IO_SHORTCUT_RECURSION_LIMIT)
     }
 
     fn io_action_reductions(
         &mut self,
         action: NodeId,
         budget: usize,
+        depth: usize,
     ) -> Result<Option<usize>, EvalError> {
-        if budget == 0 {
+        if budget == 0 || depth == 0 {
             return Ok(None);
         }
 
@@ -1491,7 +1493,7 @@ impl Program {
             Node::Prim(name) if name == IoReturn && args.len() == 1 => Ok(Some(1)),
             Node::Prim(name) if name == IoThen && args.len() == 2 && budget >= 2 => {
                 let Some(right_reductions) =
-                    self.ignored_io_action_reductions(args[1], budget - 1)?
+                    self.io_action_reductions(args[1], budget - 1, depth - 1)?
                 else {
                     return Ok(None);
                 };
@@ -1500,7 +1502,7 @@ impl Program {
                     return Ok(None);
                 }
                 let Some(left_reductions) =
-                    self.ignored_io_action_reductions(args[0], remaining_budget)?
+                    self.io_action_reductions(args[0], remaining_budget, depth - 1)?
                 else {
                     return Ok(None);
                 };
@@ -1512,7 +1514,8 @@ impl Program {
                     && budget >= 2
                     && self.direct_ffi_continuation_accepts_result(args[1])? =>
             {
-                let Some(action_reductions) = self.io_action_reductions(args[0], budget - 1)?
+                let Some(action_reductions) =
+                    self.io_action_reductions(args[0], budget - 1, depth - 1)?
                 else {
                     return Ok(None);
                 };
@@ -1544,7 +1547,9 @@ impl Program {
         action: NodeId,
         world: NodeId,
     ) -> Result<Option<NodeId>, EvalError> {
-        Ok(self.run_io_action(action, world)?.map(|(_, world)| world))
+        Ok(self
+            .run_io_action(action, world, IGNORED_IO_SHORTCUT_RECURSION_LIMIT)?
+            .map(|(_, world)| world))
     }
 
     fn io_return_action_result(&mut self, action: NodeId) -> Result<Option<NodeId>, EvalError> {
@@ -1563,7 +1568,12 @@ impl Program {
         &mut self,
         action: NodeId,
         world: NodeId,
+        depth: usize,
     ) -> Result<Option<(NodeId, NodeId)>, EvalError> {
+        if depth == 0 {
+            return Ok(None);
+        }
+
         let spine = self.spine(action)?;
         let head = spine.head;
         let args = spine.args();
@@ -1571,21 +1581,21 @@ impl Program {
         match self.nodes[head.0].clone() {
             Node::Prim(name) if name == IoReturn && args.len() == 1 => Ok(Some((args[0], world))),
             Node::Prim(name) if name == IoThen && args.len() == 2 => {
-                let Some(world) = self.run_ignored_io_action(args[0], world)? else {
+                let Some((_, world)) = self.run_io_action(args[0], world, depth - 1)? else {
                     return Ok(None);
                 };
-                self.run_io_action(args[1], world)
+                self.run_io_action(args[1], world, depth - 1)
             }
             Node::Prim(name)
                 if name == IoLazyBind
                     && args.len() == 2
                     && self.direct_ffi_continuation_accepts_result(args[1])? =>
             {
-                let Some((result, world)) = self.run_io_action(args[0], world)? else {
+                let Some((result, world)) = self.run_io_action(args[0], world, depth - 1)? else {
                     return Ok(None);
                 };
                 let next = self.app(args[1], result);
-                self.run_io_action(next, world)
+                self.run_io_action(next, world, depth - 1)
             }
             Node::Prim(name) if name == IoGetArgRef && args.is_empty() => {
                 let result = self.arg_ref_array();
@@ -10266,8 +10276,8 @@ fn nibble(n: u8) -> char {
 
 #[cfg(test)]
 mod tests {
-    use super::serialize_bytes_quoted;
-    use crate::{EvalError, Node, parse_program};
+    use super::{IGNORED_IO_SHORTCUT_RECURSION_LIMIT, serialize_bytes_quoted};
+    use crate::{EvalError, Node, NodeId, Program, parse_program};
 
     fn whnf(input: &[u8]) -> String {
         let mut program = parse_program(input).unwrap();
@@ -10651,6 +10661,47 @@ mod tests {
             whnf(b"v8.4\n0\nIO.performIO IO.threadstatus IO.performIO IO.thid @ @ @ }"),
             "0"
         );
+    }
+
+    #[test]
+    fn ignored_io_shortcut_has_depth_cap() {
+        fn ignored_chain(program: &mut Program, len: usize) -> NodeId {
+            let unit = program.prim("I");
+            let ret = program.prim("IO.return");
+            let unit_action = program.app(ret, unit);
+            let result = program.push_node(Node::Int(7));
+            let ret = program.prim("IO.return");
+            let mut action = program.app(ret, result);
+            for _ in 0..len {
+                let then = program.prim("IO.>>");
+                let left = program.app(then, unit_action);
+                action = program.app(left, action);
+            }
+            action
+        }
+
+        let mut program = parse_program(b"v8.4\n0\nI }\n").unwrap();
+        let bounded = ignored_chain(&mut program, IGNORED_IO_SHORTCUT_RECURSION_LIMIT / 2);
+        assert!(
+            program
+                .ignored_io_action_reductions(bounded, usize::MAX)
+                .unwrap()
+                .is_some()
+        );
+
+        let mut program = parse_program(b"v8.4\n0\nI }\n").unwrap();
+        let over_cap = ignored_chain(&mut program, IGNORED_IO_SHORTCUT_RECURSION_LIMIT + 1);
+        assert_eq!(
+            program
+                .ignored_io_action_reductions(over_cap, usize::MAX)
+                .unwrap(),
+            None
+        );
+
+        let perform_io = program.prim("IO.performIO");
+        program.root = program.app(perform_io, over_cap);
+        let (root, _) = program.reduce_whnf(20_000).unwrap();
+        assert_eq!(program.render(root), "7");
     }
 
     #[test]

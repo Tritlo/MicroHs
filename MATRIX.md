@@ -11,23 +11,23 @@ performance, or benchmark classification changes.
 |---|---|
 | branch | `microhs-rust` |
 | upstream tracking | `origin/microhs-rust` |
-| local commits ahead after this snapshot commit | 75 |
-| runtime code baseline | C-compatible Integer serializer checkpoint |
+| local commits ahead after this snapshot commit | 76 |
+| runtime code baseline | bounded ignored-IO shortcut checkpoint |
 | dirty files after this snapshot commit | none expected |
 | dirty work | none in tracked runtime files |
 | matrix file | `MATRIX.md`, tracked from this snapshot |
 
 ## Verification Baseline
 
-Last fully verified state: C-compatible Integer serializer checkpoint.
+Last fully verified state: bounded ignored-IO shortcut checkpoint.
 
 | gate | status |
 |---|---|
-| `cargo test -p microhs-runtime --quiet` | passed before C-compatible Integer serializer commit; 29 tests |
-| `cargo check -p microhs-runtime --lib --quiet` | passed before C-compatible Integer serializer commit |
-| `cargo check -p microhs-runtime --bins --quiet` | passed before C-compatible Integer serializer commit |
-| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before C-compatible Integer serializer commit |
-| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before C-compatible Integer serializer commit |
+| `cargo test -p microhs-runtime --quiet` | passed before bounded ignored-IO shortcut commit; 30 tests |
+| `cargo check -p microhs-runtime --lib --quiet` | passed before bounded ignored-IO shortcut commit |
+| `cargo check -p microhs-runtime --bins --quiet` | passed before bounded ignored-IO shortcut commit |
+| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before bounded ignored-IO shortcut commit |
+| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before bounded ignored-IO shortcut commit |
 | `node --check rust/microhs-runtime/js/host.mjs` | passed at `f8b9e1d5` |
 | Node wasm core render smoke | passed at `9cbef47e`; host shim instantiated wasm, reduced `v8.4\n0\nI #5 @ }\n`, and rendered `5` |
 | Node wasm dynamic `~I` JS FFI smoke | passed at `58280b6e`; path-loaded wasm reduced `IO.performIO ~I "return 40 + 2" @` and rendered `42` |
@@ -36,10 +36,10 @@ Last fully verified state: C-compatible Integer serializer checkpoint.
 | Node wasm wrapper tag coverage smoke | passed at `f8b9e1d5`; `II`, `UU`, `DD`, `FF`, `BB`, `SS`, `JJ`, and `PP` wrappers round-trip through JS and render expected values |
 | Node wasm unsigned/high-bit JS smoke | passed at `f8b9e1d5`; direct `~U` rendered `4294967295`; direct and wrapper `~P` rendered `Ptr#2147483648` |
 | Node wasm Response-source smoke | passed at `58280b6e`; `Response(bytes)` source reduced `~S "return 'hi'"` and rendered `"hi"` |
-| `cargo fmt --all --check` | passed before C-compatible Integer serializer commit |
-| `git diff --check` | passed before C-compatible Integer serializer commit |
+| `cargo fmt --all --check` | passed before bounded ignored-IO shortcut commit |
+| `git diff --check` | passed before bounded ignored-IO shortcut commit |
 | `make bin/mhsbench` | passed/up to date at `70eabf4d` |
-| `cargo build --release -p microhs-runtime --bins --quiet` | passed before C-compatible Integer serializer commit |
+| `cargo build --release -p microhs-runtime --bins --quiet` | passed before bounded ignored-IO shortcut commit |
 | signed `i64::MIN` comb parser smoke | passed before checkpoint commit; Rust now parses the self-host compiler comb containing `##-9223372036854775808` |
 | unbounded internal force budget smoke | passed before checkpoint commit; self-hosting no longer trips the old internal `10_000` WHNF cap |
 | main-mode benchmark harness smoke | passed before checkpoint commit; Rust and C support `--mode main -- PROGRAM ARGS...`; main mode measures execution and validates external output instead of serializing the whole root graph |
@@ -69,6 +69,7 @@ Last fully verified state: C-compatible Integer serializer checkpoint.
 | C-style `Y` knot perf probe | passed before checkpoint commit; `T_Y` now reuses the consumed `(Y x)` redex as the recursive argument like C's `GOAP(x, n)`, and no-op self-updates no longer write self-indirections; `Y K` reaches WHNF as a cycle, `Y I` hits the step limit rather than hanging, common canaries sink-match C, and self-host `--help` drops to 297,417 reductions and 624,314 profile nodes after run |
 | C-compatible quoted bytestring serializer smoke | passed before checkpoint commit; quoted serialization now follows C/`ExpPrint.hs` for escape introducers, leaves literal `?` raw, uses `\?` only for DEL, and round-trips every byte through the quoted parser path |
 | C-compatible Integer serializer smoke | passed before checkpoint commit; `%` parser now accepts C's `%digits"` wire format while tolerating legacy Rust `%"digits"`, and serializer emits C-style `%digits"` for `BigInt`/mpz foreign pointers |
+| bounded ignored-IO shortcut smoke | passed before checkpoint commit; ignored-action preflight/execution now caps native recursion at 256 nested shortcut actions and falls back to the general reducer beyond that; `io-chain:200` and `io-control-chain:200` still sink-match C |
 | ignored IO action shortcut perf probe | passed before checkpoint commit; `io-chain`, `io-control-chain`, `argref-chain`, `ffi-chain`, `ffi-math-chain`, `ffi-const-chain`, `env-set-chain`, and `remove-missing-chain` improved with matching sinks; `ffi-mem-chain` and `bfile-read-chain` canaries stayed in the same band |
 | direct lazyBind FFI-continuation perf probe | passed before checkpoint commit; against a clean `50e11139` temp worktree, `ffi-mem-chain` improved from ~1.31 ms to ~0.18 ms and `bfile-read-chain` improved from ~1.50 ms to ~0.34 ms with matching sinks; direct BFILE/env rows improved, while complex continuation canaries stayed in the same noisy band |
 | reducer inline-spine perf probe | passed at `63d03844`; against `f8b9e1d5` temp build, current Rust improved `arith-chain`, `io-chain`, `ffi-chain`, `ffi-mem-chain`, and `bfile-read-chain` by roughly 4-13% |
@@ -214,10 +215,10 @@ runtime primitives.
 | `unpack-chain:200` | 8,678 | 97,157 | 0.09 | yes |
 | `fromutf8-chain:200` | 9,939 | 97,162 | 0.10 | yes |
 | `array-chain:200` | 3,572 | 91,485 | 0.04 | yes |
-| `io-chain:200` | 57,429 | 121,835 | 0.47 | yes |
+| `io-chain:200` | 61,899 | 124,948 | 0.50 | yes |
 | `io-array-chain:200` | 3,747 | 92,561 | 0.04 | yes |
 | `io-bytes-chain:200` | 1,814 | 90,873 | 0.02 | yes |
-| `io-control-chain:200` | 75,528 | 142,687 | 0.53 | yes |
+| `io-control-chain:200` | 59,303 | 131,295 | 0.45 | yes |
 | `performio-apply-chain:200` | 114,126 | 123,407 | 0.92 | yes |
 | `argref-chain:200` | 55,481 | 128,597 | 0.43 | yes |
 | `stdio-chain:200` | 143,397 | 112,014 | 1.28 | yes |
@@ -445,7 +446,7 @@ Rows in this section are generated from temporary pure Haskell programs compiled
 
 | item | reason | status |
 |---|---|---|
-| detailed `eval.c` correctness batch | finalized review ranks small oracle-checkable semantic fixes before the structural reducer rewrite | F1 quoted bytestring serializer and F11 Integer serializer done; F3/F4/F7/F15/F16/F18/F19 still pending |
+| detailed `eval.c` correctness batch | finalized review ranks small oracle-checkable semantic fixes before the structural reducer rewrite | F1 quoted bytestring serializer, F11 Integer serializer, and F18 ignored-IO shortcut cap done; F3/F4/F7/F15/F16/F19 still pending |
 | compression BFILE write-path benchmarks | decompressor rows existed; compiler-generated high-level compressor smokes now cover RLE/LZ77/BWT/LZMA write paths | partial done; built-in repeat scenarios still pending |
 | MD5 broader coverage | committed runtime covers all three FFI names; only `md5String` has a repeat benchmark | pending full high-level `System.IO.MD5` test once the compiler binary is available |
 | directory iteration FFI | committed runtime covers `opendir`, `readdir`, `closedir`, `c_d_name` | pending full high-level `System.Directory` test once the compiler binary is available |
