@@ -227,14 +227,14 @@ fn read_wrapper_args(tags: &[u8]) -> Result<Vec<JsValue>, ()> {
             b'D' => JsValue::Double(unsafe { mhs_js_arg_dbl(idx) }),
             b'F' => JsValue::Float(unsafe { mhs_js_arg_dbl(idx) } as f32),
             b'B' => JsValue::Bool(unsafe { mhs_js_arg_int(idx) } != 0),
-            b'P' => JsValue::Pointer(unsafe { mhs_js_arg_int(idx) } as u32),
+            b'P' => JsValue::Pointer(unsafe { mhs_js_arg_uint(idx) }),
             b'J' => JsValue::Object(unsafe { mhs_js_arg_obj(idx) }),
             b'S' => {
                 let ptr = unsafe { mhs_js_arg_str(idx) };
                 let len = usize::try_from(unsafe { mhs_js_slen() }).map_err(|_| ())?;
                 JsValue::Bytes(copy_host_bytes(ptr, len)?)
             }
-            b'U' => JsValue::UInt(unsafe { mhs_js_arg_int(idx) } as u32),
+            b'U' => JsValue::UInt(unsafe { mhs_js_arg_uint(idx) }),
             b'I' => JsValue::Int(unsafe { mhs_js_arg_int(idx) }),
             _ => return Err(()),
         };
@@ -271,6 +271,7 @@ fn copy_host_bytes(ptr: *const std::os::raw::c_char, len: usize) -> Result<Vec<u
 
 unsafe extern "C" {
     fn mhs_js_arg_int(index: i32) -> i32;
+    fn mhs_js_arg_uint(index: i32) -> u32;
     fn mhs_js_arg_dbl(index: i32) -> f64;
     fn mhs_js_arg_obj(index: i32) -> u32;
     fn mhs_js_arg_str(index: i32) -> *const std::os::raw::c_char;
