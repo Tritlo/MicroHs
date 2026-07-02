@@ -526,6 +526,18 @@ impl Program {
         };
 
         if name == "IO.>>" && args.len() >= 3 && budget >= 2 {
+            if let Some(reductions) = self.ignored_io_action_reductions(args[0], budget - 1)? {
+                let world = self
+                    .run_ignored_io_action(args[0], args[2])?
+                    .expect("preflighted ignored IO action should execute");
+                let mut node = self.app(args[1], world);
+                let in_place = self.apply_remaining_spine(&mut node, &args[3..], &apps[3..]);
+                return Ok(Some(StepResult {
+                    node,
+                    in_place,
+                    reductions: reductions + 1,
+                }));
+            }
             let k = self.prim("K");
             let then = self.app(k, args[1]);
             let action = self.app(args[0], args[2]);
@@ -922,6 +934,98 @@ impl Program {
             in_place,
             reductions,
         }))
+    }
+
+    fn ignored_io_action_reductions(
+        &self,
+        action: NodeId,
+        budget: usize,
+    ) -> Result<Option<usize>, EvalError> {
+        if budget == 0 {
+            return Ok(None);
+        }
+
+        let spine = self.spine(action)?;
+        let head = spine.head;
+        let args = spine.args();
+        match self.nodes[head.0].clone() {
+            Node::Prim(name) if name == "IO.return" && args.len() == 1 => Ok(Some(1)),
+            Node::Prim(name) if name == "IO.>>" && args.len() == 2 && budget >= 2 => {
+                let Some(right_reductions) =
+                    self.ignored_io_action_reductions(args[1], budget - 1)?
+                else {
+                    return Ok(None);
+                };
+                let remaining_budget = budget.saturating_sub(right_reductions + 1);
+                if remaining_budget == 0 {
+                    return Ok(None);
+                }
+                let Some(left_reductions) =
+                    self.ignored_io_action_reductions(args[0], remaining_budget)?
+                else {
+                    return Ok(None);
+                };
+                Ok(Some(left_reductions + right_reductions + 1))
+            }
+            Node::Prim(name)
+                if matches!(
+                    name.as_str(),
+                    "IO.getArgRef" | "IO.getmaskingstate" | "IO.yield"
+                ) && args.is_empty() =>
+            {
+                Ok(Some(1))
+            }
+            Node::Prim(name) if name == "IO.setmaskingstate" && args.len() == 1 => Ok(Some(1)),
+            Node::Ffi(name) => {
+                let arity = ffi_arity(&name).ok_or_else(|| EvalError::UnknownFfi(name.clone()))?;
+                Ok((args.len() == arity).then_some(1))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn run_ignored_io_action(
+        &mut self,
+        action: NodeId,
+        world: NodeId,
+    ) -> Result<Option<NodeId>, EvalError> {
+        let spine = self.spine(action)?;
+        let head = spine.head;
+        let args = spine.args();
+        match self.nodes[head.0].clone() {
+            Node::Prim(name) if name == "IO.return" && args.len() == 1 => Ok(Some(world)),
+            Node::Prim(name) if name == "IO.>>" && args.len() == 2 => {
+                let Some(world) = self.run_ignored_io_action(args[0], world)? else {
+                    return Ok(None);
+                };
+                self.run_ignored_io_action(args[1], world)
+            }
+            Node::Prim(name) if name == "IO.getArgRef" && args.is_empty() => {
+                let _ = self.arg_ref_array();
+                Ok(Some(world))
+            }
+            Node::Prim(name) if name == "IO.getmaskingstate" && args.is_empty() => Ok(Some(world)),
+            Node::Prim(name) if name == "IO.setmaskingstate" && args.len() == 1 => {
+                self.masking_state = self.eval_int(args[0])?;
+                Ok(Some(world))
+            }
+            Node::Prim(name) if name == "IO.yield" && args.is_empty() => Ok(Some(world)),
+            Node::Ffi(name) => {
+                let arity = ffi_arity(&name).ok_or_else(|| EvalError::UnknownFfi(name.clone()))?;
+                if args.len() != arity {
+                    return Ok(None);
+                }
+                let mut ffi_args = Vec::with_capacity(args.len() + 1);
+                ffi_args.extend_from_slice(args);
+                ffi_args.push(world);
+                if self.ffi_call(&name, &ffi_args)?.is_some() {
+                    Ok(Some(world))
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Ok(None),
+        }
     }
 
     fn spine(&self, root: NodeId) -> Result<Spine, EvalError> {
