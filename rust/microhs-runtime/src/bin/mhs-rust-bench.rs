@@ -5,7 +5,7 @@ use std::process::Command;
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use microhs_runtime::{EvalError, parse_program};
+use microhs_runtime::{EvalError, EvalProfile, parse_program};
 
 const DEFAULT_ITERS: usize = 1_000;
 const DEFAULT_WARMUP_ITERS: usize = 0;
@@ -22,6 +22,8 @@ struct Config {
     c_mhseval: Option<String>,
     c_mhsbench: Option<String>,
     c_mhsbench_mode: BenchMode,
+    profile: bool,
+    profile_top: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -53,6 +55,7 @@ fn usage() {
                                   [--mode whnf|main]\n\
                                   [--warmup-iters N]\n\
                                   [--c-mhseval PATH] [--c-mhsbench PATH] [--c-mhsbench-mode whnf|main]\n\
+                                  [--profile] [--profile-top N]\n\
                                   [-- PROGRAM ARGS...]\n\
          default: --scenario {DEFAULT_SCENARIO} --iters {DEFAULT_ITERS}"
     );
@@ -108,6 +111,16 @@ fn main() -> ExitCode {
     );
     println!("serialize_sink: {}", eval.serialize_sink);
 
+    if config.profile {
+        let profile = profile_eval(
+            &config.input,
+            config.mode,
+            &config.program_args,
+            config.executable_path.as_deref(),
+        );
+        print_profile(&profile, config.profile_top);
+    }
+
     if let Some(c_mhseval) = &config.c_mhseval {
         match bench_c_mhseval(&config.input, c_mhseval, config.iters) {
             Ok(c) => {
@@ -161,6 +174,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Config, String> {
     let mut c_mhseval = None;
     let mut c_mhsbench = None;
     let mut c_mhsbench_mode = BenchMode::Whnf;
+    let mut profile = false;
+    let mut profile_top = 25usize;
     let mut args = args.peekable();
 
     while let Some(arg) = args.next() {
@@ -214,6 +229,18 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Config, String> {
                 let mode = args.next().ok_or("--c-mhsbench-mode requires a value")?;
                 c_mhsbench_mode = BenchMode::parse(&mode)?;
             }
+            "--profile" => {
+                profile = true;
+            }
+            "--profile-top" => {
+                let value = args.next().ok_or("--profile-top requires a value")?;
+                profile_top = value
+                    .parse()
+                    .map_err(|_| format!("invalid --profile-top value: {value}"))?;
+                if profile_top == 0 {
+                    return Err("--profile-top must be greater than zero".to_owned());
+                }
+            }
             "-h" | "--help" => return Err(String::new()),
             _ => return Err(format!("unknown argument: {arg}")),
         }
@@ -239,6 +266,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Config, String> {
         c_mhseval,
         c_mhsbench,
         c_mhsbench_mode,
+        profile,
+        profile_top,
     })
 }
 
@@ -912,6 +941,14 @@ struct EvalBench {
     serialize_sink: usize,
 }
 
+struct ProfileBench {
+    elapsed: Duration,
+    steps: usize,
+    serialize_sink: usize,
+    nodes_after: usize,
+    profile: EvalProfile,
+}
+
 fn bench_eval(
     input: &[u8],
     mode: BenchMode,
@@ -972,6 +1009,83 @@ fn eval_once(
             let sink = steps.wrapping_add(program.nodes().len());
             (steps, sink)
         }
+    }
+}
+
+fn profile_eval(
+    input: &[u8],
+    mode: BenchMode,
+    program_args: &[Vec<u8>],
+    executable_path: Option<&[u8]>,
+) -> ProfileBench {
+    let started = Instant::now();
+    let mut program = parse_program(black_box(input)).expect("profile benchmark input");
+    program.set_program_args(program_args.to_vec());
+    program.set_executable_path(executable_path.map(Vec::from));
+    program.enable_profile();
+    let (steps, serialize_sink) = match mode {
+        BenchMode::Whnf => {
+            let (root, steps) = program
+                .reduce_whnf(usize::MAX)
+                .expect("profile reduce benchmark input");
+            let serialized = program
+                .serialize_program(root)
+                .expect("profile serialize benchmark result");
+            let sink = bytes_sink(&serialized);
+            black_box(&serialized);
+            (steps, sink)
+        }
+        BenchMode::Main => {
+            let (_, steps) = match program.reduce_main(usize::MAX) {
+                Ok(result) => result,
+                Err(EvalError::Raised(exn)) => {
+                    panic!("profile run benchmark main: {}", program.render(exn))
+                }
+                Err(err) => panic!("profile run benchmark main: {err}"),
+            };
+            let sink = steps.wrapping_add(program.nodes().len());
+            (steps, sink)
+        }
+    };
+    let elapsed = started.elapsed();
+    let nodes_after = program.nodes().len();
+    let profile = program.take_profile().expect("profile enabled");
+    ProfileBench {
+        elapsed,
+        steps,
+        serialize_sink,
+        nodes_after,
+        profile,
+    }
+}
+
+fn print_profile(profile: &ProfileBench, top: usize) {
+    println!("profile_total_ms: {:.3}", millis(profile.elapsed));
+    println!("profile_steps: {}", profile.steps);
+    println!("profile_sink: {}", profile.serialize_sink);
+    println!("profile_nodes_after: {}", profile.nodes_after);
+    println!("profile_step_attempts: {}", profile.profile.step_attempts);
+    println!(
+        "profile_successful_steps: {}",
+        profile.profile.successful_steps
+    );
+    println!("profile_reductions: {}", profile.profile.reductions);
+    println!("profile_heap_spines: {}", profile.profile.heap_spines);
+    println!(
+        "profile_max_spine_arity: {}",
+        profile.profile.max_spine_arity
+    );
+    println!("profile_top_head_attempts:");
+    for (head, count) in profile.profile.top_head_attempts(top) {
+        println!("  {head}: {count}");
+    }
+    println!("profile_top_head_reductions:");
+    for (head, count) in profile.profile.top_head_reductions(top) {
+        println!("  {head}: {count}");
+    }
+    println!("profile_spine_arity:");
+    for (arity, count) in &profile.profile.spine_arity {
+        println!("  {arity}: {count}");
     }
 }
 

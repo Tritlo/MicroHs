@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::mem::size_of;
 
@@ -292,6 +292,39 @@ pub struct Program {
     js_program_handle: Option<u32>,
     js_wrapper_tags: Vec<String>,
     prim_cache: PrimCache,
+    profile: Option<EvalProfile>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct EvalProfile {
+    pub step_attempts: usize,
+    pub successful_steps: usize,
+    pub reductions: usize,
+    pub heap_spines: usize,
+    pub max_spine_arity: usize,
+    pub head_attempts: HashMap<String, usize>,
+    pub head_reductions: HashMap<String, usize>,
+    pub spine_arity: BTreeMap<usize, usize>,
+}
+
+impl EvalProfile {
+    pub fn top_head_attempts(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.head_attempts, limit)
+    }
+
+    pub fn top_head_reductions(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.head_reductions, limit)
+    }
+}
+
+fn sorted_profile_counts(map: &HashMap<String, usize>, limit: usize) -> Vec<(&str, usize)> {
+    let mut counts: Vec<_> = map
+        .iter()
+        .map(|(key, value)| (key.as_str(), *value))
+        .collect();
+    counts.sort_unstable_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
+    counts.truncate(limit);
+    counts
 }
 
 #[derive(Clone, Debug, Default)]
@@ -371,6 +404,7 @@ impl Program {
             js_program_handle: None,
             js_wrapper_tags: Vec::new(),
             prim_cache: PrimCache::default(),
+            profile: None,
         }
     }
 
@@ -389,6 +423,14 @@ impl Program {
 
     pub fn set_executable_path(&mut self, path: Option<Vec<u8>>) {
         self.executable_path = path;
+    }
+
+    pub fn enable_profile(&mut self) {
+        self.profile = Some(EvalProfile::default());
+    }
+
+    pub fn take_profile(&mut self) -> Option<EvalProfile> {
+        self.profile.take()
     }
 
     pub fn set_js_program_handle(&mut self, handle: u32) {
@@ -500,43 +542,110 @@ impl Program {
             .ok_or(EvalError::InvalidArray)
     }
 
+    #[cold]
+    fn profile_step(&mut self, head: NodeId, arity: usize, heap_spine: bool) -> Option<String> {
+        let key = self.profile_head_key(head);
+        let profile = self.profile.as_mut().expect("profile checked");
+        profile.step_attempts += 1;
+        *profile.head_attempts.entry(key.clone()).or_default() += 1;
+        *profile.spine_arity.entry(arity).or_default() += 1;
+        if heap_spine {
+            profile.heap_spines += 1;
+        }
+        profile.max_spine_arity = profile.max_spine_arity.max(arity);
+        Some(key)
+    }
+
+    #[cold]
+    fn profile_reduction(&mut self, key: &Option<String>, reductions: usize) {
+        let Some(profile) = self.profile.as_mut() else {
+            return;
+        };
+        let Some(key) = key.as_ref() else {
+            return;
+        };
+        profile.successful_steps += 1;
+        profile.reductions += reductions;
+        *profile.head_reductions.entry(key.clone()).or_default() += reductions;
+    }
+
+    #[inline]
+    fn step_result(
+        &mut self,
+        profile_head: &Option<String>,
+        node: NodeId,
+        in_place: bool,
+        reductions: usize,
+    ) -> StepResult {
+        if profile_head.is_some() {
+            self.profile_reduction(profile_head, reductions);
+        }
+        StepResult {
+            node,
+            in_place,
+            reductions,
+        }
+    }
+
+    #[cold]
+    fn profile_head_key(&self, head: NodeId) -> String {
+        match &self.nodes[head.0] {
+            Node::App(_, _) => "App".to_owned(),
+            Node::Indir(_) => "Indir".to_owned(),
+            Node::Prim(name) => format!("Prim:{name}"),
+            Node::Int(_) => "Int".to_owned(),
+            Node::Int64(_) => "Int64".to_owned(),
+            Node::Float64(_) => "Float64".to_owned(),
+            Node::Float32(_) => "Float32".to_owned(),
+            Node::ThreadId(_) => "ThreadId".to_owned(),
+            Node::Ptr(_) => "Ptr".to_owned(),
+            Node::RawFunPtr(_) => "RawFunPtr".to_owned(),
+            Node::ForeignPtr { .. } => "ForeignPtr".to_owned(),
+            Node::Weak { .. } => "Weak".to_owned(),
+            Node::MVar(_) => "MVar".to_owned(),
+            Node::BigInt(_) => "BigInt".to_owned(),
+            Node::Bytes(_) => "Bytes".to_owned(),
+            Node::MutableBytes { .. } => "MutableBytes".to_owned(),
+            Node::Array(_) => "Array".to_owned(),
+            Node::Ffi(name) => format!("Ffi:{name}"),
+            Node::JsCall { tags, .. } => format!("JsCall:{tags}"),
+            Node::JsWrap { tags } => format!("JsWrap:{tags}"),
+            Node::FunPtr(name) => format!("FunPtr:{name}"),
+            Node::Tick(_) => "Tick".to_owned(),
+        }
+    }
+
     fn step(&mut self, root: NodeId, budget: usize) -> Result<Option<StepResult>, EvalError> {
         let spine = self.spine(root)?;
         let head = spine.head;
         let args = spine.args();
         let apps = spine.apps();
+        let profile_head = if self.profile.is_some() {
+            let heap_spine = matches!(&spine.storage, SpineStorage::Heap { .. });
+            self.profile_step(head, args.len(), heap_spine)
+        } else {
+            None
+        };
         if let Node::Ffi(name) = self.nodes[head.0].clone() {
             let Some((used, mut node)) = self.ffi_call(&name, &args)? else {
                 return Ok(None);
             };
             let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
-            return Ok(Some(StepResult {
-                node,
-                in_place,
-                reductions: 1,
-            }));
+            return Ok(Some(self.step_result(&profile_head, node, in_place, 1)));
         }
         if let Node::JsCall { tags, body } = self.nodes[head.0].clone() {
             let Some((used, mut node)) = self.js_call(&tags, &body, &args)? else {
                 return Ok(None);
             };
             let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
-            return Ok(Some(StepResult {
-                node,
-                in_place,
-                reductions: 1,
-            }));
+            return Ok(Some(self.step_result(&profile_head, node, in_place, 1)));
         }
         if let Node::JsWrap { tags } = self.nodes[head.0].clone() {
             let Some((used, mut node)) = self.js_wrap(&tags, &args)? else {
                 return Ok(None);
             };
             let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
-            return Ok(Some(StepResult {
-                node,
-                in_place,
-                reductions: 1,
-            }));
+            return Ok(Some(self.step_result(&profile_head, node, in_place, 1)));
         }
 
         let Node::Prim(name) = self.nodes[head.0].clone() else {
@@ -546,11 +655,7 @@ impl Program {
         if name == "U" && args.len() >= 2 {
             if let Some(mut node) = self.selector_pair_field(args[0], args[1])? {
                 let in_place = self.apply_reduction_spine(&mut node, 2, args, apps);
-                return Ok(Some(StepResult {
-                    node,
-                    in_place,
-                    reductions: 1,
-                }));
+                return Ok(Some(self.step_result(&profile_head, node, in_place, 1)));
             }
         }
 
@@ -561,22 +666,19 @@ impl Program {
                     .expect("preflighted ignored IO action should execute");
                 let mut node = self.app(args[1], world);
                 let in_place = self.apply_reduction_spine(&mut node, 3, args, apps);
-                return Ok(Some(StepResult {
+                return Ok(Some(self.step_result(
+                    &profile_head,
                     node,
                     in_place,
-                    reductions: reductions + 1,
-                }));
+                    reductions + 1,
+                )));
             }
             let k = self.prim("K");
             let then = self.app(k, args[1]);
             let action = self.app(args[0], args[2]);
             let mut node = self.app(action, then);
             let in_place = self.apply_reduction_spine(&mut node, 3, args, apps);
-            return Ok(Some(StepResult {
-                node,
-                in_place,
-                reductions: 2,
-            }));
+            return Ok(Some(self.step_result(&profile_head, node, in_place, 2)));
         }
 
         if name == "IO.>>=" && args.len() >= 3 {
@@ -584,11 +686,7 @@ impl Program {
                 let next = self.app(args[1], result);
                 let mut node = self.app(next, args[2]);
                 let in_place = self.apply_reduction_spine(&mut node, 3, args, apps);
-                return Ok(Some(StepResult {
-                    node,
-                    in_place,
-                    reductions: 2,
-                }));
+                return Ok(Some(self.step_result(&profile_head, node, in_place, 2)));
             }
         }
 
@@ -971,11 +1069,12 @@ impl Program {
             }
         }
         let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
-        Ok(Some(StepResult {
+        Ok(Some(self.step_result(
+            &profile_head,
             node,
             in_place,
             reductions,
-        }))
+        )))
     }
 
     fn ignored_io_action_reductions(
