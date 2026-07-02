@@ -6,11 +6,298 @@ use std::mem::{MaybeUninit, size_of};
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct NodeId(pub usize);
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum Prim {
+    Known(KnownPrim),
+    Other(String),
+}
+
+impl Prim {
+    pub fn from_name(name: &str) -> Self {
+        match KnownPrim::from_name(name) {
+            Some(known) => Self::Known(known),
+            None => Self::Other(name.to_owned()),
+        }
+    }
+
+    pub fn known(&self) -> Option<KnownPrim> {
+        match self {
+            Self::Known(known) => Some(*known),
+            Self::Other(_) => None,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Known(known) => known.name(),
+            Self::Other(name) => name,
+        }
+    }
+}
+
+impl fmt::Display for Prim {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl PartialEq<&str> for Prim {
+    fn eq(&self, other: &&str) -> bool {
+        self.name() == *other
+    }
+}
+
+impl PartialEq<&str> for &Prim {
+    fn eq(&self, other: &&str) -> bool {
+        self.name() == *other
+    }
+}
+
+impl PartialEq<KnownPrim> for Prim {
+    fn eq(&self, other: &KnownPrim) -> bool {
+        self.known() == Some(*other)
+    }
+}
+
+impl PartialEq<KnownPrim> for &Prim {
+    fn eq(&self, other: &KnownPrim) -> bool {
+        self.known() == Some(*other)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum KnownPrim {
+    A,
+    B,
+    BPrime,
+    C,
+    CPrime,
+    CPrimeB,
+    I,
+    J,
+    K,
+    K2,
+    K3,
+    K4,
+    KA,
+    KK,
+    L,
+    O,
+    P,
+    R,
+    S,
+    SPrime,
+    U,
+    Y,
+    Z,
+    Tag(u8),
+    Tuple(u8),
+    Chr,
+    Ord,
+    Catch,
+    CatchR,
+    Dynsym,
+    IsInt,
+    Raise,
+    Rnf,
+    Seq,
+    Thnum,
+    IoAtomic,
+    IoBind,
+    IoGc,
+    IoGetArgRef,
+    IoGetMaskingState,
+    IoLazyBind,
+    IoNewMVar,
+    IoPerformIo,
+    IoPp,
+    IoPrint,
+    IoPutMVar,
+    IoReadMVar,
+    IoReturn,
+    IoSerialize,
+    IoSetMaskingState,
+    IoStderr,
+    IoStdin,
+    IoStdout,
+    IoStrict,
+    IoTakeMVar,
+    IoThen,
+    IoThid,
+    IoThreadStatus,
+    IoTryPutMVar,
+    IoTryReadMVar,
+    IoTryTakeMVar,
+    IoYield,
+}
+
+impl KnownPrim {
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "A" => Self::A,
+            "B" => Self::B,
+            "B'" => Self::BPrime,
+            "C" => Self::C,
+            "C'" => Self::CPrime,
+            "C'B" => Self::CPrimeB,
+            "I" => Self::I,
+            "J" => Self::J,
+            "K" => Self::K,
+            "K2" => Self::K2,
+            "K3" => Self::K3,
+            "K4" => Self::K4,
+            "KA" => Self::KA,
+            "KK" => Self::KK,
+            "L" => Self::L,
+            "O" => Self::O,
+            "P" => Self::P,
+            "R" => Self::R,
+            "S" => Self::S,
+            "S'" => Self::SPrime,
+            "U" => Self::U,
+            "Y" => Self::Y,
+            "Z" => Self::Z,
+            "chr" => Self::Chr,
+            "ord" => Self::Ord,
+            "catch" => Self::Catch,
+            "catchr" => Self::CatchR,
+            "dynsym" => Self::Dynsym,
+            "isint" => Self::IsInt,
+            "raise" => Self::Raise,
+            "rnf" => Self::Rnf,
+            "seq" => Self::Seq,
+            "thnum" => Self::Thnum,
+            "IO.atomic" => Self::IoAtomic,
+            "IO.>>=" => Self::IoBind,
+            "IO.gc" => Self::IoGc,
+            "IO.getArgRef" => Self::IoGetArgRef,
+            "IO.getmaskingstate" => Self::IoGetMaskingState,
+            "IO.lazyBind" => Self::IoLazyBind,
+            "IO.newmvar" => Self::IoNewMVar,
+            "IO.performIO" => Self::IoPerformIo,
+            "IO.pp" => Self::IoPp,
+            "IO.print" => Self::IoPrint,
+            "IO.putmvar" => Self::IoPutMVar,
+            "IO.readmvar" => Self::IoReadMVar,
+            "IO.return" => Self::IoReturn,
+            "IO.serialize" => Self::IoSerialize,
+            "IO.setmaskingstate" => Self::IoSetMaskingState,
+            "IO.stderr" => Self::IoStderr,
+            "IO.stdin" => Self::IoStdin,
+            "IO.stdout" => Self::IoStdout,
+            "IO.strict" => Self::IoStrict,
+            "IO.takemvar" => Self::IoTakeMVar,
+            "IO.>>" => Self::IoThen,
+            "IO.thid" => Self::IoThid,
+            "IO.threadstatus" => Self::IoThreadStatus,
+            "IO.tryputmvar" => Self::IoTryPutMVar,
+            "IO.tryreadmvar" => Self::IoTryReadMVar,
+            "IO.trytakemvar" => Self::IoTryTakeMVar,
+            "IO.yield" => Self::IoYield,
+            _ => {
+                if let Some(tag) = tag_index(name) {
+                    return Some(Self::Tag(tag as u8));
+                }
+                if let Some(fields) = tuple_fields(name) {
+                    return Some(Self::Tuple(fields as u8));
+                }
+                return None;
+            }
+        })
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::A => "A",
+            Self::B => "B",
+            Self::BPrime => "B'",
+            Self::C => "C",
+            Self::CPrime => "C'",
+            Self::CPrimeB => "C'B",
+            Self::I => "I",
+            Self::J => "J",
+            Self::K => "K",
+            Self::K2 => "K2",
+            Self::K3 => "K3",
+            Self::K4 => "K4",
+            Self::KA => "KA",
+            Self::KK => "KK",
+            Self::L => "L",
+            Self::O => "O",
+            Self::P => "P",
+            Self::R => "R",
+            Self::S => "S",
+            Self::SPrime => "S'",
+            Self::U => "U",
+            Self::Y => "Y",
+            Self::Z => "Z",
+            Self::Tag(tag) => TAG_PRIM_NAMES
+                .get(tag as usize)
+                .copied()
+                .unwrap_or("<invalid-tag>"),
+            Self::Tuple(fields) => TUPLE_PRIM_NAMES
+                .get(fields as usize)
+                .copied()
+                .filter(|name| !name.is_empty())
+                .unwrap_or("<invalid-tuple>"),
+            Self::Chr => "chr",
+            Self::Ord => "ord",
+            Self::Catch => "catch",
+            Self::CatchR => "catchr",
+            Self::Dynsym => "dynsym",
+            Self::IsInt => "isint",
+            Self::Raise => "raise",
+            Self::Rnf => "rnf",
+            Self::Seq => "seq",
+            Self::Thnum => "thnum",
+            Self::IoAtomic => "IO.atomic",
+            Self::IoBind => "IO.>>=",
+            Self::IoGc => "IO.gc",
+            Self::IoGetArgRef => "IO.getArgRef",
+            Self::IoGetMaskingState => "IO.getmaskingstate",
+            Self::IoLazyBind => "IO.lazyBind",
+            Self::IoNewMVar => "IO.newmvar",
+            Self::IoPerformIo => "IO.performIO",
+            Self::IoPp => "IO.pp",
+            Self::IoPrint => "IO.print",
+            Self::IoPutMVar => "IO.putmvar",
+            Self::IoReadMVar => "IO.readmvar",
+            Self::IoReturn => "IO.return",
+            Self::IoSerialize => "IO.serialize",
+            Self::IoSetMaskingState => "IO.setmaskingstate",
+            Self::IoStderr => "IO.stderr",
+            Self::IoStdin => "IO.stdin",
+            Self::IoStdout => "IO.stdout",
+            Self::IoStrict => "IO.strict",
+            Self::IoTakeMVar => "IO.takemvar",
+            Self::IoThen => "IO.>>",
+            Self::IoThid => "IO.thid",
+            Self::IoThreadStatus => "IO.threadstatus",
+            Self::IoTryPutMVar => "IO.tryputmvar",
+            Self::IoTryReadMVar => "IO.tryreadmvar",
+            Self::IoTryTakeMVar => "IO.trytakemvar",
+            Self::IoYield => "IO.yield",
+        }
+    }
+}
+
+const TAG_PRIM_NAMES: [&str; 33] = [
+    "TAG0", "TAG1", "TAG2", "TAG3", "TAG4", "TAG5", "TAG6", "TAG7", "TAG8", "TAG9", "TAG10",
+    "TAG11", "TAG12", "TAG13", "TAG14", "TAG15", "TAG16", "TAG17", "TAG18", "TAG19", "TAG20",
+    "TAG21", "TAG22", "TAG23", "TAG24", "TAG25", "TAG26", "TAG27", "TAG28", "TAG29", "TAG30",
+    "TAG31", "TAG32",
+];
+
+const TUPLE_PRIM_NAMES: [&str; 17] = [
+    "", "", "", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10", "T11", "T12", "T13", "T14", "T15",
+    "T16",
+];
+
 #[derive(Clone, Debug)]
 pub enum Node {
     App(NodeId, NodeId),
     Indir(Option<NodeId>),
-    Prim(String),
+    Prim(Prim),
     Int(i64),
     Int64(i64),
     Float64(f64),
@@ -46,6 +333,12 @@ pub enum Node {
     },
     FunPtr(String),
     Tick(Vec<u8>),
+}
+
+impl Node {
+    pub fn prim(name: &str) -> Self {
+        Self::Prim(Prim::from_name(name))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -735,9 +1028,10 @@ impl Program {
             return Ok(Some(self.step_result(&profile_head, node, in_place, 1)));
         }
 
-        let Node::Prim(name) = self.nodes[head.0].clone() else {
+        let Node::Prim(prim) = self.nodes[head.0].clone() else {
             return Ok(None);
         };
+        let name = prim.name();
 
         if name == "U" && args.len() >= 2 {
             if let Some(mut node) = self.selector_pair_field(args[0], args[1])? {
@@ -780,7 +1074,7 @@ impl Program {
             }
         }
 
-        let rewrite = match name.as_str() {
+        let rewrite = match name {
             "I" | "ord" | "chr" if !args.is_empty() => Some((1, args[0])),
             "K" if args.len() >= 2 => Some((2, args[0])),
             "A" if args.len() >= 2 => Some((2, args[1])),
@@ -1141,7 +1435,7 @@ impl Program {
             return Ok(None);
         };
         let mut reductions = 1;
-        if is_identity_alias(&name) {
+        if is_identity_alias(name) {
             let mut alias_shortcuts = 0;
             while reductions < budget && used < args.len() && self.is_identity_alias_node(node)? {
                 node = args[used];
@@ -1217,7 +1511,7 @@ impl Program {
             }
             Node::Prim(name)
                 if matches!(
-                    name.as_str(),
+                    name.name(),
                     "IO.getArgRef" | "IO.getmaskingstate" | "IO.yield"
                 ) && args.is_empty() =>
             {
@@ -1478,7 +1772,7 @@ impl Program {
 
     fn is_identity_alias_node(&mut self, id: NodeId) -> Result<bool, EvalError> {
         let id = self.resolve_profiled(id)?;
-        Ok(matches!(&self.nodes[id.0], Node::Prim(name) if is_identity_alias(name)))
+        Ok(matches!(&self.nodes[id.0], Node::Prim(name) if is_identity_alias(name.name())))
     }
 
     fn app(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
@@ -1507,7 +1801,7 @@ impl Program {
             return id;
         }
 
-        let id = self.push_node(Node::Prim(name.to_owned()));
+        let id = self.push_node(Node::prim(name));
         match name {
             "A" => self.prim_cache.a = Some(id),
             "B" => self.prim_cache.b = Some(id),
@@ -2397,13 +2691,13 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let bytes = self.read_c_string(ptr)?;
                 host_js_debug(&bytes)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "js_eval_run" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let bytes = self.read_c_string(ptr)?;
                 host_js_eval_run(&bytes)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "js_eval_call" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -2414,32 +2708,32 @@ impl Program {
             "js_set_haskellCallback" => {
                 let callback = self.eval_int(args[0])?;
                 host_js_set_haskell_callback(callback as i32)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "new_mpz" => self.new_mpz_node()?,
             "mpz_init_set_si" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.write_mpz_value(ptr, MpzValue::from_i64(value))?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "mpz_init_set_ui" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])? as u64;
                 self.write_mpz_value(ptr, MpzValue::from_u64(value))?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "mpz_init_set_si64" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int64(args[1])?;
                 self.write_mpz_value(ptr, MpzValue::from_i64(value))?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "mpz_init_set_ui64" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int64(args[1])? as u64;
                 self.write_mpz_value(ptr, MpzValue::from_u64(value))?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "mpz_get_si" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -2463,7 +2757,7 @@ impl Program {
                 let mut value = self.mpz_value(src)?;
                 value.negative = false;
                 self.write_mpz_value(dst, value)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "mpz_neg" => {
                 let dst = self.eval_pointer_value(args[0])?;
@@ -2473,7 +2767,7 @@ impl Program {
                     value.negative = !value.negative;
                 }
                 self.write_mpz_value(dst, value)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "mpz_add" | "mpz_sub" | "mpz_mul" | "mpz_and" | "mpz_ior" | "mpz_xor" => {
                 let dst = self.eval_pointer_value(args[0])?;
@@ -2491,7 +2785,7 @@ impl Program {
                     _ => unreachable!("checked mpz binary op"),
                 };
                 self.write_mpz_value(dst, value)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "mpz_cmp" => {
                 let left_ptr = self.eval_pointer_value(args[0])?;
@@ -2509,14 +2803,14 @@ impl Program {
                 let src = self.eval_pointer_value(args[1])?;
                 let shift = int_to_usize(self.eval_int(args[2])?)?;
                 self.write_mpz_value(dst, self.mpz_value(src)?.shl_bits(shift))?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "mpz_fdiv_q_2exp" => {
                 let dst = self.eval_pointer_value(args[0])?;
                 let src = self.eval_pointer_value(args[1])?;
                 let shift = int_to_usize(self.eval_int(args[2])?)?;
                 self.write_mpz_value(dst, self.mpz_value(src)?.fdiv_q_2exp(shift))?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "mpz_tdiv_qr" => {
                 let q_ptr = self.eval_pointer_value(args[0])?;
@@ -2528,7 +2822,7 @@ impl Program {
                 let (quot, rem) = left.tdiv_qr(&right)?;
                 self.write_mpz_value(q_ptr, quot)?;
                 self.write_mpz_value(r_ptr, rem)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "mpz_popcount" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -2563,7 +2857,7 @@ impl Program {
             "free" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 self.free_memory(ptr)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "memcpy" | "memmove" => {
                 let dst = self.eval_pointer_value(args[0])?;
@@ -2571,7 +2865,7 @@ impl Program {
                 let len = int_to_usize(self.eval_int(args[2])?)?;
                 let bytes = self.read_pointer_bytes(src, len)?;
                 self.write_pointer_bytes(dst, &bytes)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "strcpy" => {
                 let dst = self.eval_pointer_value(args[0])?;
@@ -2579,7 +2873,7 @@ impl Program {
                 let mut bytes = self.read_c_string(src)?;
                 bytes.push(0);
                 self.write_pointer_bytes(dst, &bytes)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "strlen" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -2591,7 +2885,7 @@ impl Program {
                 let result = self.eval_pointer_value(args[1])?;
                 let bytes = self.read_c_string(input)?;
                 self.write_pointer_bytes(result, &md5_bytes(&bytes))?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "md5Array" => {
                 let input = self.eval_pointer_value(args[0])?;
@@ -2599,7 +2893,7 @@ impl Program {
                 let len = int_to_usize(self.eval_int(args[2])?)?;
                 let bytes = self.read_pointer_bytes(input, len)?;
                 self.write_pointer_bytes(result, &md5_bytes(&bytes))?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "md5BFILE" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -2613,7 +2907,7 @@ impl Program {
                     ctx.update(&bytes);
                 }
                 self.write_pointer_bytes(result, &ctx.finalize())?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "getenv" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -2888,7 +3182,7 @@ impl Program {
                 self.write_pointer_bytes(ptr, &buffer)?;
                 self.poke_signed(bufp, 8, ptr)?;
                 self.poke_signed(lenp, 8, len)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "getcpu" => {
                 let sec_ptr = self.eval_pointer_value(args[0])?;
@@ -2896,7 +3190,7 @@ impl Program {
                 let (sec, nsec) = cpu_time();
                 self.poke_unsigned(sec_ptr, size_of::<std::os::raw::c_ulong>(), sec)?;
                 self.poke_unsigned(nsec_ptr, size_of::<std::os::raw::c_ulong>(), nsec)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "gettimeofday" => {
                 let timeval_ptr = self.eval_pointer_value(args[0])?;
@@ -2978,12 +3272,12 @@ impl Program {
             "closeb" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 self.close_bfile(ptr)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "flushb" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 self.flush_bfile(ptr)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "getb" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -2993,13 +3287,13 @@ impl Program {
                 let byte = self.eval_int(args[0])?;
                 let ptr = self.eval_pointer_value(args[1])?;
                 self.put_bfile_byte(ptr, byte)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "ungetb" => {
                 let byte = self.eval_int(args[0])?;
                 let ptr = self.eval_pointer_value(args[1])?;
                 self.unget_bfile_byte(ptr, byte)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "readb" => {
                 let dst = self.eval_pointer_value(args[0])?;
@@ -3027,7 +3321,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_pointer_value(args[1])?;
                 self.poke_signed(ptr, 8, value)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peekWord" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3048,7 +3342,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_unsigned(ptr, 1, value as u64)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_uint16" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3058,7 +3352,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_unsigned(ptr, 2, value as u64)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_uint32" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3068,7 +3362,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_unsigned(ptr, 4, value as u64)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_uint64" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3089,7 +3383,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_signed(ptr, 1, value)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_int16" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3099,7 +3393,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_signed(ptr, 2, value)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_int32" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3109,7 +3403,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_signed(ptr, 4, value)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_int64" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3119,7 +3413,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int64(args[1])?;
                 self.poke_signed(ptr, 8, value)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_char" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3129,7 +3423,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_c_char(ptr, value)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_schar" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3139,7 +3433,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_signed(ptr, size_of::<std::os::raw::c_schar>(), value)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_uchar" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3149,7 +3443,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_unsigned(ptr, size_of::<std::os::raw::c_uchar>(), value as u64)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_short" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3159,7 +3453,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_signed(ptr, size_of::<std::os::raw::c_short>(), value)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_ushort" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3169,7 +3463,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_unsigned(ptr, size_of::<std::os::raw::c_ushort>(), value as u64)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_int" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3179,7 +3473,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_signed(ptr, size_of::<std::os::raw::c_int>(), value)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_uint" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3189,7 +3483,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_unsigned(ptr, size_of::<std::os::raw::c_uint>(), value as u64)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_long" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3199,7 +3493,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_signed(ptr, size_of::<std::os::raw::c_long>(), value)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_ulong" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3209,7 +3503,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_unsigned(ptr, size_of::<std::os::raw::c_ulong>(), value as u64)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_llong" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3219,7 +3513,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_signed(ptr, size_of::<std::os::raw::c_longlong>(), value)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_ullong" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3229,7 +3523,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_unsigned(ptr, size_of::<std::os::raw::c_ulonglong>(), value as u64)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_size_t" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3239,7 +3533,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_unsigned(ptr, size_of::<usize>(), value as u64)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_flt32" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3249,7 +3543,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_float32(args[1])?;
                 self.write_pointer_bytes(ptr, &value.to_ne_bytes())?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "peek_flt64" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3259,7 +3553,7 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_float64(args[1])?;
                 self.write_pointer_bytes(ptr, &value.to_ne_bytes())?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             "acos" => Node::Float64(self.eval_float64(args[0])?.acos()),
             "asin" => Node::Float64(self.eval_float64(args[0])?.asin()),
@@ -3403,19 +3697,16 @@ impl Program {
         let result = match tags[0] {
             b'V' => {
                 host_js_call_void(body, arity, &js_args)?;
-                Node::Prim("I".to_owned())
+                Node::prim("I")
             }
             b'D' => Node::Float64(host_js_call_double(body, arity, &js_args)?),
             b'F' => Node::Float32(host_js_call_double(body, arity, &js_args)? as f32),
             b'P' => Node::Ptr(i64::from(host_js_call_ptr(body, arity, &js_args)?)),
-            b'B' => Node::Prim(
-                if host_js_call_bool(body, arity, &js_args)? {
-                    "A"
-                } else {
-                    "K"
-                }
-                .to_owned(),
-            ),
+            b'B' => Node::prim(if host_js_call_bool(body, arity, &js_args)? {
+                "A"
+            } else {
+                "K"
+            }),
             b'S' => Node::Bytes(host_js_call_string(body, arity, &js_args)?),
             b'I' => Node::Int(i64::from(host_js_call_int(body, arity, &js_args)?)),
             b'U' => Node::Int(i64::from(host_js_call_uint(body, arity, &js_args)?)),
@@ -3581,7 +3872,7 @@ impl Program {
         let root = self.reduce_node_whnf(id, FORCE_REDUCTION_LIMIT)?;
         match &self.nodes[self.resolve(root)?.0] {
             Node::Int(n) | Node::Ptr(n) | Node::RawFunPtr(n) | Node::ThreadId(n) => Ok(*n),
-            Node::Prim(name) => std_handle_ptr(name).ok_or(EvalError::ExpectedPointer(root)),
+            Node::Prim(name) => std_handle_ptr(name.name()).ok_or(EvalError::ExpectedPointer(root)),
             _ => Err(EvalError::ExpectedPointer(root)),
         }
     }
@@ -3591,7 +3882,7 @@ impl Program {
         let id = self.resolve(root)?;
         match &self.nodes[id.0] {
             Node::ForeignPtr { .. } => Ok(id),
-            Node::Prim(name) if std_handle(name).is_some() => Ok(id),
+            Node::Prim(name) if std_handle(name.name()).is_some() => Ok(id),
             _ => Err(EvalError::ExpectedForeignPtr(root)),
         }
     }
@@ -6121,7 +6412,7 @@ impl Program {
                 out.push(b'@');
             }
             Node::Indir(_) => return Err(EvalError::DanglingIndirection(id)),
-            Node::Prim(name) => out.extend_from_slice(name.as_bytes()),
+            Node::Prim(name) => out.extend_from_slice(name.name().as_bytes()),
             Node::Int(n) => {
                 out.push(b'#');
                 push_display(out, *n);
@@ -6307,7 +6598,9 @@ impl Program {
     fn foreign_ptr_value(&self, id: NodeId) -> Result<i64, EvalError> {
         match &self.nodes[id.0] {
             Node::ForeignPtr { ptr, .. } => Ok(*ptr),
-            Node::Prim(name) => std_handle_ptr(name).ok_or(EvalError::ExpectedForeignPtr(id)),
+            Node::Prim(name) => {
+                std_handle_ptr(name.name()).ok_or(EvalError::ExpectedForeignPtr(id))
+            }
             _ => Err(EvalError::ExpectedForeignPtr(id)),
         }
     }
@@ -6521,7 +6814,7 @@ impl Program {
                 out.push(')');
             }
             Node::Indir(_) => out.push_str("<indir>"),
-            Node::Prim(name) => out.push_str(name),
+            Node::Prim(name) => out.push_str(name.name()),
             Node::Int(n) => out.push_str(&n.to_string()),
             Node::Int64(n) => {
                 out.push_str(&n.to_string());

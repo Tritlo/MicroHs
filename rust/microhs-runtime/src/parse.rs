@@ -196,7 +196,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     let name = self.token_string(c)?;
-                    let id = self.push(Node::Prim(name));
+                    let id = self.push(Node::prim(&name));
                     self.stack.push(id);
                 }
             }
