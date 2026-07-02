@@ -10138,11 +10138,10 @@ fn serialize_bytes_quoted(bytes: &[u8], out: &mut Vec<u8>) {
     out.push(b'"');
     for &byte in bytes {
         match byte {
-            b'"' | b'\\' => {
+            b'"' | b'\\' | b'^' | b'|' => {
                 out.push(b'\\');
                 out.push(byte);
             }
-            b'?' => out.extend_from_slice(b"\\?"),
             0xff => out.extend_from_slice(b"\\_"),
             0x20..=0x7e => out.push(byte),
             0x00..=0x1f => {
@@ -10263,6 +10262,7 @@ fn nibble(n: u8) -> char {
 
 #[cfg(test)]
 mod tests {
+    use super::serialize_bytes_quoted;
     use crate::{EvalError, Node, parse_program};
 
     fn whnf(input: &[u8]) -> String {
@@ -10317,6 +10317,33 @@ mod tests {
     #[test]
     fn resolves_shared_labels() {
         assert_eq!(whnf(b"v8.4\n1\nA #42 :0 @ _0 @ }"), "42");
+    }
+
+    #[test]
+    fn serializes_quoted_bytestring_escapes_like_c() {
+        let mut special = Vec::new();
+        serialize_bytes_quoted(b"?^|\\\"", &mut special);
+        assert_eq!(special, b"\"?\\^\\|\\\\\\\"\"");
+
+        for byte in 0u8..=255 {
+            let mut input = b"v8.4\n0\n".to_vec();
+            serialize_bytes_quoted(&[byte], &mut input);
+            input.extend_from_slice(b" }\n");
+
+            let program = parse_program(&input).unwrap();
+            match &program.nodes()[program.root().0] {
+                Node::Bytes(bytes) => assert_eq!(
+                    bytes.as_slice(),
+                    &[byte],
+                    "byte {byte:#04x} encoded as {}",
+                    String::from_utf8_lossy(&input)
+                ),
+                other => panic!(
+                    "byte {byte:#04x} parsed as {other:?} from {}",
+                    String::from_utf8_lossy(&input)
+                ),
+            }
+        }
     }
 
     #[test]
