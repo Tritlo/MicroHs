@@ -114,6 +114,12 @@ fn print_profile(profile: &EvalProfile, top: usize) {
     eprintln!("profile_reductions: {}", profile.reductions);
     eprintln!("profile_heap_spines: {}", profile.heap_spines);
     eprintln!("profile_max_spine_arity: {}", profile.max_spine_arity);
+    eprintln!("profile_resolve_calls: {}", profile.resolve_calls);
+    eprintln!(
+        "profile_resolve_indirections: {}",
+        profile.resolve_indirections
+    );
+    eprintln!("profile_max_resolve_chain: {}", profile.max_resolve_chain);
     eprintln!("profile_top_head_attempts:");
     for (head, count) in profile.top_head_attempts(top) {
         eprintln!("  {head}: {count}");
@@ -125,5 +131,13 @@ fn print_profile(profile: &EvalProfile, top: usize) {
     eprintln!("profile_spine_arity:");
     for (arity, count) in &profile.spine_arity {
         eprintln!("  {arity}: {count}");
+    }
+    eprintln!("profile_resolve_chain:");
+    for (depth, count) in &profile.resolve_chain {
+        eprintln!("  {depth}: {count}");
+    }
+    eprintln!("profile_shortcut_hits:");
+    for (shortcut, count) in profile.top_shortcut_hits(top) {
+        eprintln!("  {shortcut}: {count}");
     }
 }

@@ -302,9 +302,14 @@ pub struct EvalProfile {
     pub reductions: usize,
     pub heap_spines: usize,
     pub max_spine_arity: usize,
+    pub resolve_calls: usize,
+    pub resolve_indirections: usize,
+    pub max_resolve_chain: usize,
     pub head_attempts: HashMap<String, usize>,
     pub head_reductions: HashMap<String, usize>,
     pub spine_arity: BTreeMap<usize, usize>,
+    pub resolve_chain: BTreeMap<usize, usize>,
+    pub shortcut_hits: HashMap<String, usize>,
 }
 
 impl EvalProfile {
@@ -314,6 +319,10 @@ impl EvalProfile {
 
     pub fn top_head_reductions(&self, limit: usize) -> Vec<(&str, usize)> {
         sorted_profile_counts(&self.head_reductions, limit)
+    }
+
+    pub fn top_shortcut_hits(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.shortcut_hits, limit)
     }
 }
 
@@ -465,11 +474,29 @@ impl Program {
         }
     }
 
+    fn resolve_profiled(&mut self, mut id: NodeId) -> Result<NodeId, EvalError> {
+        let mut depth = 0;
+        loop {
+            match self.nodes.get(id.0) {
+                Some(Node::Indir(Some(next))) => {
+                    id = *next;
+                    depth += 1;
+                }
+                Some(Node::Indir(None)) => return Err(EvalError::DanglingIndirection(id)),
+                Some(_) => {
+                    self.profile_resolve_chain(depth);
+                    return Ok(id);
+                }
+                None => return Err(EvalError::DanglingIndirection(id)),
+            }
+        }
+    }
+
     pub fn reduce_whnf(&mut self, limit: usize) -> Result<(NodeId, usize), EvalError> {
         let mut root = self.root;
         let mut steps = 0;
         while steps < limit {
-            let current = self.resolve(root)?;
+            let current = self.resolve_profiled(root)?;
             let Some(step) = self.step(current, limit - steps)? else {
                 self.root = current;
                 return Ok((current, steps));
@@ -574,6 +601,32 @@ impl Program {
         profile.successful_steps += 1;
         profile.reductions += reductions;
         *profile.head_reductions.entry(key.clone()).or_default() += reductions;
+    }
+
+    #[cold]
+    fn profile_resolve_chain(&mut self, depth: usize) {
+        let Some(profile) = self.profile.as_mut() else {
+            return;
+        };
+        profile.resolve_calls += 1;
+        profile.resolve_indirections += depth;
+        profile.max_resolve_chain = profile.max_resolve_chain.max(depth);
+        *profile.resolve_chain.entry(depth).or_default() += 1;
+    }
+
+    #[cold]
+    fn profile_shortcut(&mut self, key: &'static str, count: usize) {
+        if count == 0 {
+            return;
+        }
+        let Some(profile) = self.profile.as_mut() else {
+            return;
+        };
+        if let Some(existing) = profile.shortcut_hits.get_mut(key) {
+            *existing += count;
+        } else {
+            profile.shortcut_hits.insert(key.to_owned(), count);
+        }
     }
 
     #[inline]
@@ -688,6 +741,7 @@ impl Program {
 
         if name == "U" && args.len() >= 2 {
             if let Some(mut node) = self.selector_pair_field(args[0], args[1])? {
+                self.profile_shortcut("selector_pair_field", 1);
                 let in_place = self.apply_reduction_spine(&mut node, 2, args, apps);
                 return Ok(Some(self.step_result(&profile_head, node, in_place, 1)));
             }
@@ -695,6 +749,7 @@ impl Program {
 
         if name == "IO.>>" && args.len() >= 3 && budget >= 2 {
             if let Some(reductions) = self.ignored_io_action_reductions(args[0], budget - 1)? {
+                self.profile_shortcut("io_then_ignored_action", 1);
                 let world = self
                     .run_ignored_io_action(args[0], args[2])?
                     .expect("preflighted ignored IO action should execute");
@@ -717,6 +772,7 @@ impl Program {
 
         if name == "IO.>>=" && args.len() >= 3 {
             if let Some(result) = self.io_return_action_result(args[0])? {
+                self.profile_shortcut("io_bind_return_action", 1);
                 let next = self.app(args[1], result);
                 let mut node = self.app(next, args[2]);
                 let in_place = self.apply_reduction_spine(&mut node, 3, args, apps);
@@ -1033,6 +1089,7 @@ impl Program {
                     if let Some(extra_used) =
                         self.tuple_first_field_selector_extra(selector, fields, available_extra)?
                     {
+                        self.profile_shortcut("tuple_first_field_selector", 1);
                         let mut node = args[0];
                         let used = fields + 1 + extra_used;
                         let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
@@ -1085,11 +1142,14 @@ impl Program {
         };
         let mut reductions = 1;
         if is_identity_alias(&name) {
+            let mut alias_shortcuts = 0;
             while reductions < budget && used < args.len() && self.is_identity_alias_node(node)? {
                 node = args[used];
                 used += 1;
                 reductions += 1;
+                alias_shortcuts += 1;
             }
+            self.profile_shortcut("identity_alias_chain", alias_shortcuts);
         }
         let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
         Ok(Some(self.step_result(
@@ -1101,7 +1161,7 @@ impl Program {
     }
 
     fn ignored_io_action_reductions(
-        &self,
+        &mut self,
         action: NodeId,
         budget: usize,
     ) -> Result<Option<usize>, EvalError> {
@@ -1109,7 +1169,7 @@ impl Program {
     }
 
     fn io_action_reductions(
-        &self,
+        &mut self,
         action: NodeId,
         budget: usize,
     ) -> Result<Option<usize>, EvalError> {
@@ -1180,12 +1240,12 @@ impl Program {
         Ok(self.run_io_action(action, world)?.map(|(_, world)| world))
     }
 
-    fn io_return_action_result(&self, action: NodeId) -> Result<Option<NodeId>, EvalError> {
-        let action = self.resolve(action)?;
+    fn io_return_action_result(&mut self, action: NodeId) -> Result<Option<NodeId>, EvalError> {
+        let action = self.resolve_profiled(action)?;
         let Node::App(fun, result) = self.nodes[action.0] else {
             return Ok(None);
         };
-        let fun = self.resolve(fun)?;
+        let fun = self.resolve_profiled(fun)?;
         Ok(match &self.nodes[fun.0] {
             Node::Prim(name) if name == "IO.return" => Some(result),
             _ => None,
@@ -1255,8 +1315,8 @@ impl Program {
         }
     }
 
-    fn direct_ffi_continuation_accepts_result(&self, cont: NodeId) -> Result<bool, EvalError> {
-        let cont = self.resolve(cont)?;
+    fn direct_ffi_continuation_accepts_result(&mut self, cont: NodeId) -> Result<bool, EvalError> {
+        let cont = self.resolve_profiled(cont)?;
         let Node::Ffi(name) = self.nodes[cont.0].clone() else {
             return Ok(false);
         };
@@ -1266,16 +1326,16 @@ impl Program {
         Ok(arity == 1)
     }
 
-    fn pair_fields(&self, pair: NodeId) -> Result<Option<(NodeId, NodeId)>, EvalError> {
-        let pair = self.resolve(pair)?;
+    fn pair_fields(&mut self, pair: NodeId) -> Result<Option<(NodeId, NodeId)>, EvalError> {
+        let pair = self.resolve_profiled(pair)?;
         let Node::App(result_pair, world) = self.nodes[pair.0] else {
             return Ok(None);
         };
-        let result_pair = self.resolve(result_pair)?;
+        let result_pair = self.resolve_profiled(result_pair)?;
         let Node::App(pair_constructor, result) = self.nodes[result_pair.0] else {
             return Ok(None);
         };
-        let pair_constructor = self.resolve(pair_constructor)?;
+        let pair_constructor = self.resolve_profiled(pair_constructor)?;
         Ok(match &self.nodes[pair_constructor.0] {
             Node::Prim(name) if name == "P" => Some((result, world)),
             _ => None,
@@ -1287,7 +1347,7 @@ impl Program {
         selector: NodeId,
         pair: NodeId,
     ) -> Result<Option<NodeId>, EvalError> {
-        let selector = self.resolve(selector)?;
+        let selector = self.resolve_profiled(selector)?;
         let field = match &self.nodes[selector.0] {
             Node::Prim(name) if name == "K" => 0,
             Node::Prim(name) if name == "A" => 1,
@@ -1301,12 +1361,12 @@ impl Program {
     }
 
     fn tuple_first_field_selector_extra(
-        &self,
+        &mut self,
         selector: NodeId,
         fields: usize,
         available_extra: usize,
     ) -> Result<Option<usize>, EvalError> {
-        let selector = self.resolve(selector)?;
+        let selector = self.resolve_profiled(selector)?;
         let arity = match &self.nodes[selector.0] {
             Node::Prim(name) if name == "K2" => 3,
             Node::Prim(name) if name == "K3" => 4,
@@ -1320,14 +1380,14 @@ impl Program {
         Ok((extra <= available_extra).then_some(extra))
     }
 
-    fn spine(&self, root: NodeId) -> Result<Spine, EvalError> {
-        let mut node = self.resolve(root)?;
+    fn spine(&mut self, root: NodeId) -> Result<Spine, EvalError> {
+        let mut node = self.resolve_profiled(root)?;
         let mut inline_args = [const { MaybeUninit::uninit() }; INLINE_SPINE];
         let mut inline_apps = [const { MaybeUninit::uninit() }; INLINE_SPINE];
         let mut inline_len = 0;
         let mut heap: Option<(Vec<NodeId>, Vec<NodeId>)> = None;
         while let Node::App(fun, arg) = self.nodes[node.0] {
-            let arg = self.resolve(arg)?;
+            let arg = self.resolve_profiled(arg)?;
             if let Some((args, apps)) = &mut heap {
                 args.push(arg);
                 apps.push(node);
@@ -1348,7 +1408,7 @@ impl Program {
                 apps.push(node);
                 heap = Some((args, apps));
             }
-            node = self.resolve(fun)?;
+            node = self.resolve_profiled(fun)?;
         }
         let storage = if let Some((mut args, mut apps)) = heap {
             args.reverse();
@@ -1416,8 +1476,8 @@ impl Program {
         (node, true)
     }
 
-    fn is_identity_alias_node(&self, id: NodeId) -> Result<bool, EvalError> {
-        let id = self.resolve(id)?;
+    fn is_identity_alias_node(&mut self, id: NodeId) -> Result<bool, EvalError> {
+        let id = self.resolve_profiled(id)?;
         Ok(matches!(&self.nodes[id.0], Node::Prim(name) if is_identity_alias(name)))
     }
 
