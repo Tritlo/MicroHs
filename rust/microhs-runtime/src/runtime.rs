@@ -1820,6 +1820,24 @@ impl Program {
                 };
                 Node::Ptr(ptr)
             }
+            "tmpname" => {
+                let pre_ptr = self.eval_pointer_value(args[0])?;
+                let suf_ptr = self.eval_pointer_value(args[1])?;
+                let pre = self.read_c_string(pre_ptr)?;
+                let suf = self.read_c_string(suf_ptr)?;
+                match tmpname_bytes(&pre, &suf) {
+                    Ok(mut bytes) => {
+                        bytes.push(0);
+                        let ptr = self.alloc_memory(bytes.len())?;
+                        self.write_pointer_bytes(ptr, &bytes)?;
+                        Node::Ptr(ptr)
+                    }
+                    Err(errno) => {
+                        self.set_errno_value(errno)?;
+                        Node::Ptr(0)
+                    }
+                }
+            }
             "opendir" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let path = self.read_c_string(ptr)?;
@@ -1949,6 +1967,14 @@ impl Program {
                 self.write_pointer_bytes(ptr, &buffer)?;
                 self.poke_signed(bufp, 8, ptr)?;
                 self.poke_signed(lenp, 8, len)?;
+                Node::Prim("I".to_owned())
+            }
+            "getcpu" => {
+                let sec_ptr = self.eval_pointer_value(args[0])?;
+                let nsec_ptr = self.eval_pointer_value(args[1])?;
+                let (sec, nsec) = cpu_time();
+                self.poke_unsigned(sec_ptr, size_of::<std::os::raw::c_ulong>(), sec)?;
+                self.poke_unsigned(nsec_ptr, size_of::<std::os::raw::c_ulong>(), nsec)?;
                 Node::Prim("I".to_owned())
             }
             "closeb" => {
@@ -6063,8 +6089,52 @@ fn current_time_micro() -> i64 {
     }
 }
 
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn current_time_nanos() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let Ok(duration) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return 0;
+    };
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    not(target_arch = "wasm32")
+))]
+fn cpu_time() -> (u64, u64) {
+    let mut ts = std::mem::MaybeUninit::<libc::timespec>::uninit();
+    // SAFETY: clock_gettime writes the timespec on success. The pointer is valid for one call.
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, ts.as_mut_ptr()) };
+    if rc != 0 {
+        return (0, 0);
+    }
+    // SAFETY: the call above succeeded, so the timespec has been initialized.
+    let ts = unsafe { ts.assume_init() };
+    (
+        u64::try_from(ts.tv_sec).unwrap_or(0),
+        u64::try_from(ts.tv_nsec).unwrap_or(0),
+    )
+}
+
+#[cfg(any(
+    target_arch = "wasm32",
+    not(any(target_os = "linux", target_os = "android"))
+))]
+fn cpu_time() -> (u64, u64) {
+    (0, 0)
+}
+
 fn errno_i32(name: &str) -> i32 {
     errno_constant(name).unwrap_or(-1) as i32
+}
+
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn last_errno() -> i32 {
+    std::io::Error::last_os_error()
+        .raw_os_error()
+        .unwrap_or_else(|| errno_i32("ENOENT"))
 }
 
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -6615,6 +6685,83 @@ fn executable_path_bytes() -> Result<Vec<u8>, i32> {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
+fn tmpname_bytes(pre: &[u8], suf: &[u8]) -> Result<Vec<u8>, i32> {
+    use std::ffi::{CString, OsString};
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::io::RawFd;
+
+    let tmpdir = std::env::var_os("TMPDIR")
+        .unwrap_or_else(|| OsString::from("/tmp"))
+        .into_vec();
+    let mut template = Vec::with_capacity(tmpdir.len() + pre.len() + suf.len() + 8);
+    template.extend_from_slice(&tmpdir);
+    template.push(b'/');
+    template.extend_from_slice(pre);
+    template.extend_from_slice(b"XXXXXX");
+    template.extend_from_slice(suf);
+    template.push(0);
+    let suffix_len = std::os::raw::c_int::try_from(suf.len()).map_err(|_| errno_i32("EINVAL"))?;
+    let path = CString::from_vec_with_nul(template).map_err(|_| errno_i32("EINVAL"))?;
+    let mut bytes = path.into_bytes_with_nul();
+    // SAFETY: mkstemps mutates the NUL-terminated template in place and returns a file descriptor.
+    let fd: RawFd = unsafe { libc::mkstemps(bytes.as_mut_ptr().cast(), suffix_len) };
+    if fd < 0 {
+        return Err(last_errno());
+    }
+    // SAFETY: fd came from mkstemps and is not used after this close.
+    unsafe {
+        libc::close(fd);
+    }
+    bytes.pop();
+    Ok(bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn tmpname_bytes(pre: &[u8], suf: &[u8]) -> Result<Vec<u8>, i32> {
+    let _ = (pre, suf);
+    Err(errno_i32("ENOSYS"))
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn tmpname_bytes(pre: &[u8], suf: &[u8]) -> Result<Vec<u8>, i32> {
+    let pre = std::str::from_utf8(pre).map_err(|_| errno_i32("EINVAL"))?;
+    let suf = std::str::from_utf8(suf).map_err(|_| errno_i32("EINVAL"))?;
+    let tmpdir = std::env::temp_dir();
+    let seed = current_time_nanos() ^ u64::from(std::process::id());
+    for attempt in 0..1024 {
+        let mut name = String::with_capacity(pre.len() + 6 + suf.len());
+        name.push_str(pre);
+        name.push_str(
+            std::str::from_utf8(&tmp_six(seed.wrapping_add(attempt))).unwrap_or("XXXXXX"),
+        );
+        name.push_str(suf);
+        let path = tmpdir.join(name);
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => return Ok(path.to_string_lossy().into_owned().into_bytes()),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT"))),
+        }
+    }
+    Err(errno_i32("EEXIST"))
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn tmp_six(mut value: u64) -> [u8; 6] {
+    const ALPHABET: &[u8; 36] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let mut out = [b'0'; 6];
+    for byte in &mut out {
+        *byte = ALPHABET[(value % 36) as usize];
+        value /= 36;
+    }
+    out
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
 fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
@@ -6979,14 +7126,14 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "sinf"
         | "sqrtf"
         | "tanf" => 1,
-        "calloc" | "realloc" | "strcpy" | "fopen" | "add_buf" | "mkdir" | "getcwd"
+        "calloc" | "realloc" | "strcpy" | "fopen" | "tmpname" | "add_buf" | "mkdir" | "getcwd"
         | "set_permissions" | "md5BFILE" | "md5String" | "pokePtr" | "pokeWord" | "poke_uint8"
         | "poke_uint16" | "poke_uint32" | "poke_uint64" | "poke_int8" | "poke_int16"
         | "poke_int32" | "poke_int64" | "poke_char" | "poke_schar" | "poke_uchar"
         | "poke_short" | "poke_ushort" | "poke_int" | "poke_uint" | "poke_long" | "poke_ulong"
         | "poke_llong" | "poke_ullong" | "poke_size_t" | "poke_flt32" | "poke_flt64"
-        | "openb_rd_mem" | "putb" | "ungetb" | "atan2" | "pow" | "scalbn" | "atan2f" | "powf"
-        | "scalbnf" => 2,
+        | "openb_rd_mem" | "getcpu" | "putb" | "ungetb" | "atan2" | "pow" | "scalbn" | "atan2f"
+        | "powf" | "scalbnf" => 2,
         "memcpy" | "memmove" | "setenv" | "md5Array" | "get_mem" | "readb" | "writeb" => 3,
         "strerror_r" => 3,
         _ => return None,
