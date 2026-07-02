@@ -53,6 +53,7 @@ cargo run --release --bin mhs-rust-bench -- --scenario getenv-chain:200 --iters 
 cargo run --release --bin mhs-rust-bench -- --scenario remove-missing-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario file-read-close-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario utf8-bfile-read-chain:200 --iters 1000
+cargo run --release --bin mhs-rust-bench -- --scenario crlf-bfile-read-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario buf-bfile-read-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario bfile-read-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario mvar-chain:200 --iters 1000

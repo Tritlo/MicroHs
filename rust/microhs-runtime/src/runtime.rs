@@ -82,6 +82,9 @@ enum BFileKind {
         inner: i64,
         unget: Option<i64>,
     },
+    Crlf {
+        inner: i64,
+    },
     Buf {
         inner: i64,
         unget: Option<i64>,
@@ -1642,6 +1645,10 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 Node::Ptr(self.add_utf8_bfile(ptr)?)
             }
+            "add_crlf" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Ptr(self.add_crlf_bfile(ptr)?)
+            }
             "add_buf" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let size = self.eval_int(args[1])?;
@@ -2301,6 +2308,15 @@ impl Program {
         })
     }
 
+    fn add_crlf_bfile(&mut self, ptr: i64) -> Result<i64, EvalError> {
+        let (readable, writable) = self.bfile_permissions(ptr)?;
+        self.alloc_bfile(BFile {
+            kind: BFileKind::Crlf { inner: ptr },
+            readable,
+            writable,
+        })
+    }
+
     fn add_buf_bfile(&mut self, ptr: i64, bufsize: i64) -> Result<i64, EvalError> {
         let (readable, writable) = self.bfile_permissions(ptr)?;
         let linebuf = bufsize < 0;
@@ -2593,7 +2609,9 @@ impl Program {
                 .and_then(Option::as_ref)
                 .ok_or(EvalError::InvalidHandle)?;
             match &bfile.kind {
-                BFileKind::Utf8 { inner, .. } | BFileKind::Buf { inner, .. } => Some(*inner),
+                BFileKind::Utf8 { inner, .. }
+                | BFileKind::Crlf { inner }
+                | BFileKind::Buf { inner, .. } => Some(*inner),
                 _ => None,
             }
         };
@@ -2624,6 +2642,7 @@ impl Program {
             let bfile = self.bfile_mut(ptr)?;
             match &mut bfile.kind {
                 BFileKind::Utf8 { inner, .. } => Some((*inner, Vec::new())),
+                BFileKind::Crlf { inner } => Some((*inner, Vec::new())),
                 BFileKind::Buf {
                     inner,
                     buffer,
@@ -2672,6 +2691,7 @@ impl Program {
         }
         enum SpecialBFileRead {
             Utf8(i64),
+            Crlf(i64),
             Buf,
         }
         let special = {
@@ -2686,12 +2706,14 @@ impl Program {
                     }
                     Some(SpecialBFileRead::Utf8(*inner))
                 }
+                BFileKind::Crlf { inner } => Some(SpecialBFileRead::Crlf(*inner)),
                 BFileKind::Buf { .. } => Some(SpecialBFileRead::Buf),
                 _ => None,
             }
         };
         match special {
             Some(SpecialBFileRead::Utf8(inner)) => return self.get_utf8_bfile_byte(inner),
+            Some(SpecialBFileRead::Crlf(inner)) => return self.get_crlf_bfile_byte(inner),
             Some(SpecialBFileRead::Buf) => return self.get_buf_bfile_byte(ptr),
             None => {}
         }
@@ -2720,8 +2742,24 @@ impl Program {
                 }
             }
             BFileKind::Utf8 { .. } => unreachable!("handled above"),
+            BFileKind::Crlf { .. } => unreachable!("handled above"),
             BFileKind::Buf { .. } => unreachable!("handled above"),
         }
+    }
+
+    fn get_crlf_bfile_byte(&mut self, inner: i64) -> Result<i64, EvalError> {
+        let byte = self.get_bfile_byte(inner)?;
+        if byte != i64::from(b'\r') {
+            return Ok(byte);
+        }
+        let next = self.get_bfile_byte(inner)?;
+        if next == i64::from(b'\n') {
+            return Ok(next);
+        }
+        if next >= 0 {
+            self.unget_bfile_byte(inner, next)?;
+        }
+        Ok(byte)
     }
 
     fn get_buf_bfile_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
@@ -2789,10 +2827,20 @@ impl Program {
     }
 
     fn unget_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
-        let bfile = self.bfile_mut(ptr)?;
-        if !bfile.readable {
-            return Err(EvalError::InvalidHandle);
+        let crlf_inner = {
+            let bfile = self.bfile_mut(ptr)?;
+            if !bfile.readable {
+                return Err(EvalError::InvalidHandle);
+            }
+            match &bfile.kind {
+                BFileKind::Crlf { inner } => Some(*inner),
+                _ => None,
+            }
+        };
+        if let Some(inner) = crlf_inner {
+            return self.unget_bfile_byte(inner, byte);
         }
+        let bfile = self.bfile_mut(ptr)?;
         match &mut bfile.kind {
             BFileKind::Memory { bytes, pos } => {
                 if *pos == 0 {
@@ -2817,6 +2865,7 @@ impl Program {
                 *unget = Some(byte);
                 Ok(())
             }
+            BFileKind::Crlf { .. } => unreachable!("handled above"),
             BFileKind::Buf { unget, .. } => {
                 if unget.is_some() {
                     return Err(EvalError::InvalidHandle);
@@ -2833,6 +2882,7 @@ impl Program {
         }
         enum SpecialBFileWrite {
             Utf8(i64),
+            Crlf(i64),
             Buf,
         }
         let special = {
@@ -2842,12 +2892,14 @@ impl Program {
             }
             match &bfile.kind {
                 BFileKind::Utf8 { inner, .. } => Some(SpecialBFileWrite::Utf8(*inner)),
+                BFileKind::Crlf { inner } => Some(SpecialBFileWrite::Crlf(*inner)),
                 BFileKind::Buf { .. } => Some(SpecialBFileWrite::Buf),
                 _ => None,
             }
         };
         match special {
             Some(SpecialBFileWrite::Utf8(inner)) => return self.put_utf8_bfile_byte(inner, byte),
+            Some(SpecialBFileWrite::Crlf(inner)) => return self.put_crlf_bfile_byte(inner, byte),
             Some(SpecialBFileWrite::Buf) => return self.put_buf_bfile_byte(ptr, byte),
             None => {}
         }
@@ -2873,8 +2925,16 @@ impl Program {
                     .map_err(|_| EvalError::InvalidHandle)
             }
             BFileKind::Utf8 { .. } => unreachable!("handled above"),
+            BFileKind::Crlf { .. } => unreachable!("handled above"),
             BFileKind::Buf { .. } => unreachable!("handled above"),
         }
+    }
+
+    fn put_crlf_bfile_byte(&mut self, inner: i64, byte: i64) -> Result<(), EvalError> {
+        if byte == i64::from(b'\n') {
+            self.put_bfile_byte(inner, i64::from(b'\r'))?;
+        }
+        self.put_bfile_byte(inner, byte)
     }
 
     fn put_buf_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
@@ -2976,7 +3036,10 @@ impl Program {
             if !bfile.readable {
                 return Err(EvalError::InvalidHandle);
             }
-            matches!(&bfile.kind, BFileKind::Utf8 { .. } | BFileKind::Buf { .. })
+            matches!(
+                &bfile.kind,
+                BFileKind::Utf8 { .. } | BFileKind::Crlf { .. } | BFileKind::Buf { .. }
+            )
         };
         if uses_getb_fallback {
             let mut bytes = Vec::with_capacity(len);
@@ -3022,7 +3085,9 @@ impl Program {
                 bytes.truncate(read);
                 Ok(bytes)
             }
-            BFileKind::Utf8 { .. } | BFileKind::Buf { .. } => unreachable!("handled above"),
+            BFileKind::Utf8 { .. } | BFileKind::Crlf { .. } | BFileKind::Buf { .. } => {
+                unreachable!("handled above")
+            }
         }
     }
 
@@ -3041,7 +3106,10 @@ impl Program {
             if !bfile.writable {
                 return Err(EvalError::InvalidHandle);
             }
-            matches!(&bfile.kind, BFileKind::Utf8 { .. } | BFileKind::Buf { .. })
+            matches!(
+                &bfile.kind,
+                BFileKind::Utf8 { .. } | BFileKind::Crlf { .. } | BFileKind::Buf { .. }
+            )
         };
         if uses_putb_fallback {
             for byte in bytes {
@@ -3067,7 +3135,9 @@ impl Program {
                     .write_all(bytes)
                     .map_err(|_| EvalError::InvalidHandle)?;
             }
-            BFileKind::Utf8 { .. } | BFileKind::Buf { .. } => unreachable!("handled above"),
+            BFileKind::Utf8 { .. } | BFileKind::Crlf { .. } | BFileKind::Buf { .. } => {
+                unreachable!("handled above")
+            }
         }
         Ok(bytes.len())
     }
@@ -3082,6 +3152,7 @@ impl Program {
             #[cfg(not(target_arch = "wasm32"))]
             BFileKind::NativeFile { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Utf8 { .. } => Err(EvalError::InvalidHandle),
+            BFileKind::Crlf { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Buf { .. } => Err(EvalError::InvalidHandle),
         }
     }
@@ -4414,14 +4485,14 @@ fn ffi_arity(name: &str) -> Option<usize> {
         "GETRAW" | "GETTIMEMICRO" | "islinux" | "ismacos" | "iswindows" | "sizeof_char"
         | "sizeof_short" | "sizeof_int" | "sizeof_long" | "sizeof_llong" | "sizeof_size_t"
         | "want_gmp" | "want_imath" | "&closeb" | "&free" | "openb_wr_mem" => 0,
-        "malloc" | "free" | "strlen" | "getenv" | "remove" | "add_FILE" | "add_utf8" | "closeb"
-        | "flushb" | "getb" | "peekPtr" | "peekWord" | "peek_uint8" | "peek_uint16"
-        | "peek_uint32" | "peek_uint64" | "peek_int8" | "peek_int16" | "peek_int32"
-        | "peek_int64" | "peek_char" | "peek_schar" | "peek_uchar" | "peek_short"
-        | "peek_ushort" | "peek_int" | "peek_uint" | "peek_long" | "peek_ulong" | "peek_llong"
-        | "peek_ullong" | "peek_size_t" | "peek_flt32" | "peek_flt64" | "acos" | "asin"
-        | "atan" | "cos" | "exp" | "log" | "sin" | "sqrt" | "tan" | "acosf" | "asinf" | "atanf"
-        | "cosf" | "expf" | "logf" | "sinf" | "sqrtf" | "tanf" => 1,
+        "malloc" | "free" | "strlen" | "getenv" | "remove" | "add_FILE" | "add_utf8"
+        | "add_crlf" | "closeb" | "flushb" | "getb" | "peekPtr" | "peekWord" | "peek_uint8"
+        | "peek_uint16" | "peek_uint32" | "peek_uint64" | "peek_int8" | "peek_int16"
+        | "peek_int32" | "peek_int64" | "peek_char" | "peek_schar" | "peek_uchar"
+        | "peek_short" | "peek_ushort" | "peek_int" | "peek_uint" | "peek_long" | "peek_ulong"
+        | "peek_llong" | "peek_ullong" | "peek_size_t" | "peek_flt32" | "peek_flt64" | "acos"
+        | "asin" | "atan" | "cos" | "exp" | "log" | "sin" | "sqrt" | "tan" | "acosf" | "asinf"
+        | "atanf" | "cosf" | "expf" | "logf" | "sinf" | "sqrtf" | "tanf" => 1,
         "calloc" | "realloc" | "strcpy" | "fopen" | "add_buf" | "pokePtr" | "pokeWord"
         | "poke_uint8" | "poke_uint16" | "poke_uint32" | "poke_uint64" | "poke_int8"
         | "poke_int16" | "poke_int32" | "poke_int64" | "poke_char" | "poke_schar"
