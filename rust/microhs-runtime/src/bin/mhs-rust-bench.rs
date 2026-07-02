@@ -1075,6 +1075,15 @@ fn print_profile(profile: &ProfileBench, top: usize) {
         "profile_max_spine_arity: {}",
         profile.profile.max_spine_arity
     );
+    println!("profile_resolve_calls: {}", profile.profile.resolve_calls);
+    println!(
+        "profile_resolve_indirections: {}",
+        profile.profile.resolve_indirections
+    );
+    println!(
+        "profile_max_resolve_chain: {}",
+        profile.profile.max_resolve_chain
+    );
     println!("profile_top_head_attempts:");
     for (head, count) in profile.profile.top_head_attempts(top) {
         println!("  {head}: {count}");
@@ -1086,6 +1095,14 @@ fn print_profile(profile: &ProfileBench, top: usize) {
     println!("profile_spine_arity:");
     for (arity, count) in &profile.profile.spine_arity {
         println!("  {arity}: {count}");
+    }
+    println!("profile_resolve_chain:");
+    for (depth, count) in &profile.profile.resolve_chain {
+        println!("  {depth}: {count}");
+    }
+    println!("profile_shortcut_hits:");
+    for (shortcut, count) in profile.profile.top_shortcut_hits(top) {
+        println!("  {shortcut}: {count}");
     }
 }
 
