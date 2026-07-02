@@ -82,6 +82,13 @@ init_runtime(void)
 #endif
 }
 
+static void
+reset_iteration_state(void)
+{
+  for (size_t i = 1; i < sp_capacity; i++)
+    sp_table[i] = NIL;
+}
+
 static NODEPTR
 start_whnf(NODEPTR root)
 {
@@ -148,6 +155,7 @@ bench_once(const uint8_t *input, size_t len, enum bench_mode mode)
   size_t out_len;
 
   closeb(in);
+  reset_iteration_state();
   CLEARSTK();
   if (mode == BENCH_MAIN)
     start_exec(prog);

@@ -888,13 +888,14 @@ fn bench_eval(input: &[u8], warmup_iters: usize, iters: usize) -> EvalBench {
 
 fn eval_once(input: &[u8]) -> (usize, usize) {
     let mut program = parse_program(black_box(input)).expect("reduce benchmark input");
+    program.set_program_args(vec![b"mhsbench".to_vec()]);
     let (root, steps) = program
         .reduce_whnf(usize::MAX)
         .expect("reduce benchmark input");
     let serialized = program
         .serialize_program(root)
         .expect("serialize benchmark result");
-    let sink = bytes_sink(serialized.as_bytes());
+    let sink = bytes_sink(&serialized);
     black_box(&serialized);
     (steps, sink)
 }

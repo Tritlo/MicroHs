@@ -16,7 +16,9 @@ fn usage() {
 fn main() -> ExitCode {
     let mut mode = Mode::Whnf;
     let mut file = None;
-    for arg in env::args().skip(1) {
+    let mut args = env::args();
+    let program_name = args.next().unwrap_or_else(|| "mhs-rust".to_owned());
+    for arg in args {
         match arg.as_str() {
             "--dump" => mode = Mode::Dump,
             "--whnf" => mode = Mode::Whnf,
@@ -52,6 +54,7 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    program.set_program_args(vec![program_name.into_bytes()]);
 
     match mode {
         Mode::Dump => {

@@ -264,6 +264,7 @@ pub struct Program {
     allocations: Vec<Option<Vec<u8>>>,
     bfiles: Vec<Option<BFile>>,
     dirs: Vec<Option<DirHandle>>,
+    program_args: Vec<Vec<u8>>,
     errno_value: i32,
     errno_ptr: Option<i64>,
     masking_state: i64,
@@ -292,6 +293,7 @@ impl Program {
             allocations: Vec::new(),
             bfiles: Vec::new(),
             dirs: Vec::new(),
+            program_args: Vec::new(),
             errno_value: 0,
             errno_ptr: None,
             masking_state: 0,
@@ -305,6 +307,10 @@ impl Program {
 
     pub fn nodes(&self) -> &[Node] {
         &self.nodes
+    }
+
+    pub fn set_program_args(&mut self, args: Vec<Vec<u8>>) {
+        self.program_args = args;
     }
 
     pub fn label(&self, label: usize) -> Option<NodeId> {
@@ -492,12 +498,12 @@ impl Program {
                 let handle = self.eval_io_handle(args[0])?;
                 let value = self.reduce_node_whnf(args[1], 10_000)?;
                 let serialized = self.serialize_program(value)?;
-                self.write_io_handle(handle, &serialized)?;
+                self.write_io_handle_bytes(handle, &serialized)?;
                 let unit = self.prim("I");
                 Some((3, self.pair(unit, args[2])))
             }
             "IO.getArgRef" if !args.is_empty() => {
-                let arg_array = self.push_node(Node::Array(Vec::new()));
+                let arg_array = self.arg_ref_array();
                 Some((1, self.pair(arg_array, args[0])))
             }
             "IO.thid" if !args.is_empty() => {
@@ -5184,10 +5190,10 @@ impl Program {
         }
     }
 
-    pub fn serialize_program(&self, root: NodeId) -> Result<String, EvalError> {
-        let mut out = String::from("v8.4\n0\n");
+    pub fn serialize_program(&self, root: NodeId) -> Result<Vec<u8>, EvalError> {
+        let mut out = b"v8.4\n0\n".to_vec();
         self.serialize_comb_into(root, 0, &mut out)?;
-        out.push_str(" }\n");
+        out.extend_from_slice(b"}\n");
         Ok(out)
     }
 
@@ -5195,73 +5201,73 @@ impl Program {
         &self,
         id: NodeId,
         depth: usize,
-        out: &mut String,
+        out: &mut Vec<u8>,
     ) -> Result<(), EvalError> {
         if depth > 10_000 {
             return Err(EvalError::StepLimit { limit: depth });
         }
         let id = self.resolve(id)?;
+        let is_app = matches!(&self.nodes[id.0], Node::App(_, _));
         match &self.nodes[id.0] {
             Node::App(fun, arg) => {
                 self.serialize_comb_into(*fun, depth + 1, out)?;
-                out.push(' ');
                 self.serialize_comb_into(*arg, depth + 1, out)?;
-                out.push_str(" @");
+                out.push(b'@');
             }
             Node::Indir(_) => return Err(EvalError::DanglingIndirection(id)),
-            Node::Prim(name) => out.push_str(name),
+            Node::Prim(name) => out.extend_from_slice(name.as_bytes()),
             Node::Int(n) => {
-                out.push('#');
-                out.push_str(&n.to_string());
+                out.push(b'#');
+                push_display(out, *n);
             }
             Node::Int64(n) => {
-                out.push_str("##");
-                out.push_str(&n.to_string());
+                out.extend_from_slice(b"##");
+                push_display(out, *n);
             }
             Node::Float64(n) => {
-                out.push('&');
-                out.push_str(&format_float(*n));
+                out.push(b'&');
+                out.extend_from_slice(format_float(*n).as_bytes());
             }
             Node::Float32(n) => {
-                out.push_str("&&");
-                out.push_str(&format_float(f64::from(*n)));
+                out.extend_from_slice(b"&&");
+                out.extend_from_slice(format_float(f64::from(*n)).as_bytes());
             }
             Node::ThreadId(_) | Node::Weak { .. } | Node::MVar(_) => {
                 return Err(EvalError::UnsupportedSerialization(id));
             }
             Node::Ptr(ptr) => serialize_ptr(*ptr, out),
             Node::RawFunPtr(ptr) => {
-                out.push_str("toFunPtr #");
-                out.push_str(&ptr.to_string());
-                out.push_str(" @");
+                out.extend_from_slice(b"toFunPtr #");
+                push_display(out, *ptr);
+                out.extend_from_slice(b" @");
             }
             Node::ForeignPtr {
                 bytes, offset, ptr, ..
             } => {
                 if let Some(mpz) = self.mpz_decimal_bytes_for_ptr(*ptr) {
-                    out.push('%');
-                    serialize_bytes_comb(mpz, out);
+                    out.push(b'%');
+                    serialize_bytes_quoted(mpz, out);
                 } else if let Some(bytes) = bytes {
                     if *offset == 0 {
-                        out.push_str("bs2fp ");
+                        out.extend_from_slice(b"bs2fp ");
                         serialize_bytes_comb(bytes, out);
-                        out.push_str(" @");
+                        out.extend_from_slice(b" @");
                     } else {
-                        out.push_str("fp+ bs2fp ");
+                        out.extend_from_slice(b"fp+ bs2fp ");
                         serialize_bytes_comb(bytes, out);
-                        out.push_str(" @ #");
-                        out.push_str(&offset.to_string());
-                        out.push_str(" @");
+                        out.extend_from_slice(b" @ #");
+                        push_display(out, *offset);
+                        out.extend_from_slice(b" @");
                     }
                 } else {
-                    out.push_str("fpnew ");
+                    out.extend_from_slice(b"fpnew ");
                     serialize_ptr(*ptr, out);
-                    out.push_str(" @");
+                    out.extend_from_slice(b" @");
                 }
             }
             Node::BigInt(bytes) => {
-                out.push('%');
-                serialize_bytes_comb(bytes, out);
+                out.push(b'%');
+                serialize_bytes_quoted(bytes, out);
             }
             Node::Bytes(bytes) | Node::MutableBytes { bytes, .. } => {
                 serialize_bytes_comb(bytes, out);
@@ -5269,36 +5275,36 @@ impl Program {
             Node::Array(items) => {
                 for item in items {
                     self.serialize_comb_into(*item, depth + 1, out)?;
-                    out.push(' ');
                 }
-                out.push('[');
-                out.push_str(&items.len().to_string());
-                out.push(']');
+                out.push(b'[');
+                push_display(out, items.len());
+                out.push(b']');
             }
             Node::Ffi(name) => {
-                out.push('^');
-                out.push_str(name);
+                out.push(b'^');
+                out.extend_from_slice(name.as_bytes());
             }
             Node::JsCall { tags, body } => {
-                out.push('~');
-                out.push_str(tags);
-                out.push(' ');
-                serialize_bytes_comb(body, out);
+                out.push(b'~');
+                out.extend_from_slice(tags.as_bytes());
+                out.push(b' ');
+                serialize_bytes_quoted(body, out);
             }
             Node::JsWrap { tags } => {
-                out.push('`');
-                out.push_str(tags);
-                out.push(' ');
+                out.push(b'`');
+                out.extend_from_slice(tags.as_bytes());
             }
             Node::FunPtr(name) => {
-                out.push(';');
-                out.push_str(name);
-                out.push(' ');
+                out.push(b';');
+                out.extend_from_slice(name.as_bytes());
             }
             Node::Tick(name) => {
-                out.push('!');
-                serialize_bytes_comb(name, out);
+                out.push(b'!');
+                serialize_bytes_quoted(name, out);
             }
+        }
+        if !is_app {
+            out.push(b' ');
         }
         Ok(())
     }
@@ -5505,6 +5511,17 @@ impl Program {
             list = self.app(head, list);
         }
         list
+    }
+
+    fn arg_ref_array(&mut self) -> NodeId {
+        let mut list = self.prim("K");
+        for arg in self.program_args.clone().into_iter().rev() {
+            let string = self.int_list(arg.into_iter().map(i64::from));
+            let cons = self.prim("O");
+            let cons_string = self.app(cons, string);
+            list = self.app(cons_string, list);
+        }
+        self.push_node(Node::Array(vec![list]))
     }
 
     fn reduce_node_whnf(&mut self, mut root: NodeId, limit: usize) -> Result<NodeId, EvalError> {
@@ -8779,46 +8796,61 @@ fn handle_from_ptr(ptr: i64) -> Option<StdHandle> {
     })
 }
 
-fn serialize_ptr(ptr: i64, out: &mut String) {
+fn push_display<T: fmt::Display>(out: &mut Vec<u8>, value: T) {
+    out.extend_from_slice(value.to_string().as_bytes());
+}
+
+fn serialize_ptr(ptr: i64, out: &mut Vec<u8>) {
     match ptr {
-        -1 => out.push_str("fp2p IO.stdin @"),
-        -2 => out.push_str("fp2p IO.stdout @"),
-        -3 => out.push_str("fp2p IO.stderr @"),
+        -1 => out.extend_from_slice(b"fp2p IO.stdin @"),
+        -2 => out.extend_from_slice(b"fp2p IO.stdout @"),
+        -3 => out.extend_from_slice(b"fp2p IO.stderr @"),
         _ => {
-            out.push_str("toPtr #");
-            out.push_str(&ptr.to_string());
-            out.push_str(" @");
+            out.extend_from_slice(b"toPtr #");
+            push_display(out, ptr);
+            out.extend_from_slice(b" @");
         }
     }
 }
 
-fn serialize_bytes_comb(bytes: &[u8], out: &mut String) {
-    out.push('"');
+fn serialize_bytes_comb(bytes: &[u8], out: &mut Vec<u8>) {
+    if bytes.len() > 100 {
+        out.push(b'$');
+        push_display(out, bytes.len());
+        out.push(b' ');
+        out.extend_from_slice(bytes);
+    } else {
+        serialize_bytes_quoted(bytes, out);
+    }
+}
+
+fn serialize_bytes_quoted(bytes: &[u8], out: &mut Vec<u8>) {
+    out.push(b'"');
     for &byte in bytes {
         match byte {
             b'"' | b'\\' => {
-                out.push('\\');
-                out.push(byte as char);
+                out.push(b'\\');
+                out.push(byte);
             }
-            b'?' => out.push_str("\\?"),
-            0xff => out.push_str("\\_"),
-            0x20..=0x7e => out.push(byte as char),
+            b'?' => out.extend_from_slice(b"\\?"),
+            0xff => out.extend_from_slice(b"\\_"),
+            0x20..=0x7e => out.push(byte),
             0x00..=0x1f => {
-                out.push('^');
-                out.push((byte | 0x20) as char);
+                out.push(b'^');
+                out.push(byte | 0x20);
             }
-            0x7f => out.push_str("\\?"),
+            0x7f => out.extend_from_slice(b"\\?"),
             0x80..=0x9f => {
-                out.push('^');
-                out.push((byte & 0x1f | 0x40) as char);
+                out.push(b'^');
+                out.push(byte & 0x1f | 0x40);
             }
             0xa0..=0xfe => {
-                out.push('|');
-                out.push((byte & 0x7f) as char);
+                out.push(b'|');
+                out.push(byte & 0x7f);
             }
         }
     }
-    out.push('"');
+    out.push(b'"');
 }
 
 fn head_utf8(bytes: &[u8]) -> Result<(u32, usize), EvalError> {
