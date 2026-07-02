@@ -279,6 +279,7 @@ pub struct Program {
     bfiles: Vec<Option<BFile>>,
     dirs: Vec<Option<DirHandle>>,
     program_args: Vec<Vec<u8>>,
+    arg_ref_array: Option<NodeId>,
     errno_value: i32,
     errno_ptr: Option<i64>,
     masking_state: i64,
@@ -356,6 +357,7 @@ impl Program {
             bfiles: Vec::new(),
             dirs: Vec::new(),
             program_args: Vec::new(),
+            arg_ref_array: None,
             errno_value: 0,
             errno_ptr: None,
             masking_state: 0,
@@ -376,6 +378,7 @@ impl Program {
 
     pub fn set_program_args(&mut self, args: Vec<Vec<u8>>) {
         self.program_args = args;
+        self.arg_ref_array = None;
     }
 
     pub fn set_js_program_handle(&mut self, handle: u32) {
@@ -5856,6 +5859,9 @@ impl Program {
     }
 
     fn arg_ref_array(&mut self) -> NodeId {
+        if let Some(array) = self.arg_ref_array {
+            return array;
+        }
         let mut list = self.prim("K");
         for arg in self.program_args.clone().into_iter().rev() {
             let string = self.int_list(arg.into_iter().map(i64::from));
@@ -5863,7 +5869,9 @@ impl Program {
             let cons_string = self.app(cons, string);
             list = self.app(cons_string, list);
         }
-        self.push_node(Node::Array(vec![list]))
+        let array = self.push_node(Node::Array(vec![list]));
+        self.arg_ref_array = Some(array);
+        array
     }
 
     fn reduce_node_whnf(&mut self, mut root: NodeId, limit: usize) -> Result<NodeId, EvalError> {
