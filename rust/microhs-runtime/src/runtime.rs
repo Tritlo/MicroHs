@@ -57,6 +57,16 @@ enum StdHandle {
 
 const ALLOCATION_PTR_BASE: i64 = -(1_i64 << 62);
 const ALLOCATION_PTR_STRIDE: i64 = 1_i64 << 32;
+const BFILE_PTR_BASE: i64 = i64::MIN + (1_i64 << 32);
+const BFILE_PTR_STRIDE: i64 = 1_i64 << 32;
+
+#[derive(Clone, Debug)]
+struct BFile {
+    bytes: Vec<u8>,
+    pos: usize,
+    readable: bool,
+    writable: bool,
+}
 
 #[derive(Debug)]
 pub enum EvalError {
@@ -128,6 +138,7 @@ pub struct Program {
     labels: HashMap<usize, NodeId>,
     stable_ptrs: Vec<Option<NodeId>>,
     allocations: Vec<Option<Vec<u8>>>,
+    bfiles: Vec<Option<BFile>>,
     masking_state: i64,
     reductions: usize,
 }
@@ -152,6 +163,7 @@ impl Program {
             labels,
             stable_ptrs: vec![None],
             allocations: Vec::new(),
+            bfiles: Vec::new(),
             masking_state: 0,
             reductions: 0,
         }
@@ -1510,6 +1522,8 @@ impl Program {
             "sizeof_size_t" => Node::Int(size_of_i64::<usize>()),
             "want_gmp" => Node::Int(0),
             "want_imath" => Node::Int(1),
+            "&closeb" => Node::FunPtr("closeb".to_owned()),
+            "&free" => Node::FunPtr("free".to_owned()),
             "malloc" => {
                 let size = int_to_usize(self.eval_int(args[0])?)?;
                 Node::Ptr(self.alloc_memory(size)?)
@@ -1549,6 +1563,79 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let len = self.read_c_string(ptr)?.len();
                 Node::Int(i64::try_from(len).map_err(|_| EvalError::Overflow)?)
+            }
+            "openb_wr_mem" => Node::Ptr(self.alloc_bfile(BFile {
+                bytes: Vec::new(),
+                pos: 0,
+                readable: false,
+                writable: true,
+            })?),
+            "openb_rd_mem" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let len = int_to_usize(self.eval_int(args[1])?)?;
+                let bytes = self.read_pointer_bytes(ptr, len)?;
+                Node::Ptr(self.alloc_bfile(BFile {
+                    bytes,
+                    pos: 0,
+                    readable: true,
+                    writable: false,
+                })?)
+            }
+            "get_mem" => {
+                let bfile_ptr = self.eval_pointer_value(args[0])?;
+                let bufp = self.eval_pointer_value(args[1])?;
+                let lenp = self.eval_pointer_value(args[2])?;
+                let buffer = self.bfile_output_bytes(bfile_ptr)?;
+                let len = i64::try_from(buffer.len()).map_err(|_| EvalError::Overflow)?;
+                let ptr = self.alloc_memory(buffer.len())?;
+                self.write_pointer_bytes(ptr, &buffer)?;
+                self.poke_signed(bufp, 8, ptr)?;
+                self.poke_signed(lenp, 8, len)?;
+                Node::Prim("I".to_owned())
+            }
+            "closeb" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                self.close_bfile(ptr)?;
+                Node::Prim("I".to_owned())
+            }
+            "flushb" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                self.flush_bfile(ptr)?;
+                Node::Prim("I".to_owned())
+            }
+            "getb" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Int(self.get_bfile_byte(ptr)?)
+            }
+            "putb" => {
+                let byte = self.eval_int(args[0])?;
+                let ptr = self.eval_pointer_value(args[1])?;
+                self.put_bfile_byte(ptr, byte)?;
+                Node::Prim("I".to_owned())
+            }
+            "ungetb" => {
+                let byte = self.eval_int(args[0])?;
+                let ptr = self.eval_pointer_value(args[1])?;
+                self.unget_bfile_byte(ptr, byte)?;
+                Node::Prim("I".to_owned())
+            }
+            "readb" => {
+                let dst = self.eval_pointer_value(args[0])?;
+                let len = int_to_usize(self.eval_int(args[1])?)?;
+                let ptr = self.eval_pointer_value(args[2])?;
+                Node::Int(
+                    i64::try_from(self.read_bfile(ptr, dst, len)?)
+                        .map_err(|_| EvalError::Overflow)?,
+                )
+            }
+            "writeb" => {
+                let src = self.eval_pointer_value(args[0])?;
+                let len = int_to_usize(self.eval_int(args[1])?)?;
+                let ptr = self.eval_pointer_value(args[2])?;
+                Node::Int(
+                    i64::try_from(self.write_bfile(ptr, src, len)?)
+                        .map_err(|_| EvalError::Overflow)?,
+                )
             }
             "peekPtr" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -2096,6 +2183,17 @@ impl Program {
         Ok(())
     }
 
+    fn alloc_bfile(&mut self, bfile: BFile) -> Result<i64, EvalError> {
+        let slot = if let Some(slot) = self.bfiles.iter().position(Option::is_none) {
+            self.bfiles[slot] = Some(bfile);
+            slot
+        } else {
+            self.bfiles.push(Some(bfile));
+            self.bfiles.len() - 1
+        };
+        self.pointer_for_bfile(slot)
+    }
+
     fn pointer_for_node(&self, id: NodeId, offset: usize) -> Result<i64, EvalError> {
         let base = i64::try_from(id.0).map_err(|_| EvalError::Overflow)?;
         let offset = i64::try_from(offset).map_err(|_| EvalError::Overflow)?;
@@ -2124,6 +2222,17 @@ impl Program {
             return Err(EvalError::Overflow);
         }
         Ok(ptr)
+    }
+
+    fn pointer_for_bfile(&self, slot: usize) -> Result<i64, EvalError> {
+        let slot = i64::try_from(slot).map_err(|_| EvalError::Overflow)?;
+        BFILE_PTR_BASE
+            .checked_add(
+                slot.checked_mul(BFILE_PTR_STRIDE)
+                    .ok_or(EvalError::Overflow)?,
+            )
+            .filter(|ptr| *ptr < ALLOCATION_PTR_BASE)
+            .ok_or(EvalError::Overflow)
     }
 
     fn decode_pointer(&self, ptr: i64) -> Result<(usize, usize), EvalError> {
@@ -2156,6 +2265,17 @@ impl Program {
             return Err(EvalError::InvalidByteString);
         }
         Ok((slot, offset))
+    }
+
+    fn decode_bfile_pointer(&self, ptr: i64) -> Result<usize, EvalError> {
+        if !(BFILE_PTR_BASE..ALLOCATION_PTR_BASE).contains(&ptr) {
+            return Err(EvalError::InvalidHandle);
+        }
+        let raw = ptr.checked_sub(BFILE_PTR_BASE).ok_or(EvalError::Overflow)?;
+        if raw % BFILE_PTR_STRIDE != 0 {
+            return Err(EvalError::InvalidHandle);
+        }
+        usize::try_from(raw / BFILE_PTR_STRIDE).map_err(|_| EvalError::InvalidHandle)
     }
 
     fn allocation_bytes(&self, ptr: i64) -> Result<Option<&[u8]>, EvalError> {
@@ -2303,12 +2423,158 @@ impl Program {
         Ok(bytes[..len].to_vec())
     }
 
+    fn bfile(&self, ptr: i64) -> Result<&BFile, EvalError> {
+        let slot = self.decode_bfile_pointer(ptr)?;
+        self.bfiles
+            .get(slot)
+            .and_then(Option::as_ref)
+            .ok_or(EvalError::InvalidHandle)
+    }
+
+    fn bfile_mut(&mut self, ptr: i64) -> Result<&mut BFile, EvalError> {
+        let slot = self.decode_bfile_pointer(ptr)?;
+        self.bfiles
+            .get_mut(slot)
+            .and_then(Option::as_mut)
+            .ok_or(EvalError::InvalidHandle)
+    }
+
+    fn close_bfile(&mut self, ptr: i64) -> Result<(), EvalError> {
+        if let Some(handle) = handle_from_ptr(ptr) {
+            return self.flush_io_handle(handle);
+        }
+        let slot = self.decode_bfile_pointer(ptr)?;
+        let slot = self.bfiles.get_mut(slot).ok_or(EvalError::InvalidHandle)?;
+        if slot.is_none() {
+            return Err(EvalError::InvalidHandle);
+        }
+        *slot = None;
+        Ok(())
+    }
+
+    fn flush_bfile(&self, ptr: i64) -> Result<(), EvalError> {
+        if let Some(handle) = handle_from_ptr(ptr) {
+            return self.flush_io_handle(handle);
+        }
+        self.bfile(ptr)?;
+        Ok(())
+    }
+
+    fn get_bfile_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
+        if handle_from_ptr(ptr) == Some(StdHandle::Stdin) {
+            return self.read_stdin_byte();
+        }
+        let bfile = self.bfile_mut(ptr)?;
+        if !bfile.readable {
+            return Err(EvalError::InvalidHandle);
+        }
+        if bfile.pos >= bfile.bytes.len() {
+            return Ok(-1);
+        }
+        let byte = bfile.bytes[bfile.pos];
+        bfile.pos += 1;
+        Ok(i64::from(byte))
+    }
+
+    fn unget_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
+        let bfile = self.bfile_mut(ptr)?;
+        if !bfile.readable || bfile.pos == 0 {
+            return Err(EvalError::InvalidHandle);
+        }
+        let byte = byte as u8;
+        if bfile.bytes[bfile.pos - 1] != byte {
+            return Err(EvalError::InvalidHandle);
+        }
+        bfile.pos -= 1;
+        Ok(())
+    }
+
+    fn put_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
+        if let Some(handle) = handle_from_ptr(ptr) {
+            return self.write_io_handle_bytes(handle, &[byte as u8]);
+        }
+        let bfile = self.bfile_mut(ptr)?;
+        if !bfile.writable {
+            return Err(EvalError::InvalidHandle);
+        }
+        if bfile.pos == bfile.bytes.len() {
+            bfile.bytes.push(byte as u8);
+        } else if bfile.pos < bfile.bytes.len() {
+            bfile.bytes[bfile.pos] = byte as u8;
+        } else {
+            return Err(EvalError::InvalidHandle);
+        }
+        bfile.pos += 1;
+        Ok(())
+    }
+
+    fn read_bfile(&mut self, ptr: i64, dst: i64, len: usize) -> Result<usize, EvalError> {
+        if let Some(handle) = handle_from_ptr(ptr) {
+            if handle != StdHandle::Stdin {
+                return Err(EvalError::InvalidHandle);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use std::io::Read as _;
+
+                let mut bytes = vec![0; len];
+                let read = std::io::stdin()
+                    .lock()
+                    .read(&mut bytes)
+                    .map_err(|_| EvalError::InvalidHandle)?;
+                self.write_pointer_bytes(dst, &bytes[..read])?;
+                return Ok(read);
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                return Ok(0);
+            }
+        }
+        let bfile = self.bfile_mut(ptr)?;
+        if !bfile.readable {
+            return Err(EvalError::InvalidHandle);
+        }
+        let end = bfile
+            .pos
+            .checked_add(len)
+            .map(|end| end.min(bfile.bytes.len()))
+            .ok_or(EvalError::Overflow)?;
+        let bytes = bfile.bytes[bfile.pos..end].to_vec();
+        bfile.pos = end;
+        self.write_pointer_bytes(dst, &bytes)?;
+        Ok(bytes.len())
+    }
+
+    fn write_bfile(&mut self, ptr: i64, src: i64, len: usize) -> Result<usize, EvalError> {
+        let bytes = self.read_pointer_bytes(src, len)?;
+        if let Some(handle) = handle_from_ptr(ptr) {
+            self.write_io_handle_bytes(handle, &bytes)?;
+            return Ok(bytes.len());
+        }
+        for byte in &bytes {
+            self.put_bfile_byte(ptr, i64::from(*byte))?;
+        }
+        Ok(bytes.len())
+    }
+
+    fn bfile_output_bytes(&self, ptr: i64) -> Result<Vec<u8>, EvalError> {
+        let bfile = self.bfile(ptr)?;
+        if !bfile.writable {
+            return Err(EvalError::InvalidHandle);
+        }
+        Ok(bfile.bytes[..bfile.pos].to_vec())
+    }
+
     fn eval_io_handle(&mut self, id: NodeId) -> Result<StdHandle, EvalError> {
         let ptr = self.eval_pointer_value(id)?;
         handle_from_ptr(ptr).ok_or(EvalError::InvalidHandle)
     }
 
     fn write_io_handle(&self, handle: StdHandle, text: &str) -> Result<(), EvalError> {
+        self.write_io_handle_bytes(handle, text.as_bytes())
+    }
+
+    fn write_io_handle_bytes(&self, handle: StdHandle, bytes: &[u8]) -> Result<(), EvalError> {
         if handle == StdHandle::Stdin {
             return Err(EvalError::InvalidHandle);
         }
@@ -2320,14 +2586,14 @@ impl Program {
                 StdHandle::Stdout => {
                     let mut stdout = std::io::stdout().lock();
                     stdout
-                        .write_all(text.as_bytes())
+                        .write_all(bytes)
                         .map_err(|_| EvalError::InvalidHandle)?;
                     stdout.flush().map_err(|_| EvalError::InvalidHandle)?;
                 }
                 StdHandle::Stderr => {
                     let mut stderr = std::io::stderr().lock();
                     stderr
-                        .write_all(text.as_bytes())
+                        .write_all(bytes)
                         .map_err(|_| EvalError::InvalidHandle)?;
                     stderr.flush().map_err(|_| EvalError::InvalidHandle)?;
                 }
@@ -2336,9 +2602,50 @@ impl Program {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = text;
+            let _ = bytes;
         }
         Ok(())
+    }
+
+    fn flush_io_handle(&self, handle: StdHandle) -> Result<(), EvalError> {
+        if handle == StdHandle::Stdin {
+            return Ok(());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use std::io::Write as _;
+
+            match handle {
+                StdHandle::Stdout => std::io::stdout()
+                    .lock()
+                    .flush()
+                    .map_err(|_| EvalError::InvalidHandle)?,
+                StdHandle::Stderr => std::io::stderr()
+                    .lock()
+                    .flush()
+                    .map_err(|_| EvalError::InvalidHandle)?,
+                StdHandle::Stdin => unreachable!("checked above"),
+            }
+        }
+        Ok(())
+    }
+
+    fn read_stdin_byte(&self) -> Result<i64, EvalError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use std::io::Read as _;
+
+            let mut byte = [0];
+            match std::io::stdin().lock().read(&mut byte) {
+                Ok(0) => Ok(-1),
+                Ok(_) => Ok(i64::from(byte[0])),
+                Err(_) => Err(EvalError::InvalidHandle),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Ok(-1)
+        }
     }
 
     pub fn serialize_program(&self, root: NodeId) -> Result<String, EvalError> {
@@ -3354,21 +3661,22 @@ fn ffi_arity(name: &str) -> Option<usize> {
     Some(match name {
         "GETRAW" | "GETTIMEMICRO" | "islinux" | "ismacos" | "iswindows" | "sizeof_char"
         | "sizeof_short" | "sizeof_int" | "sizeof_long" | "sizeof_llong" | "sizeof_size_t"
-        | "want_gmp" | "want_imath" => 0,
-        "malloc" | "free" | "strlen" | "peekPtr" | "peekWord" | "peek_uint8" | "peek_uint16"
-        | "peek_uint32" | "peek_uint64" | "peek_int8" | "peek_int16" | "peek_int32"
-        | "peek_int64" | "peek_char" | "peek_schar" | "peek_uchar" | "peek_short"
-        | "peek_ushort" | "peek_int" | "peek_uint" | "peek_long" | "peek_ulong" | "peek_llong"
-        | "peek_ullong" | "peek_size_t" | "peek_flt32" | "peek_flt64" | "acos" | "asin"
-        | "atan" | "cos" | "exp" | "log" | "sin" | "sqrt" | "tan" | "acosf" | "asinf" | "atanf"
-        | "cosf" | "expf" | "logf" | "sinf" | "sqrtf" | "tanf" => 1,
+        | "want_gmp" | "want_imath" | "&closeb" | "&free" | "openb_wr_mem" => 0,
+        "malloc" | "free" | "strlen" | "closeb" | "flushb" | "getb" | "peekPtr" | "peekWord"
+        | "peek_uint8" | "peek_uint16" | "peek_uint32" | "peek_uint64" | "peek_int8"
+        | "peek_int16" | "peek_int32" | "peek_int64" | "peek_char" | "peek_schar"
+        | "peek_uchar" | "peek_short" | "peek_ushort" | "peek_int" | "peek_uint" | "peek_long"
+        | "peek_ulong" | "peek_llong" | "peek_ullong" | "peek_size_t" | "peek_flt32"
+        | "peek_flt64" | "acos" | "asin" | "atan" | "cos" | "exp" | "log" | "sin" | "sqrt"
+        | "tan" | "acosf" | "asinf" | "atanf" | "cosf" | "expf" | "logf" | "sinf" | "sqrtf"
+        | "tanf" => 1,
         "calloc" | "realloc" | "strcpy" | "pokePtr" | "pokeWord" | "poke_uint8" | "poke_uint16"
         | "poke_uint32" | "poke_uint64" | "poke_int8" | "poke_int16" | "poke_int32"
         | "poke_int64" | "poke_char" | "poke_schar" | "poke_uchar" | "poke_short"
         | "poke_ushort" | "poke_int" | "poke_uint" | "poke_long" | "poke_ulong" | "poke_llong"
-        | "poke_ullong" | "poke_size_t" | "poke_flt32" | "poke_flt64" | "atan2" | "pow"
-        | "scalbn" | "atan2f" | "powf" | "scalbnf" => 2,
-        "memcpy" | "memmove" => 3,
+        | "poke_ullong" | "poke_size_t" | "poke_flt32" | "poke_flt64" | "openb_rd_mem" | "putb"
+        | "ungetb" | "atan2" | "pow" | "scalbn" | "atan2f" | "powf" | "scalbnf" => 2,
+        "memcpy" | "memmove" | "get_mem" | "readb" | "writeb" => 3,
         _ => return None,
     })
 }
