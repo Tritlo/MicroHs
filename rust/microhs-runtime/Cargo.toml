@@ -11,6 +11,7 @@ lzma-sdk-rs = { version = "0.2301.1", features = ["decode"] }
 [lib]
 name = "microhs_runtime"
 path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "mhs-rust"
