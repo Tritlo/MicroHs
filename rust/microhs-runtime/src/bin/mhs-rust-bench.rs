@@ -291,7 +291,7 @@ fn make_scenario(scenario: &str) -> Result<Vec<u8>, String> {
             items.push_str("#0 ");
         }
         return Ok(format!(
-            "v8.4\n1\nseq A.write {items}[{size}] :0 @ #{last} @ #42 @ @ A.read _0 @ #{last} @ @ }}\n"
+            "v8.4\n1\nIO.performIO IO.>> A.write {items}[{size}] :0 @ #{last} @ #42 @ @ A.read _0 @ #{last} @ @ @ }}\n"
         )
         .into_bytes());
     }
