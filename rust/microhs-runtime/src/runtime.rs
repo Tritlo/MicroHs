@@ -5220,11 +5220,11 @@ impl Program {
             }
             Node::Float64(n) => {
                 out.push('&');
-                out.push_str(&n.to_string());
+                out.push_str(&format_float(*n));
             }
             Node::Float32(n) => {
                 out.push_str("&&");
-                out.push_str(&n.to_string());
+                out.push_str(&format_float(f64::from(*n)));
             }
             Node::ThreadId(_) | Node::Weak { .. } | Node::MVar(_) => {
                 return Err(EvalError::UnsupportedSerialization(id));
@@ -5581,9 +5581,9 @@ impl Program {
                 out.push_str(&n.to_string());
                 out.push_str("i64");
             }
-            Node::Float64(n) => out.push_str(&n.to_string()),
+            Node::Float64(n) => out.push_str(&format_float(*n)),
             Node::Float32(n) => {
-                out.push_str(&n.to_string());
+                out.push_str(&format_float(f64::from(*n)));
                 out.push('f');
             }
             Node::ThreadId(n) => {
@@ -7430,6 +7430,24 @@ fn size_of_i64<T>() -> i64 {
     std::mem::size_of::<T>() as i64
 }
 
+fn format_float(value: f64) -> String {
+    let mut out = value.to_string();
+    if out == "NaN" {
+        out = "nan".to_owned();
+    }
+    if out != "nan"
+        && out != "-nan"
+        && out != "inf"
+        && out != "-inf"
+        && !out.contains('.')
+        && !out.contains('e')
+        && !out.contains('E')
+    {
+        out.push_str(".0");
+    }
+    out
+}
+
 fn current_time_micro() -> i64 {
     #[cfg(target_arch = "wasm32")]
     {
@@ -9007,8 +9025,8 @@ mod tests {
         assert_eq!(whnf(b"v8.4\n0\ndneg &1.5 @ }"), "-1.5");
         assert_eq!(whnf(b"v8.4\n0\nd< &1.5 @ &2.25 @ }"), "A");
         assert_eq!(whnf(b"v8.4\n0\nd== &1.5 @ &2.25 @ }"), "K");
-        assert_eq!(whnf(b"v8.4\n0\nitod #7 @ }"), "7");
-        assert_eq!(whnf(b"v8.4\n0\nItod ##7 @ }"), "7");
+        assert_eq!(whnf(b"v8.4\n0\nitod #7 @ }"), "7.0");
+        assert_eq!(whnf(b"v8.4\n0\nItod ##7 @ }"), "7.0");
         assert_eq!(whnf(b"v8.4\n0\ndtoi &7.75 @ }"), "7");
         assert_eq!(whnf(b"v8.4\n0\nd> utod #-1 @ @ &1000 @ }"), "A");
         assert_eq!(whnf(b"v8.4\n0\ntoDbl fromDbl &1.5 @ @ }"), "1.5");
@@ -9021,8 +9039,8 @@ mod tests {
         assert_eq!(whnf(b"v8.4\n0\nfneg &&1.5 @ }"), "-1.5f");
         assert_eq!(whnf(b"v8.4\n0\nf< &&1.5 @ &&2.25 @ }"), "A");
         assert_eq!(whnf(b"v8.4\n0\nf== &&1.5 @ &&2.25 @ }"), "K");
-        assert_eq!(whnf(b"v8.4\n0\nitof #7 @ }"), "7f");
-        assert_eq!(whnf(b"v8.4\n0\nItof ##7 @ }"), "7f");
+        assert_eq!(whnf(b"v8.4\n0\nitof #7 @ }"), "7.0f");
+        assert_eq!(whnf(b"v8.4\n0\nItof ##7 @ }"), "7.0f");
         assert_eq!(whnf(b"v8.4\n0\nftoi &&7.75 @ }"), "7");
         assert_eq!(whnf(b"v8.4\n0\nf> utof #-1 @ @ &&1000 @ }"), "A");
         assert_eq!(whnf(b"v8.4\n0\nftod dtof &1.5 @ @ }"), "1.5");
@@ -9285,14 +9303,20 @@ mod tests {
 
     #[test]
     fn reduces_math_ffi_calls() {
-        assert_eq!(whnf(b"v8.4\n0\nIO.performIO ^sqrt &9 @ @ }"), "3");
-        assert_eq!(whnf(b"v8.4\n0\nIO.performIO ^pow &2 @ &8 @ @ }"), "256");
-        assert_eq!(whnf(b"v8.4\n0\nIO.performIO ^scalbn &1.5 @ #2 @ @ }"), "6");
-        assert_eq!(whnf(b"v8.4\n0\nIO.performIO ^sqrtf &&9 @ @ }"), "3f");
-        assert_eq!(whnf(b"v8.4\n0\nIO.performIO ^powf &&2 @ &&8 @ @ }"), "256f");
+        assert_eq!(whnf(b"v8.4\n0\nIO.performIO ^sqrt &9 @ @ }"), "3.0");
+        assert_eq!(whnf(b"v8.4\n0\nIO.performIO ^pow &2 @ &8 @ @ }"), "256.0");
+        assert_eq!(
+            whnf(b"v8.4\n0\nIO.performIO ^scalbn &1.5 @ #2 @ @ }"),
+            "6.0"
+        );
+        assert_eq!(whnf(b"v8.4\n0\nIO.performIO ^sqrtf &&9 @ @ }"), "3.0f");
+        assert_eq!(
+            whnf(b"v8.4\n0\nIO.performIO ^powf &&2 @ &&8 @ @ }"),
+            "256.0f"
+        );
         assert_eq!(
             whnf(b"v8.4\n0\nIO.performIO ^scalbnf &&1.5 @ #2 @ @ }"),
-            "6f"
+            "6.0f"
         );
     }
 
