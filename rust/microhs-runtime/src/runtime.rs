@@ -1488,9 +1488,10 @@ impl Program {
         let spine = self.spine(action)?;
         let head = spine.head;
         let args = spine.args();
+        use KnownPrim::*;
         match self.nodes[head.0].clone() {
-            Node::Prim(name) if name == "IO.return" && args.len() == 1 => Ok(Some(1)),
-            Node::Prim(name) if name == "IO.>>" && args.len() == 2 && budget >= 2 => {
+            Node::Prim(name) if name == IoReturn && args.len() == 1 => Ok(Some(1)),
+            Node::Prim(name) if name == IoThen && args.len() == 2 && budget >= 2 => {
                 let Some(right_reductions) =
                     self.ignored_io_action_reductions(args[1], budget - 1)?
                 else {
@@ -1508,7 +1509,7 @@ impl Program {
                 Ok(Some(left_reductions + right_reductions + 1))
             }
             Node::Prim(name)
-                if name == "IO.lazyBind"
+                if name == IoLazyBind
                     && args.len() == 2
                     && budget >= 2
                     && self.direct_ffi_continuation_accepts_result(args[1])? =>
@@ -1525,13 +1526,13 @@ impl Program {
             }
             Node::Prim(name)
                 if matches!(
-                    name.name(),
-                    "IO.getArgRef" | "IO.getmaskingstate" | "IO.yield"
+                    name.known(),
+                    Some(IoGetArgRef | IoGetMaskingState | IoYield)
                 ) && args.is_empty() =>
             {
                 Ok(Some(1))
             }
-            Node::Prim(name) if name == "IO.setmaskingstate" && args.len() == 1 => Ok(Some(1)),
+            Node::Prim(name) if name == IoSetMaskingState && args.len() == 1 => Ok(Some(1)),
             Node::Ffi(name) => {
                 let arity = ffi_arity(&name).ok_or_else(|| EvalError::UnknownFfi(name.clone()))?;
                 Ok((args.len() == arity).then_some(1))
@@ -1555,7 +1556,7 @@ impl Program {
         };
         let fun = self.resolve_profiled(fun)?;
         Ok(match &self.nodes[fun.0] {
-            Node::Prim(name) if name == "IO.return" => Some(result),
+            Node::Prim(name) if name == KnownPrim::IoReturn => Some(result),
             _ => None,
         })
     }
@@ -1568,18 +1569,17 @@ impl Program {
         let spine = self.spine(action)?;
         let head = spine.head;
         let args = spine.args();
+        use KnownPrim::*;
         match self.nodes[head.0].clone() {
-            Node::Prim(name) if name == "IO.return" && args.len() == 1 => {
-                Ok(Some((args[0], world)))
-            }
-            Node::Prim(name) if name == "IO.>>" && args.len() == 2 => {
+            Node::Prim(name) if name == IoReturn && args.len() == 1 => Ok(Some((args[0], world))),
+            Node::Prim(name) if name == IoThen && args.len() == 2 => {
                 let Some(world) = self.run_ignored_io_action(args[0], world)? else {
                     return Ok(None);
                 };
                 self.run_io_action(args[1], world)
             }
             Node::Prim(name)
-                if name == "IO.lazyBind"
+                if name == IoLazyBind
                     && args.len() == 2
                     && self.direct_ffi_continuation_accepts_result(args[1])? =>
             {
@@ -1589,20 +1589,20 @@ impl Program {
                 let next = self.app(args[1], result);
                 self.run_io_action(next, world)
             }
-            Node::Prim(name) if name == "IO.getArgRef" && args.is_empty() => {
+            Node::Prim(name) if name == IoGetArgRef && args.is_empty() => {
                 let result = self.arg_ref_array();
                 Ok(Some((result, world)))
             }
-            Node::Prim(name) if name == "IO.getmaskingstate" && args.is_empty() => {
+            Node::Prim(name) if name == IoGetMaskingState && args.is_empty() => {
                 let result = self.push_node(Node::Int(self.masking_state));
                 Ok(Some((result, world)))
             }
-            Node::Prim(name) if name == "IO.setmaskingstate" && args.len() == 1 => {
+            Node::Prim(name) if name == IoSetMaskingState && args.len() == 1 => {
                 self.masking_state = self.eval_int(args[0])?;
                 let result = self.prim("I");
                 Ok(Some((result, world)))
             }
-            Node::Prim(name) if name == "IO.yield" && args.is_empty() => {
+            Node::Prim(name) if name == IoYield && args.is_empty() => {
                 let result = self.prim("I");
                 Ok(Some((result, world)))
             }
@@ -1645,7 +1645,7 @@ impl Program {
         };
         let pair_constructor = self.resolve_profiled(pair_constructor)?;
         Ok(match &self.nodes[pair_constructor.0] {
-            Node::Prim(name) if name == "P" => Some((result, world)),
+            Node::Prim(name) if name == KnownPrim::P => Some((result, world)),
             _ => None,
         })
     }
@@ -1656,9 +1656,10 @@ impl Program {
         pair: NodeId,
     ) -> Result<Option<NodeId>, EvalError> {
         let selector = self.resolve_profiled(selector)?;
+        use KnownPrim::*;
         let field = match &self.nodes[selector.0] {
-            Node::Prim(name) if name == "K" => 0,
-            Node::Prim(name) if name == "A" => 1,
+            Node::Prim(name) if name == K => 0,
+            Node::Prim(name) if name == A => 1,
             _ => return Ok(None),
         };
         let pair = self.reduce_node_whnf(pair, FORCE_REDUCTION_LIMIT)?;
@@ -1675,10 +1676,11 @@ impl Program {
         available_extra: usize,
     ) -> Result<Option<usize>, EvalError> {
         let selector = self.resolve_profiled(selector)?;
+        use KnownPrim::*;
         let arity = match &self.nodes[selector.0] {
-            Node::Prim(name) if name == "K2" => 3,
-            Node::Prim(name) if name == "K3" => 4,
-            Node::Prim(name) if name == "K4" => 5,
+            Node::Prim(name) if name == K2 => 3,
+            Node::Prim(name) if name == K3 => 4,
+            Node::Prim(name) if name == K4 => 5,
             _ => return Ok(None),
         };
         if arity < fields {
@@ -1786,7 +1788,11 @@ impl Program {
 
     fn is_identity_alias_node(&mut self, id: NodeId) -> Result<bool, EvalError> {
         let id = self.resolve_profiled(id)?;
-        Ok(matches!(&self.nodes[id.0], Node::Prim(name) if is_identity_alias(name.name())))
+        Ok(matches!(
+            &self.nodes[id.0],
+            Node::Prim(name)
+                if matches!(name.known(), Some(KnownPrim::I | KnownPrim::Ord | KnownPrim::Chr))
+        ))
     }
 
     fn app(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
@@ -7415,10 +7421,6 @@ fn shift(n: i64) -> Result<u32, EvalError> {
 fn tag_index(name: &str) -> Option<usize> {
     let tag = name.strip_prefix("TAG")?.parse().ok()?;
     (tag <= 32).then_some(tag)
-}
-
-fn is_identity_alias(name: &str) -> bool {
-    matches!(name, "I" | "ord" | "chr")
 }
 
 fn tuple_fields(name: &str) -> Option<usize> {
