@@ -509,6 +509,7 @@ pub enum EvalError {
     InvalidStablePtr,
     InvalidMVar,
     InvalidHandle,
+    UnknownPrim(String),
     UnknownFfi(String),
     UnsupportedJsFfi,
     UnsupportedSerialization(NodeId),
@@ -539,6 +540,7 @@ impl fmt::Display for EvalError {
             Self::InvalidStablePtr => write!(f, "invalid StablePtr operation"),
             Self::InvalidMVar => write!(f, "invalid MVar operation"),
             Self::InvalidHandle => write!(f, "invalid IO handle operation"),
+            Self::UnknownPrim(name) => write!(f, "unknown primitive {name}"),
             Self::UnknownFfi(name) => write!(f, "unknown FFI symbol {name}"),
             Self::UnsupportedJsFfi => write!(f, "JavaScript FFI is not supported in this runtime"),
             Self::UnsupportedSerialization(id) => {
@@ -1447,6 +1449,10 @@ impl Program {
         };
 
         let Some((mut used, mut node)) = rewrite else {
+            let name = prim.name();
+            if !args.is_empty() && !is_supported_runtime_prim_name(name) {
+                return Err(EvalError::UnknownPrim(name.to_owned()));
+            }
             return Ok(None);
         };
         let mut reductions = 1;
@@ -7473,6 +7479,102 @@ fn tuple_fields(name: &str) -> Option<usize> {
     (3..=16).contains(&fields).then_some(fields)
 }
 
+pub(crate) fn is_runtime_prim_name(name: &str) -> bool {
+    is_supported_runtime_prim_name(name)
+        || matches!(
+            name,
+            "IO.deserialize"
+                | "IO.fork"
+                | "IO.throwto"
+                | "IO.threaddelay"
+                | "IO.waitrdfd"
+                | "IO.waitwrfd"
+        )
+}
+
+fn is_supported_runtime_prim_name(name: &str) -> bool {
+    KnownPrim::from_name(name).is_some()
+        || IntBinOp::from_prim(name).is_some()
+        || IntUnOp::from_prim(name).is_some()
+        || Int64BinOp::from_prim(name).is_some()
+        || Int64UnOp::from_prim(name).is_some()
+        || Float64BinOp::from_prim(name).is_some()
+        || Float64UnOp::from_prim(name).is_some()
+        || Float32BinOp::from_prim(name).is_some()
+        || Float32UnOp::from_prim(name).is_some()
+        || matches!(
+            name,
+            "itoI"
+                | "utoU"
+                | "Itoi"
+                | "Utou"
+                | "itod"
+                | "utod"
+                | "Itod"
+                | "dtoi"
+                | "itof"
+                | "utof"
+                | "Itof"
+                | "ftoi"
+                | "dtof"
+                | "ftod"
+                | "toDbl"
+                | "fromDbl"
+                | "toFlt"
+                | "fromFlt"
+                | "toInt"
+                | "toPtr"
+                | "toFunPtr"
+                | "fp+"
+                | "fp2bs"
+                | "fpnew"
+                | "fpfin"
+                | "bs2fp"
+                | "fp2p"
+                | "A.alloc"
+                | "A.read"
+                | "A.write"
+                | "A.trunc"
+                | "A.=="
+                | "A.copy"
+                | "A.size"
+                | "SPnew"
+                | "SPderef"
+                | "SPfree"
+                | "Wknewfin"
+                | "Wknew"
+                | "Wkderef"
+                | "Wkfinal"
+                | "packCString"
+                | "packCStringLen"
+                | "bsgrab"
+                | "bsgrablen"
+                | "bsnew"
+                | "bsread"
+                | "bswrite"
+                | "bsfreeze"
+                | "bsappbyte"
+                | "bsappchar"
+                | "bs++"
+                | "bs++."
+                | "bs=="
+                | "bs/="
+                | "bs<"
+                | "bs<="
+                | "bs>"
+                | "bs>="
+                | "bscmp"
+                | "bsreplicate"
+                | "bsindex"
+                | "bssubstr"
+                | "bslength"
+                | "headUTF8"
+                | "tailUTF8"
+                | "bsunpack"
+                | "fromUTF8"
+        )
+}
+
 fn int_to_usize(n: i64) -> Result<usize, EvalError> {
     usize::try_from(n).map_err(|_| EvalError::InvalidByteString)
 }
@@ -10364,7 +10466,8 @@ fn nibble(n: u8) -> char {
 #[cfg(test)]
 mod tests {
     use super::{IGNORED_IO_SHORTCUT_RECURSION_LIMIT, lz77_decompress, serialize_bytes_quoted};
-    use crate::{EvalError, Node, NodeId, Program, parse_program};
+    use crate::{EvalError, Node, NodeId, ParseError, Program, parse_program};
+    use std::collections::HashMap;
 
     fn whnf(input: &[u8]) -> String {
         let mut program = parse_program(input).unwrap();
@@ -10596,6 +10699,34 @@ mod tests {
         assert_eq!(whnf(b"v8.4\n0\nseq + #1 @ #2 @ @ #9 @ }"), "9");
         assert_eq!(whnf(b"v8.4\n0\nisint #7 @ }"), "7");
         assert_eq!(whnf(b"v8.4\n0\nisint \"x\" @ }"), "-1");
+    }
+
+    #[test]
+    fn rejects_unknown_primitives() {
+        assert!(matches!(
+            parse_program(b"v8.4\n0\nnot-a-prim }"),
+            Err(ParseError::UnknownPrim(name)) if name == "not-a-prim"
+        ));
+
+        let mut unsupported = parse_program(b"v8.4\n0\nIO.fork #1 @ }").unwrap();
+        assert!(matches!(
+            unsupported.reduce_whnf(10),
+            Err(EvalError::UnknownPrim(name)) if name == "IO.fork"
+        ));
+
+        let mut program = Program::new(
+            vec![
+                Node::prim("missing-prim"),
+                Node::Int(1),
+                Node::App(NodeId(0), NodeId(1)),
+            ],
+            NodeId(2),
+            HashMap::new(),
+        );
+        assert!(matches!(
+            program.reduce_whnf(10),
+            Err(EvalError::UnknownPrim(name)) if name == "missing-prim"
+        ));
     }
 
     #[test]
