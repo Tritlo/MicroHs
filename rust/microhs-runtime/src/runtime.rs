@@ -941,6 +941,14 @@ impl Program {
         action: NodeId,
         budget: usize,
     ) -> Result<Option<usize>, EvalError> {
+        self.io_action_reductions(action, budget)
+    }
+
+    fn io_action_reductions(
+        &self,
+        action: NodeId,
+        budget: usize,
+    ) -> Result<Option<usize>, EvalError> {
         if budget == 0 {
             return Ok(None);
         }
@@ -968,6 +976,22 @@ impl Program {
                 Ok(Some(left_reductions + right_reductions + 1))
             }
             Node::Prim(name)
+                if name == "IO.lazyBind"
+                    && args.len() == 2
+                    && budget >= 2
+                    && self.direct_ffi_continuation_accepts_result(args[1])? =>
+            {
+                let Some(action_reductions) = self.io_action_reductions(args[0], budget - 1)?
+                else {
+                    return Ok(None);
+                };
+                let remaining_budget = budget.saturating_sub(action_reductions + 1);
+                if remaining_budget == 0 {
+                    return Ok(None);
+                }
+                Ok(Some(action_reductions + 2))
+            }
+            Node::Prim(name)
                 if matches!(
                     name.as_str(),
                     "IO.getArgRef" | "IO.getmaskingstate" | "IO.yield"
@@ -989,27 +1013,55 @@ impl Program {
         action: NodeId,
         world: NodeId,
     ) -> Result<Option<NodeId>, EvalError> {
+        Ok(self.run_io_action(action, world)?.map(|(_, world)| world))
+    }
+
+    fn run_io_action(
+        &mut self,
+        action: NodeId,
+        world: NodeId,
+    ) -> Result<Option<(NodeId, NodeId)>, EvalError> {
         let spine = self.spine(action)?;
         let head = spine.head;
         let args = spine.args();
         match self.nodes[head.0].clone() {
-            Node::Prim(name) if name == "IO.return" && args.len() == 1 => Ok(Some(world)),
+            Node::Prim(name) if name == "IO.return" && args.len() == 1 => {
+                Ok(Some((args[0], world)))
+            }
             Node::Prim(name) if name == "IO.>>" && args.len() == 2 => {
                 let Some(world) = self.run_ignored_io_action(args[0], world)? else {
                     return Ok(None);
                 };
-                self.run_ignored_io_action(args[1], world)
+                self.run_io_action(args[1], world)
+            }
+            Node::Prim(name)
+                if name == "IO.lazyBind"
+                    && args.len() == 2
+                    && self.direct_ffi_continuation_accepts_result(args[1])? =>
+            {
+                let Some((result, world)) = self.run_io_action(args[0], world)? else {
+                    return Ok(None);
+                };
+                let next = self.app(args[1], result);
+                self.run_io_action(next, world)
             }
             Node::Prim(name) if name == "IO.getArgRef" && args.is_empty() => {
-                let _ = self.arg_ref_array();
-                Ok(Some(world))
+                let result = self.arg_ref_array();
+                Ok(Some((result, world)))
             }
-            Node::Prim(name) if name == "IO.getmaskingstate" && args.is_empty() => Ok(Some(world)),
+            Node::Prim(name) if name == "IO.getmaskingstate" && args.is_empty() => {
+                let result = self.push_node(Node::Int(self.masking_state));
+                Ok(Some((result, world)))
+            }
             Node::Prim(name) if name == "IO.setmaskingstate" && args.len() == 1 => {
                 self.masking_state = self.eval_int(args[0])?;
-                Ok(Some(world))
+                let result = self.prim("I");
+                Ok(Some((result, world)))
             }
-            Node::Prim(name) if name == "IO.yield" && args.is_empty() => Ok(Some(world)),
+            Node::Prim(name) if name == "IO.yield" && args.is_empty() => {
+                let result = self.prim("I");
+                Ok(Some((result, world)))
+            }
             Node::Ffi(name) => {
                 let arity = ffi_arity(&name).ok_or_else(|| EvalError::UnknownFfi(name.clone()))?;
                 if args.len() != arity {
@@ -1018,14 +1070,40 @@ impl Program {
                 let mut ffi_args = Vec::with_capacity(args.len() + 1);
                 ffi_args.extend_from_slice(args);
                 ffi_args.push(world);
-                if self.ffi_call(&name, &ffi_args)?.is_some() {
-                    Ok(Some(world))
-                } else {
-                    Ok(None)
-                }
+                let Some((_, pair)) = self.ffi_call(&name, &ffi_args)? else {
+                    return Ok(None);
+                };
+                self.pair_fields(pair)
             }
             _ => Ok(None),
         }
+    }
+
+    fn direct_ffi_continuation_accepts_result(&self, cont: NodeId) -> Result<bool, EvalError> {
+        let cont = self.resolve(cont)?;
+        let Node::Ffi(name) = self.nodes[cont.0].clone() else {
+            return Ok(false);
+        };
+        let Some(arity) = ffi_arity(&name) else {
+            return Err(EvalError::UnknownFfi(name));
+        };
+        Ok(arity == 1)
+    }
+
+    fn pair_fields(&self, pair: NodeId) -> Result<Option<(NodeId, NodeId)>, EvalError> {
+        let pair = self.resolve(pair)?;
+        let Node::App(result_pair, world) = self.nodes[pair.0] else {
+            return Ok(None);
+        };
+        let result_pair = self.resolve(result_pair)?;
+        let Node::App(pair_constructor, result) = self.nodes[result_pair.0] else {
+            return Ok(None);
+        };
+        let pair_constructor = self.resolve(pair_constructor)?;
+        Ok(match &self.nodes[pair_constructor.0] {
+            Node::Prim(name) if name == "P" => Some((result, world)),
+            _ => None,
+        })
     }
 
     fn spine(&self, root: NodeId) -> Result<Spine, EvalError> {
