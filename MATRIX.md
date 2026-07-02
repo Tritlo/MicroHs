@@ -11,23 +11,23 @@ performance, or benchmark classification changes.
 |---|---|
 | branch | `microhs-rust` |
 | upstream tracking | `origin/microhs-rust` |
-| local commits ahead after this snapshot commit | 82 |
-| runtime code baseline | compression cross-runtime fixture checkpoint |
+| local commits ahead after this snapshot commit | 83 |
+| runtime code baseline | buffered stdio writes checkpoint |
 | dirty files after this snapshot commit | none expected |
 | dirty work | none in tracked runtime files |
 | matrix file | `MATRIX.md`, tracked from this snapshot |
 
 ## Verification Baseline
 
-Last fully verified state: compression cross-runtime fixture checkpoint.
+Last fully verified state: buffered stdio writes checkpoint.
 
 | gate | status |
 |---|---|
-| `cargo test -p microhs-runtime --quiet` | passed before compression cross-runtime fixture commit; 34 tests |
-| `cargo check -p microhs-runtime --lib --quiet` | passed before compression cross-runtime fixture commit |
-| `cargo check -p microhs-runtime --bins --quiet` | passed before compression cross-runtime fixture commit |
-| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before compression cross-runtime fixture commit |
-| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before compression cross-runtime fixture commit |
+| `cargo test -p microhs-runtime --quiet` | passed before buffered stdio writes commit; 34 tests |
+| `cargo check -p microhs-runtime --lib --quiet` | passed before buffered stdio writes commit |
+| `cargo check -p microhs-runtime --bins --quiet` | passed before buffered stdio writes commit |
+| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before buffered stdio writes commit |
+| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before buffered stdio writes commit |
 | `node --check rust/microhs-runtime/js/host.mjs` | passed at `f8b9e1d5` |
 | Node wasm core render smoke | passed at `9cbef47e`; host shim instantiated wasm, reduced `v8.4\n0\nI #5 @ }\n`, and rendered `5` |
 | Node wasm dynamic `~I` JS FFI smoke | passed at `58280b6e`; path-loaded wasm reduced `IO.performIO ~I "return 40 + 2" @` and rendered `42` |
@@ -36,10 +36,10 @@ Last fully verified state: compression cross-runtime fixture checkpoint.
 | Node wasm wrapper tag coverage smoke | passed at `f8b9e1d5`; `II`, `UU`, `DD`, `FF`, `BB`, `SS`, `JJ`, and `PP` wrappers round-trip through JS and render expected values |
 | Node wasm unsigned/high-bit JS smoke | passed at `f8b9e1d5`; direct `~U` rendered `4294967295`; direct and wrapper `~P` rendered `Ptr#2147483648` |
 | Node wasm Response-source smoke | passed at `58280b6e`; `Response(bytes)` source reduced `~S "return 'hi'"` and rendered `"hi"` |
-| `cargo fmt --all --check` | passed before compression cross-runtime fixture commit |
-| `git diff --check` | passed before compression cross-runtime fixture commit |
+| `cargo fmt --all --check` | passed before buffered stdio writes commit |
+| `git diff --check` | passed before buffered stdio writes commit |
 | `make bin/mhsbench` | passed/up to date at `70eabf4d` |
-| `cargo build --release -p microhs-runtime --bins --quiet` | passed before compression cross-runtime fixture commit |
+| `cargo build --release -p microhs-runtime --bins --quiet` | passed before buffered stdio writes commit |
 | signed `i64::MIN` comb parser smoke | passed before checkpoint commit; Rust now parses the self-host compiler comb containing `##-9223372036854775808` |
 | unbounded internal force budget smoke | passed before checkpoint commit; self-hosting no longer trips the old internal `10_000` WHNF cap |
 | main-mode benchmark harness smoke | passed before checkpoint commit; Rust and C support `--mode main -- PROGRAM ARGS...`; main mode measures execution and validates external output instead of serializing the whole root graph |
@@ -76,6 +76,7 @@ Last fully verified state: compression cross-runtime fixture checkpoint.
 | unknown primitive hard-failure smoke | passed before checkpoint commit; truly unknown bare primitive names now fail during `.comb` parse, C-known but currently unsupported primitives such as `IO.fork`/`IO.deserialize` still load but fail loudly if reduced with arguments, and `/tmp/mhs-selfhost.comb` parses/runs the `--help` main proxy under this gate |
 | C-compatible uncaught exception display smoke | passed before checkpoint commit; raw RTS exception ints use C's `die_exn` message table, non-RTS exceptions are displayed by evaluating `U (U (K2 A)) exn`, and a compiled `exitSuccess` comb now completes main-mode release benchmark execution instead of panicking |
 | compression cross-runtime fixture smoke | passed before checkpoint commit; Rust unit fixtures decode C-runtime LZ77/BWT/LZMA frames for an adversarial repeated/high-byte/NUL payload, Rust compressor/decompressor self-roundtrips the same payload, and an external C-runtime smoke decoded Rust-produced LZ77/BWT/LZMA frames as `(True,True,True)` |
+| buffered stdio write smoke | passed before checkpoint commit; stdout/stderr writes no longer flush after every byte/buffer write, while explicit flush/close paths still call `flush_io_handle`; no dedicated output-heavy timing row exists yet |
 | ignored IO action shortcut perf probe | passed before checkpoint commit; `io-chain`, `io-control-chain`, `argref-chain`, `ffi-chain`, `ffi-math-chain`, `ffi-const-chain`, `env-set-chain`, and `remove-missing-chain` improved with matching sinks; `ffi-mem-chain` and `bfile-read-chain` canaries stayed in the same band |
 | direct lazyBind FFI-continuation perf probe | passed before checkpoint commit; against a clean `50e11139` temp worktree, `ffi-mem-chain` improved from ~1.31 ms to ~0.18 ms and `bfile-read-chain` improved from ~1.50 ms to ~0.34 ms with matching sinks; direct BFILE/env rows improved, while complex continuation canaries stayed in the same noisy band |
 | reducer inline-spine perf probe | passed at `63d03844`; against `f8b9e1d5` temp build, current Rust improved `arith-chain`, `io-chain`, `ffi-chain`, `ffi-mem-chain`, and `bfile-read-chain` by roughly 4-13% |
@@ -150,7 +151,7 @@ Last fully verified state: compression cross-runtime fixture checkpoint.
 | C-compatible graph serializer spacing | passed at `6438ec82`; `argref-chain`, `mvar-chain`, `weak-chain` sinks match |
 | benchmark StablePtr harness reset | passed at `6438ec82`; `stableptr-chain` sink matches |
 
-Latest tracked runtime behavior change is compression cross-runtime fixtures; LZ77/BWT/LZMA decoders now have C-produced adversarial frame fixtures, and the reverse Rust-produced frames were smoke-checked under the C runtime.
+Latest tracked runtime behavior change is buffered stdio writes; stdout/stderr writes now rely on normal buffering instead of flushing on every runtime write, while explicit flush/close paths remain intact.
 
 ## Tier Status
 
