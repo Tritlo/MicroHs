@@ -1697,6 +1697,20 @@ impl Program {
                 };
                 Node::Ptr(ptr)
             }
+            "setenv" => {
+                let name_ptr = self.eval_pointer_value(args[0])?;
+                let value_ptr = self.eval_pointer_value(args[1])?;
+                let overwrite = self.eval_int(args[2])?;
+                let name = self.read_c_string(name_ptr)?;
+                let value = self.read_c_string(value_ptr)?;
+                Node::Int(setenv_bytes(&name, &value, overwrite))
+            }
+            "unsetenv" => {
+                let name_ptr = self.eval_pointer_value(args[0])?;
+                let name = self.read_c_string(name_ptr)?;
+                Node::Int(unsetenv_bytes(&name))
+            }
+            "environ" => Node::Ptr(self.alloc_environ()?),
             "remove" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let path = self.read_c_string(ptr)?;
@@ -2492,6 +2506,25 @@ impl Program {
             self.dirs.len() - 1
         };
         self.pointer_for_dir(slot)
+    }
+
+    fn alloc_environ(&mut self) -> Result<i64, EvalError> {
+        let vars = environ_bytes();
+        let mut pointers = Vec::with_capacity(
+            (vars.len() + 1)
+                .checked_mul(size_of::<i64>())
+                .ok_or(EvalError::Overflow)?,
+        );
+        for mut var in vars {
+            var.push(0);
+            let ptr = self.alloc_memory(var.len())?;
+            self.write_pointer_bytes(ptr, &var)?;
+            pointers.extend_from_slice(&ptr.to_ne_bytes());
+        }
+        pointers.extend_from_slice(&0_i64.to_ne_bytes());
+        let ptr = self.alloc_memory(pointers.len())?;
+        self.write_pointer_bytes(ptr, &pointers)?;
+        Ok(ptr)
     }
 
     fn bfile_permissions(&self, ptr: i64) -> Result<(bool, bool), EvalError> {
@@ -5943,6 +5976,117 @@ fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
+fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> i64 {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    if name.is_empty() || name.contains(&b'=') {
+        return -1;
+    }
+    let name = OsStr::from_bytes(name);
+    if overwrite == 0 && std::env::var_os(name).is_some() {
+        return 0;
+    }
+    // SAFETY: MicroHs executes user code on one runtime thread today; this mirrors C's process-global env.
+    unsafe {
+        std::env::set_var(name, OsStr::from_bytes(value));
+    }
+    0
+}
+
+#[cfg(target_arch = "wasm32")]
+fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> i64 {
+    let _ = (name, value, overwrite);
+    -1
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> i64 {
+    if name.is_empty() || name.contains(&b'=') {
+        return -1;
+    }
+    let Ok(name) = std::str::from_utf8(name) else {
+        return -1;
+    };
+    if overwrite == 0 && std::env::var_os(name).is_some() {
+        return 0;
+    }
+    let value = String::from_utf8_lossy(value);
+    // SAFETY: MicroHs executes user code on one runtime thread today; this mirrors C's process-global env.
+    unsafe {
+        std::env::set_var(name, value.as_ref());
+    }
+    0
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn unsetenv_bytes(name: &[u8]) -> i64 {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    if name.is_empty() || name.contains(&b'=') {
+        return -1;
+    }
+    // SAFETY: MicroHs executes user code on one runtime thread today; this mirrors C's process-global env.
+    unsafe {
+        std::env::remove_var(OsStr::from_bytes(name));
+    }
+    0
+}
+
+#[cfg(target_arch = "wasm32")]
+fn unsetenv_bytes(name: &[u8]) -> i64 {
+    let _ = name;
+    -1
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn unsetenv_bytes(name: &[u8]) -> i64 {
+    if name.is_empty() || name.contains(&b'=') {
+        return -1;
+    }
+    let Ok(name) = std::str::from_utf8(name) else {
+        return -1;
+    };
+    // SAFETY: MicroHs executes user code on one runtime thread today; this mirrors C's process-global env.
+    unsafe {
+        std::env::remove_var(name);
+    }
+    0
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn environ_bytes() -> Vec<Vec<u8>> {
+    use std::os::unix::ffi::OsStringExt;
+
+    std::env::vars_os()
+        .map(|(name, value)| {
+            let mut bytes = name.into_vec();
+            bytes.push(b'=');
+            bytes.extend(value.into_vec());
+            bytes
+        })
+        .collect()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn environ_bytes() -> Vec<Vec<u8>> {
+    Vec::new()
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn environ_bytes() -> Vec<Vec<u8>> {
+    std::env::vars_os()
+        .map(|(name, value)| {
+            let mut bytes = name.to_string_lossy().into_owned().into_bytes();
+            bytes.push(b'=');
+            bytes.extend(value.to_string_lossy().into_owned().into_bytes());
+            bytes
+        })
+        .collect()
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
 fn remove_path_bytes(path: &[u8]) -> i64 {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
@@ -6416,12 +6560,14 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "want_imath"
         | "&closeb"
         | "&free"
+        | "environ"
         | "get_executable_path"
         | "openb_wr_mem" => 0,
         "malloc"
         | "free"
         | "strlen"
         | "getenv"
+        | "unsetenv"
         | "remove"
         | "system"
         | "chdir"
@@ -6496,7 +6642,7 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "poke_llong" | "poke_ullong" | "poke_size_t" | "poke_flt32" | "poke_flt64"
         | "openb_rd_mem" | "putb" | "ungetb" | "atan2" | "pow" | "scalbn" | "atan2f" | "powf"
         | "scalbnf" => 2,
-        "memcpy" | "memmove" | "md5Array" | "get_mem" | "readb" | "writeb" => 3,
+        "memcpy" | "memmove" | "setenv" | "md5Array" | "get_mem" | "readb" | "writeb" => 3,
         _ => return None,
     })
 }
