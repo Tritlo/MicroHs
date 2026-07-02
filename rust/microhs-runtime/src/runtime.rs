@@ -251,7 +251,7 @@ enum JsArg {
     Int(i32),
     UInt(u32),
     Double(f64),
-    Object(i32),
+    Object(u32),
     String(Vec<u8>),
 }
 
@@ -2620,10 +2620,7 @@ impl Program {
                 b'F' => JsArg::Double(f64::from(self.eval_float32(args[idx])?)),
                 b'B' => JsArg::Int(i32::from(self.eval_bool(args[idx])?)),
                 b'P' => JsArg::UInt(self.eval_pointer_value(args[idx])? as u32),
-                b'J' => {
-                    let foreign_ptr = self.eval_foreign_ptr_id(args[idx])?;
-                    JsArg::Object(self.foreign_ptr_value(foreign_ptr)? as i32)
-                }
+                b'J' => JsArg::Object(self.eval_js_object_handle(args[idx])?),
                 b'S' => JsArg::String(self.eval_bytes(args[idx])?),
                 b'U' => JsArg::UInt(self.eval_int(args[idx])? as u32),
                 b'I' => JsArg::Int(self.eval_int(args[idx])? as i32),
@@ -2649,7 +2646,7 @@ impl Program {
             ),
             b'S' => Node::Bytes(host_js_call_string(body, arity, &js_args)?),
             b'I' | b'U' => Node::Int(i64::from(host_js_call_int(body, arity, &js_args)?)),
-            b'J' => return Err(EvalError::UnsupportedJsFfi),
+            b'J' => self.js_object_node(host_js_call_object(body, arity, &js_args)?),
             _ => return Err(EvalError::InvalidByteString),
         };
         let result = self.push_node(result);
@@ -2665,7 +2662,16 @@ impl Program {
         if args.len() < 2 {
             return Ok(None);
         }
-        Err(EvalError::UnsupportedJsFfi)
+        let stable_ptr = self.new_stable_ptr_handle(args[0])?;
+        let object = match host_js_make_wrapper(tags.as_bytes(), stable_ptr) {
+            Ok(object) => object,
+            Err(err) => {
+                let _ = self.free_stable_ptr(usize::try_from(stable_ptr).unwrap_or(usize::MAX));
+                return Err(err);
+            }
+        };
+        let result = self.push_node(self.js_object_node(object));
+        Ok(Some((2, self.pair(result, args[1]))))
     }
 
     fn eval_ffi_name(&mut self, id: NodeId) -> Result<String, EvalError> {
@@ -5309,7 +5315,7 @@ impl Program {
         Ok(())
     }
 
-    fn new_stable_ptr(&mut self, value: NodeId) -> Result<NodeId, EvalError> {
+    fn new_stable_ptr_handle(&mut self, value: NodeId) -> Result<i64, EvalError> {
         let slot = self
             .stable_ptrs
             .iter()
@@ -5326,7 +5332,11 @@ impl Program {
                 self.stable_ptrs.len() - 1
             }
         };
-        let handle = i64::try_from(slot).map_err(|_| EvalError::Overflow)?;
+        i64::try_from(slot).map_err(|_| EvalError::Overflow)
+    }
+
+    fn new_stable_ptr(&mut self, value: NodeId) -> Result<NodeId, EvalError> {
+        let handle = self.new_stable_ptr_handle(value)?;
         Ok(self.push_node(Node::Int(handle)))
     }
 
@@ -5399,6 +5409,20 @@ impl Program {
             Node::ForeignPtr { ptr, .. } => Ok(*ptr),
             Node::Prim(name) => std_handle_ptr(name).ok_or(EvalError::ExpectedForeignPtr(id)),
             _ => Err(EvalError::ExpectedForeignPtr(id)),
+        }
+    }
+
+    fn eval_js_object_handle(&mut self, id: NodeId) -> Result<u32, EvalError> {
+        let foreign_ptr = self.eval_foreign_ptr_id(id)?;
+        u32::try_from(self.foreign_ptr_value(foreign_ptr)?).map_err(|_| EvalError::Overflow)
+    }
+
+    fn js_object_node(&self, handle: u32) -> Node {
+        Node::ForeignPtr {
+            bytes: None,
+            offset: 0,
+            ptr: i64::from(handle),
+            finalizer: None,
         }
     }
 
@@ -6821,11 +6845,26 @@ fn host_js_call_double(body: &[u8], arity: usize, args: &[JsArg]) -> Result<f64,
     }
 }
 
-fn host_js_call_ptr(body: &[u8], arity: usize, args: &[JsArg]) -> Result<i32, EvalError> {
+fn host_js_call_ptr(body: &[u8], arity: usize, args: &[JsArg]) -> Result<u32, EvalError> {
     #[cfg(target_arch = "wasm32")]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
         let result = unsafe { mhs_js_call_ptr(idx) };
+        host_js_check_error()?;
+        Ok(result)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (body, arity, args);
+        Err(EvalError::UnsupportedJsFfi)
+    }
+}
+
+fn host_js_call_object(body: &[u8], arity: usize, args: &[JsArg]) -> Result<u32, EvalError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let idx = host_js_prepare_call(body, arity, args)?;
+        let result = unsafe { mhs_js_call_obj(idx) };
         host_js_check_error()?;
         Ok(result)
     }
@@ -6866,6 +6905,22 @@ fn host_js_call_string(body: &[u8], arity: usize, args: &[JsArg]) -> Result<Vec<
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = (body, arity, args);
+        Err(EvalError::UnsupportedJsFfi)
+    }
+}
+
+fn host_js_make_wrapper(tags: &[u8], stable_ptr: i64) -> Result<u32, EvalError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let tags = nul_terminated(tags)?;
+        let stable_ptr = u32::try_from(stable_ptr).map_err(|_| EvalError::Overflow)?;
+        let result = unsafe { mhs_js_make_wrapper(tags.as_ptr(), stable_ptr) };
+        host_js_check_error()?;
+        Ok(result)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (tags, stable_ptr);
         Err(EvalError::UnsupportedJsFfi)
     }
 }
@@ -6951,14 +7006,16 @@ unsafe extern "C" {
     fn mhs_js_push_int(value: i32);
     fn mhs_js_push_uint(value: u32);
     fn mhs_js_push_dbl(value: f64);
-    fn mhs_js_push_obj(handle: i32);
+    fn mhs_js_push_obj(handle: u32);
     fn mhs_js_push_str(ptr: *const u8, len: i32);
     fn mhs_js_call_int(idx: i32) -> i32;
     fn mhs_js_call_dbl(idx: i32) -> f64;
-    fn mhs_js_call_ptr(idx: i32) -> i32;
+    fn mhs_js_call_ptr(idx: i32) -> u32;
+    fn mhs_js_call_obj(idx: i32) -> u32;
     fn mhs_js_call_bool(idx: i32) -> i32;
     fn mhs_js_call_str(idx: i32) -> *const std::os::raw::c_char;
     fn mhs_js_call_void(idx: i32);
+    fn mhs_js_make_wrapper(tags: *const u8, stable_ptr: u32) -> u32;
     fn mhs_js_slen() -> i32;
     fn mhs_js_haserr() -> i32;
     fn mhs_js_logerr();
