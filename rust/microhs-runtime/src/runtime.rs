@@ -59,6 +59,8 @@ const ALLOCATION_PTR_BASE: i64 = -(1_i64 << 62);
 const ALLOCATION_PTR_STRIDE: i64 = 1_i64 << 32;
 const BFILE_PTR_BASE: i64 = i64::MIN + (1_i64 << 32);
 const BFILE_PTR_STRIDE: i64 = 1_i64 << 32;
+const DIR_PTR_BASE: i64 = i64::MIN + (1_i64 << 61);
+const DIR_PTR_STRIDE: i64 = 1_i64 << 32;
 
 #[derive(Clone, Debug)]
 struct BFile {
@@ -138,6 +140,12 @@ enum BFileKind {
 
 #[cfg(not(target_arch = "wasm32"))]
 type NativeFileHandle = std::rc::Rc<std::cell::RefCell<std::fs::File>>;
+
+#[derive(Clone, Debug)]
+struct DirHandle {
+    entries: Vec<Vec<u8>>,
+    pos: usize,
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug)]
@@ -220,6 +228,7 @@ pub struct Program {
     stable_ptrs: Vec<Option<NodeId>>,
     allocations: Vec<Option<Vec<u8>>>,
     bfiles: Vec<Option<BFile>>,
+    dirs: Vec<Option<DirHandle>>,
     masking_state: i64,
     reductions: usize,
 }
@@ -245,6 +254,7 @@ impl Program {
             stable_ptrs: vec![None],
             allocations: Vec::new(),
             bfiles: Vec::new(),
+            dirs: Vec::new(),
             masking_state: 0,
             reductions: 0,
         }
@@ -1749,6 +1759,27 @@ impl Program {
                 };
                 Node::Ptr(ptr)
             }
+            "opendir" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let path = self.read_c_string(ptr)?;
+                if let Some(entries) = dir_entries_path_bytes(&path) {
+                    Node::Ptr(self.alloc_dir(entries)?)
+                } else {
+                    Node::Ptr(0)
+                }
+            }
+            "readdir" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Ptr(self.read_dir_entry(ptr)?)
+            }
+            "closedir" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Int(if self.close_dir(ptr).is_ok() { 0 } else { -1 })
+            }
+            "c_d_name" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Ptr(ptr)
+            }
             "fopen" => {
                 let path_ptr = self.eval_pointer_value(args[0])?;
                 let mode_ptr = self.eval_pointer_value(args[1])?;
@@ -2451,6 +2482,18 @@ impl Program {
         self.pointer_for_bfile(slot)
     }
 
+    fn alloc_dir(&mut self, entries: Vec<Vec<u8>>) -> Result<i64, EvalError> {
+        let dir = DirHandle { entries, pos: 0 };
+        let slot = if let Some(slot) = self.dirs.iter().position(Option::is_none) {
+            self.dirs[slot] = Some(dir);
+            slot
+        } else {
+            self.dirs.push(Some(dir));
+            self.dirs.len() - 1
+        };
+        self.pointer_for_dir(slot)
+    }
+
     fn bfile_permissions(&self, ptr: i64) -> Result<(bool, bool), EvalError> {
         if let Some(handle) = handle_from_ptr(ptr) {
             return Ok(match handle {
@@ -2721,6 +2764,17 @@ impl Program {
                 slot.checked_mul(BFILE_PTR_STRIDE)
                     .ok_or(EvalError::Overflow)?,
             )
+            .filter(|ptr| *ptr < DIR_PTR_BASE)
+            .ok_or(EvalError::Overflow)
+    }
+
+    fn pointer_for_dir(&self, slot: usize) -> Result<i64, EvalError> {
+        let slot = i64::try_from(slot).map_err(|_| EvalError::Overflow)?;
+        DIR_PTR_BASE
+            .checked_add(
+                slot.checked_mul(DIR_PTR_STRIDE)
+                    .ok_or(EvalError::Overflow)?,
+            )
             .filter(|ptr| *ptr < ALLOCATION_PTR_BASE)
             .ok_or(EvalError::Overflow)
     }
@@ -2758,7 +2812,7 @@ impl Program {
     }
 
     fn decode_bfile_pointer(&self, ptr: i64) -> Result<usize, EvalError> {
-        if !(BFILE_PTR_BASE..ALLOCATION_PTR_BASE).contains(&ptr) {
+        if !(BFILE_PTR_BASE..DIR_PTR_BASE).contains(&ptr) {
             return Err(EvalError::InvalidHandle);
         }
         let raw = ptr.checked_sub(BFILE_PTR_BASE).ok_or(EvalError::Overflow)?;
@@ -2766,6 +2820,17 @@ impl Program {
             return Err(EvalError::InvalidHandle);
         }
         usize::try_from(raw / BFILE_PTR_STRIDE).map_err(|_| EvalError::InvalidHandle)
+    }
+
+    fn decode_dir_pointer(&self, ptr: i64) -> Result<usize, EvalError> {
+        if !(DIR_PTR_BASE..ALLOCATION_PTR_BASE).contains(&ptr) {
+            return Err(EvalError::InvalidHandle);
+        }
+        let raw = ptr.checked_sub(DIR_PTR_BASE).ok_or(EvalError::Overflow)?;
+        if raw % DIR_PTR_STRIDE != 0 {
+            return Err(EvalError::InvalidHandle);
+        }
+        usize::try_from(raw / DIR_PTR_STRIDE).map_err(|_| EvalError::InvalidHandle)
     }
 
     fn allocation_bytes(&self, ptr: i64) -> Result<Option<&[u8]>, EvalError> {
@@ -3011,6 +3076,37 @@ impl Program {
                     .flush()
                     .map_err(|_| EvalError::InvalidHandle)?;
             }
+        }
+        *slot = None;
+        Ok(())
+    }
+
+    fn read_dir_entry(&mut self, ptr: i64) -> Result<i64, EvalError> {
+        let slot = self.decode_dir_pointer(ptr)?;
+        let name = {
+            let dir = self
+                .dirs
+                .get_mut(slot)
+                .and_then(Option::as_mut)
+                .ok_or(EvalError::InvalidHandle)?;
+            let Some(name) = dir.entries.get(dir.pos) else {
+                return Ok(0);
+            };
+            dir.pos += 1;
+            name.clone()
+        };
+        let mut bytes = name;
+        bytes.push(0);
+        let ptr = self.alloc_memory(bytes.len())?;
+        self.write_pointer_bytes(ptr, &bytes)?;
+        Ok(ptr)
+    }
+
+    fn close_dir(&mut self, ptr: i64) -> Result<(), EvalError> {
+        let slot = self.decode_dir_pointer(ptr)?;
+        let slot = self.dirs.get_mut(slot).ok_or(EvalError::InvalidHandle)?;
+        if slot.is_none() {
+            return Err(EvalError::InvalidHandle);
         }
         *slot = None;
         Ok(())
@@ -6161,6 +6257,43 @@ fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> i64 {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
+fn dir_entries_path_bytes(path: &[u8]) -> Option<Vec<Vec<u8>>> {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let path = std::path::Path::new(OsStr::from_bytes(path));
+    let mut entries = vec![b".".to_vec(), b"..".to_vec()];
+    for entry in std::fs::read_dir(path).ok()? {
+        let entry = entry.ok()?;
+        entries.push(entry.file_name().into_vec());
+    }
+    Some(entries)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn dir_entries_path_bytes(path: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let _ = path;
+    None
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn dir_entries_path_bytes(path: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let path = std::str::from_utf8(path).ok()?;
+    let mut entries = vec![b".".to_vec(), b"..".to_vec()];
+    for entry in std::fs::read_dir(path).ok()? {
+        let entry = entry.ok()?;
+        entries.push(
+            entry
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+                .into_bytes(),
+        );
+    }
+    Some(entries)
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
 fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Option<BFile> {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
@@ -6293,6 +6426,10 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "system"
         | "chdir"
         | "get_permissions"
+        | "opendir"
+        | "readdir"
+        | "closedir"
+        | "c_d_name"
         | "add_FILE"
         | "add_utf8"
         | "add_crlf"
