@@ -593,6 +593,7 @@ pub struct Program {
     js_program_handle: Option<u32>,
     js_wrapper_tags: Vec<String>,
     prim_cache: PrimCache,
+    world: Option<NodeId>,
     profile: Option<EvalProfile>,
 }
 
@@ -721,6 +722,7 @@ impl Program {
             js_program_handle: None,
             js_wrapper_tags: Vec::new(),
             prim_cache: PrimCache::default(),
+            world: None,
             profile: None,
         }
     }
@@ -1879,7 +1881,12 @@ impl Program {
     }
 
     fn world(&mut self) -> NodeId {
-        self.push_node(Node::Int(99_999))
+        if let Some(world) = self.world {
+            return world;
+        }
+        let world = self.push_node(Node::Int(99_999));
+        self.world = Some(world);
+        world
     }
 
     fn fst(&mut self) -> NodeId {
