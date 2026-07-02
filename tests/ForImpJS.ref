@@ -3,3 +3,9 @@ log: JS log again
 log: 7
 log: 12.0
 PRE-test
+(True,False,True)
+(True,False)
+'b'
+boom!
+42
+17

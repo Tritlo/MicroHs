@@ -62,6 +62,10 @@ trans r ae =
     Lit (LBStr s) -> unsafeCoerce s
     Lit (LPrim p) -> fromMaybe (error $ "trans: no primop " ++ show p) $ lookup p primTable
     Lit (LInteger i) -> trans r (encodeInteger i)
+    -- ImpJS is resolved by the interpreting runtime (T_IO_JSCALL); there is
+    -- no dynsym for it.
+    Lit (LForImp _ (ImpJS _) _ _) ->
+      error "trans: foreign import javascript is not supported in the interpreter; compile to a combinator file"
     Lit f@(LForImp _ _ _ _) -> trans r (App (Lit (LPrim "dynsym")) (Lit (LStr (drop 1 $ showLit f))))
     _ -> error $ "trans: impossible: " ++ prettyShow ae
 

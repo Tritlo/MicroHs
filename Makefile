@@ -113,6 +113,12 @@ generated/mhseval.js:	$(RTS)/*.c $(RTS)/*.h $(RTS)/*/*.h
 	@mkdir -p bin
 	$(EMCCEVAL) $(RTS)/comb.c $(EMCCLIBS) -o generated/mhseval.js
 
+# Same, with the dynamic JavaScript FFI compiled in (see doc/javascript-ffi.md),
+# as a one-shot Node runner (reads a host-path .comb).
+jsffi:	generated/mhseval-jsffi.js
+generated/mhseval-jsffi.js:	$(RTS)/*.c $(RTS)/*.h $(RTS)/*/*.h
+	$(EMCCEVAL) -DWANT_JSFFI=1 -sNODERAWFS -sEXIT_RUNTIME $(RTS)/comb.c $(EMCCLIBS) -o generated/mhseval-jsffi.js
+
 bin/mhs.js:	mhs.js
 	@mkdir -p bin
 	echo '#! /usr/bin/env node' > bin/mhs.js
