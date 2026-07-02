@@ -4,6 +4,9 @@ version = "0.0.0"
 edition = "2024"
 license = "BSD-3-Clause"
 
+[dependencies]
+lzma-sdk-rs = { version = "0.2301.1", features = ["decode"] }
+
 [lib]
 name = "microhs_runtime"
 path = "src/lib.rs"
