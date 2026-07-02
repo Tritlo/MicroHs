@@ -1027,6 +1027,18 @@ impl Program {
             }
             name if tuple_fields(name).is_some_and(|fields| args.len() > fields) => {
                 let fields = tuple_fields(name).expect("checked tuple constructor");
+                if budget >= 2 {
+                    let selector = args[fields];
+                    let available_extra = args.len() - fields - 1;
+                    if let Some(extra_used) =
+                        self.tuple_first_field_selector_extra(selector, fields, available_extra)?
+                    {
+                        let mut node = args[0];
+                        let used = fields + 1 + extra_used;
+                        let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
+                        return Ok(Some(self.step_result(&profile_head, node, in_place, 2)));
+                    }
+                }
                 let mut n = args[fields];
                 for arg in &args[..fields - 1] {
                     n = self.app(n, *arg);
@@ -1286,6 +1298,26 @@ impl Program {
             return Ok(None);
         };
         Ok(Some(if field == 0 { result } else { world }))
+    }
+
+    fn tuple_first_field_selector_extra(
+        &self,
+        selector: NodeId,
+        fields: usize,
+        available_extra: usize,
+    ) -> Result<Option<usize>, EvalError> {
+        let selector = self.resolve(selector)?;
+        let arity = match &self.nodes[selector.0] {
+            Node::Prim(name) if name == "K2" => 3,
+            Node::Prim(name) if name == "K3" => 4,
+            Node::Prim(name) if name == "K4" => 5,
+            _ => return Ok(None),
+        };
+        if arity < fields {
+            return Ok(None);
+        }
+        let extra = arity - fields;
+        Ok((extra <= available_extra).then_some(extra))
     }
 
     fn spine(&self, root: NodeId) -> Result<Spine, EvalError> {

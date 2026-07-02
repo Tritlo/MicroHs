@@ -11,23 +11,23 @@ performance, or benchmark classification changes.
 |---|---|
 | branch | `microhs-rust` |
 | upstream tracking | `origin/microhs-rust` |
-| local commits ahead after this snapshot commit | 62 |
-| runtime code baseline | generalized combinator app-reuse with `app_step!` reducer macro cleanup |
+| local commits ahead after this snapshot commit | 63 |
+| runtime code baseline | tuple first-field selector shortcut checkpoint |
 | dirty files after this snapshot commit | none expected |
 | dirty work | none in tracked runtime files |
 | matrix file | `MATRIX.md`, tracked from this snapshot |
 
 ## Verification Baseline
 
-Last fully verified state: `app_step!` reducer macro cleanup.
+Last fully verified state: tuple first-field selector shortcut checkpoint.
 
 | gate | status |
 |---|---|
-| `cargo test -p microhs-runtime --quiet` | passed before `app_step!` reducer macro cleanup commit; 27 tests |
-| `cargo check -p microhs-runtime --lib --quiet` | passed before `app_step!` reducer macro cleanup commit |
-| `cargo check -p microhs-runtime --bins --quiet` | passed before `app_step!` reducer macro cleanup commit |
-| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before `app_step!` reducer macro cleanup commit |
-| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before `app_step!` reducer macro cleanup commit |
+| `cargo test -p microhs-runtime --quiet` | passed before tuple first-field selector shortcut commit; 27 tests |
+| `cargo check -p microhs-runtime --lib --quiet` | passed before tuple first-field selector shortcut commit |
+| `cargo check -p microhs-runtime --bins --quiet` | passed before tuple first-field selector shortcut commit |
+| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before tuple first-field selector shortcut commit |
+| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before tuple first-field selector shortcut commit |
 | `node --check rust/microhs-runtime/js/host.mjs` | passed at `f8b9e1d5` |
 | Node wasm core render smoke | passed at `9cbef47e`; host shim instantiated wasm, reduced `v8.4\n0\nI #5 @ }\n`, and rendered `5` |
 | Node wasm dynamic `~I` JS FFI smoke | passed at `58280b6e`; path-loaded wasm reduced `IO.performIO ~I "return 40 + 2" @` and rendered `42` |
@@ -36,10 +36,10 @@ Last fully verified state: `app_step!` reducer macro cleanup.
 | Node wasm wrapper tag coverage smoke | passed at `f8b9e1d5`; `II`, `UU`, `DD`, `FF`, `BB`, `SS`, `JJ`, and `PP` wrappers round-trip through JS and render expected values |
 | Node wasm unsigned/high-bit JS smoke | passed at `f8b9e1d5`; direct `~U` rendered `4294967295`; direct and wrapper `~P` rendered `Ptr#2147483648` |
 | Node wasm Response-source smoke | passed at `58280b6e`; `Response(bytes)` source reduced `~S "return 'hi'"` and rendered `"hi"` |
-| `cargo fmt --all --check` | passed before `app_step!` reducer macro cleanup commit |
-| `git diff --check` | passed before `app_step!` reducer macro cleanup commit |
+| `cargo fmt --all --check` | passed before tuple first-field selector shortcut commit |
+| `git diff --check` | passed before tuple first-field selector shortcut commit |
 | `make bin/mhsbench` | passed/up to date at `70eabf4d` |
-| `cargo build --release --bin mhs-rust-bench --quiet` | passed before `app_step!` reducer macro cleanup commit |
+| `cargo build --release --bin mhs-rust-bench --quiet` | passed before tuple first-field selector shortcut commit |
 | `cargo build --release --bin mhs-rust --quiet` | passed before generalized combinator app-reuse checkpoint commit |
 | signed `i64::MIN` comb parser smoke | passed before checkpoint commit; Rust now parses the self-host compiler comb containing `##-9223372036854775808` |
 | unbounded internal force budget smoke | passed before checkpoint commit; self-hosting no longer trips the old internal `10_000` WHNF cap |
@@ -61,6 +61,7 @@ Last fully verified state: `app_step!` reducer macro cleanup.
 | hot combinator app-reuse perf probe | passed before checkpoint commit; `B`, `C`, `C'`, `C'B`, and `P` now reuse the consumed redex app node for the final result app; self-host `--help` drops from `123,441,471` to `113,332,505` ns/iter and from `889,877` to `722,333` nodes after run with the same 312,558 reductions; rerun canaries sink-match C, with `arith`, `zoo`, and `data` better than prior matrix rows and `io`, `ffi-mem`, and `bfile-read` in the same noisy band |
 | generalized combinator app-reuse perf probe | passed before checkpoint commit; final-app reuse now also covers pure combinator skeletons `U`, `S`, `S'`, `B'`, `Z`, `J`, `L`, `R`, `O`, partial `K2`/`K3`/`K4`, partial `C'B`, `Y`, `TAGn`, and `Tn`; self-host `--help` drops from `113,332,505` to `104,514,392` ns/iter and from `722,333` to `648,345` nodes after run with the same 312,558 reductions; rerun canaries sink-match C, with `arith`, `zoo`, and `data` better than prior matrix rows and `io`, `ffi-mem`, and `bfile-read` still in the same noisy band |
 | `app_step!` reducer macro cleanup | passed before checkpoint commit; pure app-reuse reducer returns now use one local macro in `Program::step`; no intended behavior change; self-host `--help` canary still has sink `960903` and 312,558 WHNF steps, while raw timing was noisy on this machine |
+| tuple first-field selector perf probe | passed before checkpoint commit; `Tn` now recognizes direct first-field selectors `K2`/`K3`/`K4` when enough tuple/extra args are already present, preserving the two-reduction count while skipping intermediate selector app allocation; `data-chain:300` improved to `138,919` ns/iter Rust vs `140,502` ns/iter C on the longer rerun; self-host `--help` kept sink `960903`, 312,558 reductions, and 648,345 nodes after run, so this is a data-constructor win rather than a compiler-scale win |
 | ignored IO action shortcut perf probe | passed before checkpoint commit; `io-chain`, `io-control-chain`, `argref-chain`, `ffi-chain`, `ffi-math-chain`, `ffi-const-chain`, `env-set-chain`, and `remove-missing-chain` improved with matching sinks; `ffi-mem-chain` and `bfile-read-chain` canaries stayed in the same band |
 | direct lazyBind FFI-continuation perf probe | passed before checkpoint commit; against a clean `50e11139` temp worktree, `ffi-mem-chain` improved from ~1.31 ms to ~0.18 ms and `bfile-read-chain` improved from ~1.50 ms to ~0.34 ms with matching sinks; direct BFILE/env rows improved, while complex continuation canaries stayed in the same noisy band |
 | reducer inline-spine perf probe | passed at `63d03844`; against `f8b9e1d5` temp build, current Rust improved `arith-chain`, `io-chain`, `ffi-chain`, `ffi-mem-chain`, and `bfile-read-chain` by roughly 4-13% |
@@ -135,7 +136,7 @@ Last fully verified state: `app_step!` reducer macro cleanup.
 | C-compatible graph serializer spacing | passed at `6438ec82`; `argref-chain`, `mvar-chain`, `weak-chain` sinks match |
 | benchmark StablePtr harness reset | passed at `6438ec82`; `stableptr-chain` sink matches |
 
-No tracked runtime behavior changes after the generalized combinator app-reuse checkpoint; the latest runtime edit is a local reducer macro cleanup.
+Latest tracked runtime behavior change is the tuple first-field selector shortcut; it improves constructor-selector chains but does not change the self-host `--help` profile shape.
 
 ## Tier Status
 
@@ -234,8 +235,8 @@ runtime primitives.
 | `rnf-chain:200` | 75,782 | 3,801,194 | 0.02 | yes |
 | `stableptr-chain:200` | 11,719 | 118,789 | 0.10 | yes |
 | `weak-chain:200` | 20,320 | 115,161 | 0.18 | yes |
-| `zoo-chain:300` | 158,832 | 127,845 | 1.24 | yes |
-| `data-chain:300` | 165,659 | 132,097 | 1.25 | yes |
+| `zoo-chain:300` | 163,491 | 132,363 | 1.24 | yes |
+| `data-chain:300` | 138,919 | 140,502 | 0.99 | yes |
 
 ### Comparable Rare/Specialized
 
@@ -265,7 +266,7 @@ section only measures the C and Rust runtimes executing that compiler.
 | check | C runtime | Rust runtime | status |
 |---|---:|---:|---|
 | compiler comb input | 647 KiB `/tmp/mhs-selfhost.comb`; generated by native `bin/mhs` | parses after signed-`i64::MIN` parser fix | input ready |
-| `--help` main smoke | 10,810,951 ns/iter; sink `661902` | 104,514,392 ns/iter; sink `960903` | both run and print usage; not a full compile; refreshed with `--warmup-iters 1 --iters 3 --profile --profile-top 8`; macro-cleanup canary still sink-matches at `960903` and 312,558 WHNF steps, but raw timing was noisy |
+| `--help` main smoke | 10,810,951 ns/iter; sink `661902` | 104,514,392 ns/iter; sink `960903` | both run and print usage; not a full compile; refreshed with `--warmup-iters 1 --iters 3 --profile --profile-top 8`; tuple-selector checkpoint canary still sink-matches at `960903` with 312,558 WHNF steps and 648,345 profile nodes after run, but raw timing was noisy |
 | self-host compiler smoke | 56,387,928,187 ns/iter; output `/tmp/mhs-selfhost-c-refresh.comb` is a 647 KiB `v8.4` comb | latest full run at `4f6fa095` hit `timeout 600s` with exit `124`; no output comb at `/tmp/mhs-selfhost-rust-4f6fa095.comb` | not at parity |
 
 ### Self-Host Comb Static Profile
@@ -386,7 +387,7 @@ Hot runtime line counts over 10 instrumented `--help` iterations:
 
 | topic | current theory |
 |---|---|
-| Rust/C performance gap | The ignored-action, direct lazyBind, performIO extra-spine, direct Scott-pair selector, UTF-8 ASCII refill, direct `IO.return` bind, uninitialized 16-slot inline spine, hot/generalized combinator app-reuse probes, dynamic runtime counters, and Rust/LLVM hot-count profile confirm the gap is mostly evaluator overhead, not parity noise. Simple `IO.>>`, direct FFI, unary result-fed FFI/BFILE chains, lazy performIO application, ASCII text reads, trivial returned binds, and most self-host `--help` spine traversals are now close to C or materially better than before. The static, dynamic, and LLVM profiles point away from IO/array/FFI as the main full-compiler blocker. Because this machine may be busy, raw timings are treated as indicative only; the stronger signal is the count distribution. The active theory is compile-scale reducer/runtime throughput: `resolve`, spine traversal, remaining app allocation/update mechanics, primitive dispatch, and IO-bind skeletons. Pure final-app combinator allocation is now broadly addressed and factored through `app_step!`; recent lazy-argument and broad IO app-reuse probes did not hold up, so remaining candidates are primitive-name dispatch, repeated `resolve` traffic, and more targeted IO-specific rewrites that do not reintroduce indirection blow-ups. |
+| Rust/C performance gap | The ignored-action, direct lazyBind, performIO extra-spine, direct Scott-pair selector, UTF-8 ASCII refill, direct `IO.return` bind, uninitialized 16-slot inline spine, hot/generalized combinator app-reuse probes, tuple first-field selector shortcut, dynamic runtime counters, and Rust/LLVM hot-count profile confirm the gap is mostly evaluator overhead, not parity noise. Simple `IO.>>`, direct FFI, unary result-fed FFI/BFILE chains, lazy performIO application, ASCII text reads, trivial returned binds, constructor first-field selectors, and most self-host `--help` spine traversals are now close to C or materially better than before. The static, dynamic, and LLVM profiles point away from IO/array/FFI as the main full-compiler blocker. Because this machine may be busy, raw timings are treated as indicative only; the stronger signal is the count distribution. The active theory is compile-scale reducer/runtime throughput: `resolve`, spine traversal, remaining app allocation/update mechanics, primitive dispatch, and IO-bind skeletons. Pure final-app combinator allocation is now broadly addressed and factored through `app_step!`; the tuple-selector shortcut closes the common `data-chain` gap but leaves self-host node growth unchanged, so remaining candidates are primitive-name dispatch, repeated `resolve` traffic, and more targeted IO-specific rewrites that do not reintroduce indirection blow-ups. |
 
 ### Compiler-Generated Compressor Write Smokes
 
@@ -412,6 +413,6 @@ Rows in this section are generated from temporary pure Haskell programs compiled
 | high-level temp/CPU tests | runtime now covers `tmpname` and `getcpu`; direct smokes cover the raw FFI actions only | pending full high-level `System.IO.openTmpFile` / `System.CPUTime` tests once the compiler binary is available |
 | commit runtime parity checkpoint | `63702f10 Add Rust mpz and JS FFI coverage` | done |
 | JS full parity | runtimeFFI missing-symbol coverage is zero; `JSVal` object result/argument handles, wrapper creation boundary, owning-program handle plumbing, wrapper tag registry, internal StablePtr callback trampoline, typed JS wrapper callback API, real Rust `.wasm` build artifact, wasm embedding exports, browser-loadable JS host shim, direct wasm dynamic JS FFI smoke, same-program wrapper callback smoke, and broad wrapper tag coverage are in place, but high-level `foreign import javascript` browser parity is not complete; `.combffi` probing did not expose enough JavaScript import metadata for a runtime-only bridge | pending compiler-emitted metadata or generated glue path |
-| performance phase | sixteen performance checkpoints plus one benchmark parity checkpoint plus static, dynamic, and Rust/LLVM profile checkpoints committed; numeric benchmark matrix rows now all sink-match C; rows are split into common-case and rare/specialized; common-operation targets should shift from narrow IO/FFI probes to `resolve`, primitive dispatch, remaining spine traversal, app allocation/update mechanics, and IO-specific reductions where Rust is still well behind C at self-host scale | active |
+| performance phase | seventeen performance checkpoints plus one benchmark parity checkpoint plus static, dynamic, and Rust/LLVM profile checkpoints committed; numeric benchmark matrix rows now all sink-match C; rows are split into common-case and rare/specialized; common-operation targets should shift from narrow IO/FFI/data-constructor probes to `resolve`, primitive dispatch, remaining spine traversal, app allocation/update mechanics, and IO-specific reductions where Rust is still well behind C at self-host scale | active |
 | rejected performance probes | `KnownFfi` enum/symbol specialization, single-pass BFILE read dispatch, direct unit-return FFI pairing, direct Unix `getcwd` into guest allocation, head-node clone collapse in `step`, primitive-node cache, broad fixed-primitive borrowed classifier, pre-clone `IO.>>` branch, broad borrowed C-string host paths, borrowed `md5String`, over-broad pointer FFI pre-dispatch, generic-arm `peekPtr`/`pokePtr` direct returns, zero-arity FFI candidate guard, direct zero-arity FFI under `IO.>>`, direct FFI shortcut under `IO.lazyBind`, borrowed fixed-size peeks, runtime handle-table free lists, shared `Rc<str>` node symbols, `IO.>>=` direct array-action execution, the `IO.return`/`K` continuation collapse, broad fast-combinator pre-dispatch, skipping outer-app rethreading after reduction, always-inlining the hot small reducer helpers, 12-slot inline spine storage, 8-slot uninitialized-only spine storage, lazy argument resolution in `spine`, and broad IO final-app reuse were measured and reverted or not selected because important end-to-end rows were neutral or slower | done, do not reapply blindly |
 | keep compiler Haskell | scope is C runtime/evaluator rewrite; Haskell compiler remains authoritative `.comb` producer | ongoing |
