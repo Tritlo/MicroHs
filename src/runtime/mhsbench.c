@@ -82,10 +82,11 @@ init_runtime(void)
 #endif
 }
 
-static void
+static NODEPTR
 start_whnf(NODEPTR root)
 {
   struct mthread *mt;
+  NODEPTR result = NIL;
 
   /* Like start_exec(), but evaluate the benchmark root itself instead of
    * applying the runtime World argument used by compiled main programs. */
@@ -121,17 +122,18 @@ start_whnf(NODEPTR root)
 
     glob_slice = mt->mt_slice + slice;
     num_reductions += glob_slice-1;
-    (void)evali(mt->mt_root);
+    result = evali(mt->mt_root);
     num_reductions -= glob_slice;
     (void)remove_q_head(&runq);
 
     mt->mt_state = ts_finished;
-    mt->mt_root = NIL;
 
     if (mt->mt_id == MAIN_THREAD) {
       main_thread = 0;
-      return;
+      mt->mt_root = NIL;
+      return result;
     }
+    mt->mt_root = NIL;
   }
 }
 
@@ -140,6 +142,7 @@ bench_once(const uint8_t *input, size_t len, enum bench_mode mode)
 {
   BFILE *in = openb_rd_mem(input, len);
   NODEPTR prog = parse_top(in, 0);
+  NODEPTR result = prog;
   BFILE *out;
   uint8_t *out_bytes;
   size_t out_len;
@@ -148,17 +151,21 @@ bench_once(const uint8_t *input, size_t len, enum bench_mode mode)
   CLEARSTK();
   if (mode == BENCH_MAIN)
     start_exec(prog);
-  else
-    start_whnf(prog);
+  else {
+    result = start_whnf(prog);
+    PUSH(result);
+  }
 
   out = openb_wr_mem();
-  printb(out, prog, false);
+  printb(out, result, true);
   putb('\n', out);
   get_mem(out, &out_bytes, &out_len);
   bench_sink += out_len;
   if (out_len)
     bench_sink += out_bytes[0];
   closeb(out);
+  if (mode == BENCH_WHNF)
+    POP(1);
 }
 
 static void

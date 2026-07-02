@@ -46,6 +46,8 @@ cargo run --release --bin mhs-rust-bench -- --scenario ffi-math-chain:200 --iter
 cargo run --release --bin mhs-rust-bench -- --scenario ffi-const-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario ffi-mem-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario ffi-wide-mem-chain:200 --iters 1000
+cargo run --release --bin mhs-rust-bench -- --scenario ffi-word-mem-chain:200 --iters 1000
+cargo run --release --bin mhs-rust-bench -- --scenario ffi-ptr-mem-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario ffi-strcpy-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario mvar-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario ptr-chain:200 --iters 1000
@@ -71,12 +73,13 @@ over parse, eval, and serialize in-process. The Rust runner passes
 WHNF that Rust evaluates. Use `--c-mhsbench-mode main` only for a real MicroHs
 main program that expects the runtime `World` argument. The comparable C number
 is `c_parse_eval_serialize_ns_per_iter`; the comparable Rust number is
-`parse_reduce_render_ns_per_iter`. Rust `whnf_steps` currently counts outer WHNF
-rewrites; strict primitive argument evaluation is included in elapsed time but
-not counted as separate steps.
+`parse_reduce_render_ns_per_iter`. Both sides serialize the WHNF result as a
+`.comb` fragment before updating the sink. Rust `whnf_steps` currently counts
+outer WHNF rewrites; strict primitive argument evaluation is included in elapsed
+time but not counted as separate steps.
 
 Treat `parse_ns_per_iter` as a parser diagnostic, not as a clean component of
 `parse_reduce_render_ns_per_iter`. The reduce path mutates the graph before
 Rust drops it, while parse-only drops the original graph, so the two rows can
 have different destruction costs. Use repeated runs, matching `--warmup-iters`,
-and the `render_sink` / `c_bench_sink` rows when judging C/Rust ratios.
+and the `serialize_sink` / `c_bench_sink` rows when judging C/Rust ratios.
