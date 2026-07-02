@@ -104,6 +104,13 @@ enum BFileKind {
         outpos: usize,
         outlen: usize,
     },
+    Lz77 {
+        inner: i64,
+        read: bool,
+        buffer: Vec<u8>,
+        pos: usize,
+        numflush: usize,
+    },
     Buf {
         inner: i64,
         unget: Option<i64>,
@@ -1684,6 +1691,14 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 Node::Ptr(self.add_base64_bfile(ptr, false)?)
             }
+            "add_lz77_decompressor" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Ptr(self.add_lz77_bfile(ptr, true)?)
+            }
+            "add_lz77_compressor" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Ptr(self.add_lz77_bfile(ptr, false)?)
+            }
             "add_buf" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let size = self.eval_int(args[1])?;
@@ -2387,6 +2402,57 @@ impl Program {
         })
     }
 
+    fn add_lz77_bfile(&mut self, ptr: i64, read: bool) -> Result<i64, EvalError> {
+        let (inner_readable, inner_writable) = self.bfile_permissions(ptr)?;
+        if read {
+            if !inner_readable {
+                return Err(EvalError::InvalidHandle);
+            }
+            let magic = self.read_bfile_bytes(ptr, 3)?;
+            if magic != b"LZ1" {
+                return Err(EvalError::InvalidByteString);
+            }
+            let len = self.read_bfile_u32_le(ptr)?;
+            let compressed = self.read_bfile_bytes(ptr, len)?;
+            if compressed.len() != len {
+                return Err(EvalError::InvalidByteString);
+            }
+            let buffer = lz77_decompress(&compressed)?;
+            self.alloc_bfile(BFile {
+                kind: BFileKind::Lz77 {
+                    inner: ptr,
+                    read: true,
+                    buffer,
+                    pos: 0,
+                    numflush: 0,
+                },
+                readable: true,
+                writable: false,
+            })
+        } else {
+            if !inner_writable {
+                return Err(EvalError::InvalidHandle);
+            }
+            self.alloc_bfile(BFile {
+                kind: BFileKind::Lz77 {
+                    inner: ptr,
+                    read: false,
+                    buffer: Vec::with_capacity(25_000),
+                    pos: 0,
+                    numflush: 0,
+                },
+                readable: false,
+                writable: true,
+            })
+        }
+    }
+
+    fn read_bfile_u32_le(&mut self, ptr: i64) -> Result<usize, EvalError> {
+        let bytes = self.read_bfile_bytes(ptr, 4)?;
+        let bytes: [u8; 4] = bytes.try_into().map_err(|_| EvalError::InvalidByteString)?;
+        usize::try_from(u32::from_le_bytes(bytes)).map_err(|_| EvalError::Overflow)
+    }
+
     fn add_buf_bfile(&mut self, ptr: i64, bufsize: i64) -> Result<i64, EvalError> {
         let (readable, writable) = self.bfile_permissions(ptr)?;
         let linebuf = bufsize < 0;
@@ -2672,6 +2738,7 @@ impl Program {
                 BFileKind::Buf { read: false, .. }
                     | BFileKind::Rle { read: false, .. }
                     | BFileKind::Base64 { read: false, .. }
+                    | BFileKind::Lz77 { read: false, .. }
             )
         };
         if flush_self {
@@ -2714,6 +2781,7 @@ impl Program {
                 | BFileKind::Crlf { inner }
                 | BFileKind::Rle { inner, .. }
                 | BFileKind::Base64 { inner, .. }
+                | BFileKind::Lz77 { inner, .. }
                 | BFileKind::Buf { inner, .. } => Some(*inner),
                 _ => None,
             }
@@ -2775,6 +2843,30 @@ impl Program {
                     } else {
                         let bytes = base64_pending_bytes(encbuf, encpos, *linelen, outcol)?;
                         *encpos = 0;
+                        Some((*inner, bytes))
+                    }
+                }
+                BFileKind::Lz77 {
+                    inner,
+                    read,
+                    buffer,
+                    pos,
+                    numflush,
+                } => {
+                    if *read {
+                        None
+                    } else if *numflush > 0 && *pos == 0 {
+                        *numflush = numflush.checked_add(1).ok_or(EvalError::Overflow)?;
+                        None
+                    } else {
+                        *numflush = numflush.checked_add(1).ok_or(EvalError::Overflow)?;
+                        let compressed = lz77_compress(&buffer[..*pos])?;
+                        let mut bytes = Vec::with_capacity(7 + compressed.len());
+                        bytes.extend_from_slice(b"LZ1");
+                        bytes.extend_from_slice(&u32_le_bytes(compressed.len())?);
+                        bytes.extend_from_slice(&compressed);
+                        buffer.clear();
+                        *pos = 0;
                         Some((*inner, bytes))
                     }
                 }
@@ -2886,6 +2978,19 @@ impl Program {
             BFileKind::Crlf { .. } => unreachable!("handled above"),
             BFileKind::Rle { .. } => unreachable!("handled above"),
             BFileKind::Base64 { .. } => unreachable!("handled above"),
+            BFileKind::Lz77 {
+                read, buffer, pos, ..
+            } => {
+                if !*read {
+                    return Err(EvalError::InvalidHandle);
+                }
+                if *pos >= buffer.len() {
+                    return Ok(-1);
+                }
+                let byte = buffer[*pos];
+                *pos += 1;
+                Ok(i64::from(byte))
+            }
             BFileKind::Buf { .. } => unreachable!("handled above"),
         }
     }
@@ -3208,6 +3313,13 @@ impl Program {
                 *unget = Some(byte);
                 Ok(())
             }
+            BFileKind::Lz77 { read, pos, .. } => {
+                if !*read || *pos == 0 {
+                    return Err(EvalError::InvalidHandle);
+                }
+                *pos -= 1;
+                Ok(())
+            }
             BFileKind::Buf { unget, .. } => {
                 if unget.is_some() {
                     return Err(EvalError::InvalidHandle);
@@ -3276,6 +3388,22 @@ impl Program {
             BFileKind::Crlf { .. } => unreachable!("handled above"),
             BFileKind::Rle { .. } => unreachable!("handled above"),
             BFileKind::Base64 { .. } => unreachable!("handled above"),
+            BFileKind::Lz77 {
+                read, buffer, pos, ..
+            } => {
+                if *read {
+                    return Err(EvalError::InvalidHandle);
+                }
+                if *pos == buffer.len() {
+                    buffer.push(byte as u8);
+                } else if *pos < buffer.len() {
+                    buffer[*pos] = byte as u8;
+                } else {
+                    return Err(EvalError::InvalidHandle);
+                }
+                *pos += 1;
+                Ok(())
+            }
             BFileKind::Buf { .. } => unreachable!("handled above"),
         }
     }
@@ -3538,7 +3666,22 @@ impl Program {
             | BFileKind::Crlf { .. }
             | BFileKind::Rle { .. }
             | BFileKind::Base64 { .. }
+            | BFileKind::Lz77 { read: false, .. }
             | BFileKind::Buf { .. } => unreachable!("handled above"),
+            BFileKind::Lz77 {
+                read, buffer, pos, ..
+            } => {
+                if !*read {
+                    return Err(EvalError::InvalidHandle);
+                }
+                let end = pos
+                    .checked_add(len)
+                    .map(|end| end.min(buffer.len()))
+                    .ok_or(EvalError::Overflow)?;
+                let out = buffer[*pos..end].to_vec();
+                *pos = end;
+                Ok(out)
+            }
         }
     }
 
@@ -3594,7 +3737,21 @@ impl Program {
             | BFileKind::Crlf { .. }
             | BFileKind::Rle { .. }
             | BFileKind::Base64 { .. }
+            | BFileKind::Lz77 { read: true, .. }
             | BFileKind::Buf { .. } => unreachable!("handled above"),
+            BFileKind::Lz77 {
+                read, buffer, pos, ..
+            } => {
+                if *read {
+                    return Err(EvalError::InvalidHandle);
+                }
+                let end = pos.checked_add(bytes.len()).ok_or(EvalError::Overflow)?;
+                if end > buffer.len() {
+                    buffer.resize(end, 0);
+                }
+                buffer[*pos..end].copy_from_slice(bytes);
+                *pos = end;
+            }
         }
         Ok(bytes.len())
     }
@@ -3612,6 +3769,7 @@ impl Program {
             BFileKind::Crlf { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Rle { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Base64 { .. } => Err(EvalError::InvalidHandle),
+            BFileKind::Lz77 { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Buf { .. } => Err(EvalError::InvalidHandle),
         }
     }
@@ -4867,6 +5025,167 @@ fn base64_quad_bytes(indices: [usize; 4], linelen: usize, outcol: &mut usize) ->
     out
 }
 
+const LZ77_MAXWIN: usize = 8_192;
+const LZ77_MAXLEN: usize = 9 + 255;
+const LZ77_MINMATCH: usize = 3;
+const LZ77_MINOFFS: usize = 1;
+const LZ77_MAXLIT: usize = 32;
+const LZ77_HASHBITS: usize = 11;
+const LZ77_HASHSIZE: usize = 1 << LZ77_HASHBITS;
+const LZ77_NUMPREV: usize = 16;
+
+fn lz77_decompress(src: &[u8]) -> Result<Vec<u8>, EvalError> {
+    let mut out = Vec::with_capacity(100_000);
+    let mut src_pos = 0;
+    while src_pos < src.len() {
+        let op = src[src_pos];
+        src_pos += 1;
+        let opx = usize::from(op & 0x1f);
+        let op = op >> 5;
+        if op == 0 {
+            let len = opx.checked_add(1).ok_or(EvalError::Overflow)?;
+            let end = src_pos.checked_add(len).ok_or(EvalError::Overflow)?;
+            let bytes = src.get(src_pos..end).ok_or(EvalError::InvalidByteString)?;
+            out.extend_from_slice(bytes);
+            src_pos = end;
+        } else {
+            let lo = *src.get(src_pos).ok_or(EvalError::InvalidByteString)?;
+            src_pos += 1;
+            let offs = opx
+                .checked_mul(256)
+                .and_then(|offs| offs.checked_add(usize::from(lo)))
+                .and_then(|offs| offs.checked_add(LZ77_MINOFFS))
+                .ok_or(EvalError::Overflow)?;
+            let len = if op == 7 {
+                let extra = *src.get(src_pos).ok_or(EvalError::InvalidByteString)?;
+                src_pos += 1;
+                9usize
+                    .checked_add(usize::from(extra))
+                    .ok_or(EvalError::Overflow)?
+            } else {
+                2usize
+                    .checked_add(usize::from(op))
+                    .ok_or(EvalError::Overflow)?
+            };
+            if offs > out.len() {
+                return Err(EvalError::InvalidByteString);
+            }
+            let start = out.len() - offs;
+            for idx in 0..len {
+                let byte = *out.get(start + idx).ok_or(EvalError::InvalidByteString)?;
+                out.push(byte);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn lz77_compress(src: &[u8]) -> Result<Vec<u8>, EvalError> {
+    let mut out = Vec::with_capacity(25_000);
+    let mut hashes = [[usize::MAX; LZ77_NUMPREV]; LZ77_HASHSIZE];
+    let mut cur = 0;
+    while cur < src.len() {
+        let mut match_offs = 0;
+        let mut match_len = 0;
+        let mut len = 0;
+        while len < src.len() - cur {
+            (match_len, match_offs) = lz77_find_longest_match(src, cur + len, &hashes);
+            if match_len >= LZ77_MINMATCH {
+                break;
+            }
+            lz77_update_hash(src, cur + len, &mut hashes);
+            len += 1;
+        }
+        while len != 0 {
+            let n = len.min(LZ77_MAXLIT);
+            out.push(u8::try_from(n - 1).map_err(|_| EvalError::Overflow)?);
+            out.extend_from_slice(&src[cur..cur + n]);
+            cur += n;
+            len -= n;
+        }
+        if match_len >= LZ77_MINMATCH {
+            for _ in 0..match_len {
+                lz77_update_hash(src, cur, &mut hashes);
+                cur += 1;
+            }
+            let match_offs = match_offs
+                .checked_sub(LZ77_MINOFFS)
+                .ok_or(EvalError::Overflow)?;
+            let match_len = match_len.checked_sub(2).ok_or(EvalError::Overflow)?;
+            let hi = match_offs >> 8;
+            let lo = match_offs & 0xff;
+            if match_len < 7 {
+                out.push(u8::try_from((match_len << 5) + hi).map_err(|_| EvalError::Overflow)?);
+                out.push(u8::try_from(lo).map_err(|_| EvalError::Overflow)?);
+            } else {
+                out.push(u8::try_from((7 << 5) + hi).map_err(|_| EvalError::Overflow)?);
+                out.push(u8::try_from(lo).map_err(|_| EvalError::Overflow)?);
+                out.push(u8::try_from(match_len - 7).map_err(|_| EvalError::Overflow)?);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn lz77_hash(bytes: &[u8]) -> usize {
+    let mut hash = 5381usize;
+    for byte in bytes.iter().take(4) {
+        hash = hash.wrapping_mul(33).wrapping_add(usize::from(*byte));
+    }
+    hash & (LZ77_HASHSIZE - 1)
+}
+
+fn lz77_find_longest_match(
+    src: &[u8],
+    cur: usize,
+    hashes: &[[usize; LZ77_NUMPREV]; LZ77_HASHSIZE],
+) -> (usize, usize) {
+    let win_end = cur + 1;
+    let win_len = win_end.min(LZ77_MAXWIN);
+    let offsets = &hashes[lz77_hash(&src[cur..])];
+    let mut match_len = 0;
+    let mut match_offs = 0;
+    for offset in offsets {
+        if *offset == usize::MAX {
+            break;
+        }
+        if *offset > cur {
+            break;
+        }
+        let offs = cur - *offset;
+        if !(LZ77_MINOFFS..win_len).contains(&offs) {
+            break;
+        }
+        let len = lz77_match_len(src, cur, cur - offs);
+        if len > match_len {
+            match_len = len;
+            match_offs = offs;
+        }
+    }
+    (match_len, match_offs)
+}
+
+fn lz77_match_len(src: &[u8], cur: usize, win: usize) -> usize {
+    let mut len = 0;
+    while cur + len < src.len() && len < LZ77_MAXLEN && src[cur + len] == src[win + len] {
+        len += 1;
+    }
+    len
+}
+
+fn lz77_update_hash(src: &[u8], cur: usize, hashes: &mut [[usize; LZ77_NUMPREV]; LZ77_HASHSIZE]) {
+    let slots = &mut hashes[lz77_hash(&src[cur..])];
+    for idx in (1..LZ77_NUMPREV).rev() {
+        slots[idx] = slots[idx - 1];
+    }
+    slots[0] = cur;
+}
+
+fn u32_le_bytes(n: usize) -> Result<[u8; 4], EvalError> {
+    let n = u32::try_from(n).map_err(|_| EvalError::Overflow)?;
+    Ok(n.to_le_bytes())
+}
+
 fn int_to_i32(n: i64) -> Result<i32, EvalError> {
     i32::try_from(n).map_err(|_| EvalError::Overflow)
 }
@@ -5071,6 +5390,8 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "add_rle_decompressor"
         | "add_base64_encoder"
         | "add_base64_decoder"
+        | "add_lz77_compressor"
+        | "add_lz77_decompressor"
         | "closeb"
         | "flushb"
         | "getb"
