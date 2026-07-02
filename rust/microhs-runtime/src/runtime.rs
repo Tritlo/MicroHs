@@ -353,6 +353,21 @@ impl Program {
         Err(EvalError::StepLimit { limit })
     }
 
+    pub fn apply_stable_ptr_pointer(
+        &mut self,
+        stable_ptr: usize,
+        arg: i64,
+        limit: usize,
+    ) -> Result<i64, EvalError> {
+        let fun = self.deref_stable_ptr(stable_ptr)?;
+        let arg = self.push_node(Node::Ptr(arg));
+        let action = self.app(fun, arg);
+        let perform_io = self.prim("IO.performIO");
+        let root = self.app(perform_io, action);
+        let root = self.reduce_node_whnf(root, limit)?;
+        self.eval_pointer_value(root)
+    }
+
     fn step(&mut self, root: NodeId, budget: usize) -> Result<Option<StepResult>, EvalError> {
         let Spine { head, args, apps } = self.spine(root)?;
         if let Node::Ffi(name) = self.nodes[head.0].clone() {
