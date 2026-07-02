@@ -11,23 +11,23 @@ performance, or benchmark classification changes.
 |---|---|
 | branch | `microhs-rust` |
 | upstream tracking | `origin/microhs-rust` |
-| local commits ahead after this snapshot commit | 77 |
-| runtime code baseline | complete eval.c FFI table checkpoint |
+| local commits ahead after this snapshot commit | 78 |
+| runtime code baseline | C-compatible `fromUTF8` malformed-input checkpoint |
 | dirty files after this snapshot commit | none expected |
 | dirty work | none in tracked runtime files |
 | matrix file | `MATRIX.md`, tracked from this snapshot |
 
 ## Verification Baseline
 
-Last fully verified state: complete eval.c FFI table checkpoint.
+Last fully verified state: C-compatible `fromUTF8` malformed-input checkpoint.
 
 | gate | status |
 |---|---|
-| `cargo test -p microhs-runtime --quiet` | passed before eval.c FFI table completion commit; 31 tests |
-| `cargo check -p microhs-runtime --lib --quiet` | passed before eval.c FFI table completion commit |
-| `cargo check -p microhs-runtime --bins --quiet` | passed before eval.c FFI table completion commit |
-| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before eval.c FFI table completion commit |
-| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before eval.c FFI table completion commit |
+| `cargo test -p microhs-runtime --quiet` | passed before C-compatible `fromUTF8` commit; 31 tests |
+| `cargo check -p microhs-runtime --lib --quiet` | passed before C-compatible `fromUTF8` commit |
+| `cargo check -p microhs-runtime --bins --quiet` | passed before C-compatible `fromUTF8` commit |
+| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before C-compatible `fromUTF8` commit |
+| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before C-compatible `fromUTF8` commit |
 | `node --check rust/microhs-runtime/js/host.mjs` | passed at `f8b9e1d5` |
 | Node wasm core render smoke | passed at `9cbef47e`; host shim instantiated wasm, reduced `v8.4\n0\nI #5 @ }\n`, and rendered `5` |
 | Node wasm dynamic `~I` JS FFI smoke | passed at `58280b6e`; path-loaded wasm reduced `IO.performIO ~I "return 40 + 2" @` and rendered `42` |
@@ -36,10 +36,10 @@ Last fully verified state: complete eval.c FFI table checkpoint.
 | Node wasm wrapper tag coverage smoke | passed at `f8b9e1d5`; `II`, `UU`, `DD`, `FF`, `BB`, `SS`, `JJ`, and `PP` wrappers round-trip through JS and render expected values |
 | Node wasm unsigned/high-bit JS smoke | passed at `f8b9e1d5`; direct `~U` rendered `4294967295`; direct and wrapper `~P` rendered `Ptr#2147483648` |
 | Node wasm Response-source smoke | passed at `58280b6e`; `Response(bytes)` source reduced `~S "return 'hi'"` and rendered `"hi"` |
-| `cargo fmt --all --check` | passed before eval.c FFI table completion commit |
-| `git diff --check` | passed before eval.c FFI table completion commit |
+| `cargo fmt --all --check` | passed before C-compatible `fromUTF8` commit |
+| `git diff --check` | passed before C-compatible `fromUTF8` commit |
 | `make bin/mhsbench` | passed/up to date at `70eabf4d` |
-| `cargo build --release -p microhs-runtime --bins --quiet` | passed before eval.c FFI table completion commit |
+| `cargo build --release -p microhs-runtime --bins --quiet` | passed before C-compatible `fromUTF8` commit |
 | signed `i64::MIN` comb parser smoke | passed before checkpoint commit; Rust now parses the self-host compiler comb containing `##-9223372036854775808` |
 | unbounded internal force budget smoke | passed before checkpoint commit; self-hosting no longer trips the old internal `10_000` WHNF cap |
 | main-mode benchmark harness smoke | passed before checkpoint commit; Rust and C support `--mode main -- PROGRAM ARGS...`; main mode measures execution and validates external output instead of serializing the whole root graph |
@@ -71,6 +71,7 @@ Last fully verified state: complete eval.c FFI table checkpoint.
 | C-compatible Integer serializer smoke | passed before checkpoint commit; `%` parser now accepts C's `%digits"` wire format while tolerating legacy Rust `%"digits"`, and serializer emits C-style `%digits"` for `BigInt`/mpz foreign pointers |
 | bounded ignored-IO shortcut smoke | passed before checkpoint commit; ignored-action preflight/execution now caps native recursion at 256 nested shortcut actions and falls back to the general reducer beyond that; `io-chain:200` and `io-control-chain:200` still sink-match C |
 | eval.c FFI table completion smoke | passed before checkpoint commit; `putchar` arity 1 and `lz77c` arity 3 are now in Rust's FFI arity table and call dispatcher; direct smokes cover `putchar` through `IO.performIO` and `lz77c` pointer-to-pointer compression with Rust decompression |
+| C-compatible `fromUTF8` malformed-input smoke | passed before checkpoint commit; `fromUTF8` now follows C's BFILE UTF-8 decoder for malformed inputs: accepts modified-UTF8 NUL, rejects overlong nonzero encodings, and treats a truncated tail as EOF; C's separate `headUTF8`/`tailUTF8` helper remains unchanged |
 | ignored IO action shortcut perf probe | passed before checkpoint commit; `io-chain`, `io-control-chain`, `argref-chain`, `ffi-chain`, `ffi-math-chain`, `ffi-const-chain`, `env-set-chain`, and `remove-missing-chain` improved with matching sinks; `ffi-mem-chain` and `bfile-read-chain` canaries stayed in the same band |
 | direct lazyBind FFI-continuation perf probe | passed before checkpoint commit; against a clean `50e11139` temp worktree, `ffi-mem-chain` improved from ~1.31 ms to ~0.18 ms and `bfile-read-chain` improved from ~1.50 ms to ~0.34 ms with matching sinks; direct BFILE/env rows improved, while complex continuation canaries stayed in the same noisy band |
 | reducer inline-spine perf probe | passed at `63d03844`; against `f8b9e1d5` temp build, current Rust improved `arith-chain`, `io-chain`, `ffi-chain`, `ffi-mem-chain`, and `bfile-read-chain` by roughly 4-13% |
@@ -447,7 +448,7 @@ Rows in this section are generated from temporary pure Haskell programs compiled
 
 | item | reason | status |
 |---|---|---|
-| detailed `eval.c` correctness batch | finalized review ranks small oracle-checkable semantic fixes before the structural reducer rewrite | F1 quoted bytestring serializer, F11 Integer serializer, F15 missing FFI symbols, and F18 ignored-IO shortcut cap done; F3/F4/F7/F16/F19 still pending |
+| detailed `eval.c` correctness batch | finalized review ranks small oracle-checkable semantic fixes before the structural reducer rewrite | F1 quoted bytestring serializer, F11 Integer serializer, F15 missing FFI symbols, F16 `fromUTF8` malformed input, and F18 ignored-IO shortcut cap done; F3/F4/F7/F19 still pending |
 | compression BFILE write-path benchmarks | decompressor rows existed; compiler-generated high-level compressor smokes now cover RLE/LZ77/BWT/LZMA write paths | partial done; built-in repeat scenarios still pending |
 | MD5 broader coverage | committed runtime covers all three FFI names; only `md5String` has a repeat benchmark | pending full high-level `System.IO.MD5` test once the compiler binary is available |
 | directory iteration FFI | committed runtime covers `opendir`, `readdir`, `closedir`, `c_d_name` | pending full high-level `System.Directory` test once the compiler binary is available |

@@ -2661,7 +2661,7 @@ impl Program {
             }
             "fromUTF8" => {
                 let bytes = self.eval_bytes(args[0])?;
-                let values = decode_utf8_bytes(&bytes)?;
+                let values = decode_utf8_string_bytes(&bytes)?;
                 self.int_list(values.into_iter().map(i64::from))
             }
             "bsfreeze" => {
@@ -10227,10 +10227,56 @@ fn head_utf8(bytes: &[u8]) -> Result<(u32, usize), EvalError> {
     Err(EvalError::InvalidByteString)
 }
 
-fn decode_utf8_bytes(mut bytes: &[u8]) -> Result<Vec<u32>, EvalError> {
+fn head_utf8_string(bytes: &[u8]) -> Result<Option<(u32, usize)>, EvalError> {
+    let Some(&c1) = bytes.first() else {
+        return Ok(None);
+    };
+    if c1 & 0x80 == 0 {
+        return Ok(Some((c1 as u32, 1)));
+    }
+
+    let Some(&c2) = bytes.get(1) else {
+        return Ok(None);
+    };
+    if c1 & 0xe0 == 0xc0 {
+        let c = (((c1 & 0x1f) as u32) << 6) | ((c2 & 0x3f) as u32);
+        if 0 < c && c < 0x80 {
+            return Err(EvalError::InvalidByteString);
+        }
+        return Ok(Some((c, 2)));
+    }
+
+    let Some(&c3) = bytes.get(2) else {
+        return Ok(None);
+    };
+    if c1 & 0xf0 == 0xe0 {
+        let c = (((c1 & 0x0f) as u32) << 12) | (((c2 & 0x3f) as u32) << 6) | ((c3 & 0x3f) as u32);
+        if c < 0x800 {
+            return Err(EvalError::InvalidByteString);
+        }
+        return Ok(Some((c, 3)));
+    }
+
+    let Some(&c4) = bytes.get(3) else {
+        return Ok(None);
+    };
+    if c1 & 0xf8 == 0xf0 {
+        let c = (((c1 & 0x07) as u32) << 18)
+            | (((c2 & 0x3f) as u32) << 12)
+            | (((c3 & 0x3f) as u32) << 6)
+            | ((c4 & 0x3f) as u32);
+        if c < 0x10000 {
+            return Err(EvalError::InvalidByteString);
+        }
+        return Ok(Some((c, 4)));
+    }
+
+    Err(EvalError::InvalidByteString)
+}
+
+fn decode_utf8_string_bytes(mut bytes: &[u8]) -> Result<Vec<u32>, EvalError> {
     let mut values = Vec::new();
-    while !bytes.is_empty() {
-        let (value, offset) = head_utf8(bytes)?;
+    while let Some((value, offset)) = head_utf8_string(bytes)? {
         values.push(value);
         bytes = &bytes[offset..];
     }
@@ -10489,6 +10535,14 @@ mod tests {
             whnf(b"v8.4\n0\nfromUTF8 $3 \xc3\xa5x @ #0 @ A @ #0 @ K @ }"),
             "120"
         );
+        assert_eq!(whnf(b"v8.4\n0\nfromUTF8 $2 \xc0\x80 @ #0 @ K @ }"), "0");
+        assert_eq!(whnf(b"v8.4\n0\nfromUTF8 $1 \xc3 @ }"), "K");
+
+        let mut program = parse_program(b"v8.4\n0\nfromUTF8 $2 \xc1\x81 @ }").unwrap();
+        assert!(matches!(
+            program.reduce_whnf(100),
+            Err(EvalError::InvalidByteString)
+        ));
     }
 
     #[test]
