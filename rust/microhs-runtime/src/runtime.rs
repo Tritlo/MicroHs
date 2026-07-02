@@ -61,6 +61,7 @@ const BFILE_PTR_BASE: i64 = i64::MIN + (1_i64 << 32);
 const BFILE_PTR_STRIDE: i64 = 1_i64 << 32;
 const DIR_PTR_BASE: i64 = i64::MIN + (1_i64 << 61);
 const DIR_PTR_STRIDE: i64 = 1_i64 << 32;
+const INLINE_SPINE: usize = 8;
 
 #[derive(Clone, Debug)]
 struct BFile {
@@ -288,8 +289,35 @@ pub struct Program {
 
 struct Spine {
     head: NodeId,
-    args: Vec<NodeId>,
-    apps: Vec<NodeId>,
+    storage: SpineStorage,
+}
+
+enum SpineStorage {
+    Inline {
+        args: [NodeId; INLINE_SPINE],
+        apps: [NodeId; INLINE_SPINE],
+        len: usize,
+    },
+    Heap {
+        args: Vec<NodeId>,
+        apps: Vec<NodeId>,
+    },
+}
+
+impl Spine {
+    fn args(&self) -> &[NodeId] {
+        match &self.storage {
+            SpineStorage::Inline { args, len, .. } => &args[..*len],
+            SpineStorage::Heap { args, .. } => args,
+        }
+    }
+
+    fn apps(&self) -> &[NodeId] {
+        match &self.storage {
+            SpineStorage::Inline { apps, len, .. } => &apps[..*len],
+            SpineStorage::Heap { apps, .. } => apps,
+        }
+    }
 }
 
 struct StepResult {
@@ -432,7 +460,10 @@ impl Program {
     }
 
     fn step(&mut self, root: NodeId, budget: usize) -> Result<Option<StepResult>, EvalError> {
-        let Spine { head, args, apps } = self.spine(root)?;
+        let spine = self.spine(root)?;
+        let head = spine.head;
+        let args = spine.args();
+        let apps = spine.apps();
         if let Node::Ffi(name) = self.nodes[head.0].clone() {
             let Some((used, mut node)) = self.ffi_call(&name, &args)? else {
                 return Ok(None);
@@ -872,19 +903,46 @@ impl Program {
 
     fn spine(&self, root: NodeId) -> Result<Spine, EvalError> {
         let mut node = self.resolve(root)?;
-        let mut args = Vec::new();
-        let mut apps = Vec::new();
+        let mut inline_args = [NodeId(usize::MAX); INLINE_SPINE];
+        let mut inline_apps = [NodeId(usize::MAX); INLINE_SPINE];
+        let mut inline_len = 0;
+        let mut heap: Option<(Vec<NodeId>, Vec<NodeId>)> = None;
         while let Node::App(fun, arg) = self.nodes[node.0] {
-            args.push(self.resolve(arg)?);
-            apps.push(node);
+            let arg = self.resolve(arg)?;
+            if let Some((args, apps)) = &mut heap {
+                args.push(arg);
+                apps.push(node);
+            } else if inline_len < INLINE_SPINE {
+                inline_args[inline_len] = arg;
+                inline_apps[inline_len] = node;
+                inline_len += 1;
+            } else {
+                let mut args = Vec::with_capacity(INLINE_SPINE * 2);
+                let mut apps = Vec::with_capacity(INLINE_SPINE * 2);
+                args.extend_from_slice(&inline_args);
+                apps.extend_from_slice(&inline_apps);
+                args.push(arg);
+                apps.push(node);
+                heap = Some((args, apps));
+            }
             node = self.resolve(fun)?;
         }
-        args.reverse();
-        apps.reverse();
+        let storage = if let Some((mut args, mut apps)) = heap {
+            args.reverse();
+            apps.reverse();
+            SpineStorage::Heap { args, apps }
+        } else {
+            inline_args[..inline_len].reverse();
+            inline_apps[..inline_len].reverse();
+            SpineStorage::Inline {
+                args: inline_args,
+                apps: inline_apps,
+                len: inline_len,
+            }
+        };
         Ok(Spine {
             head: node,
-            args,
-            apps,
+            storage,
         })
     }
 
