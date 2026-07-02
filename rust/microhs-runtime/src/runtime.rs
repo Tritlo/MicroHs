@@ -63,6 +63,7 @@ const BFILE_PTR_STRIDE: i64 = 1_i64 << 32;
 const DIR_PTR_BASE: i64 = i64::MIN + (1_i64 << 61);
 const DIR_PTR_STRIDE: i64 = 1_i64 << 32;
 const INLINE_SPINE: usize = 8;
+const UTF8_ASCII_REFILL: usize = 1024;
 
 #[derive(Clone, Debug)]
 struct BFile {
@@ -85,6 +86,8 @@ enum BFileKind {
     Utf8 {
         inner: i64,
         unget: Option<i64>,
+        pending: Vec<u8>,
+        pending_pos: usize,
     },
     Crlf {
         inner: i64,
@@ -3852,6 +3855,8 @@ impl Program {
             kind: BFileKind::Utf8 {
                 inner: ptr,
                 unget: None,
+                pending: Vec::new(),
+                pending_pos: 0,
             },
             readable,
             writable,
@@ -4615,7 +4620,7 @@ impl Program {
             return self.read_stdin_byte();
         }
         enum SpecialBFileRead {
-            Utf8(i64),
+            Utf8(i64, i64),
             Crlf(i64),
             Rle,
             Base64,
@@ -4627,11 +4632,27 @@ impl Program {
                 return Err(EvalError::InvalidHandle);
             }
             match &mut bfile.kind {
-                BFileKind::Utf8 { inner, unget } => {
+                BFileKind::Utf8 {
+                    inner,
+                    unget,
+                    pending,
+                    pending_pos,
+                } => {
                     if let Some(byte) = unget.take() {
                         return Ok(byte);
                     }
-                    Some(SpecialBFileRead::Utf8(*inner))
+                    if *pending_pos < pending.len() {
+                        let byte = pending[*pending_pos];
+                        *pending_pos += 1;
+                        if *pending_pos == pending.len() {
+                            pending.clear();
+                            *pending_pos = 0;
+                        }
+                        return Ok(i64::from(byte));
+                    }
+                    pending.clear();
+                    *pending_pos = 0;
+                    Some(SpecialBFileRead::Utf8(ptr, *inner))
                 }
                 BFileKind::Crlf { inner } => Some(SpecialBFileRead::Crlf(*inner)),
                 BFileKind::Rle { read, .. } if *read => Some(SpecialBFileRead::Rle),
@@ -4641,7 +4662,9 @@ impl Program {
             }
         };
         match special {
-            Some(SpecialBFileRead::Utf8(inner)) => return self.get_utf8_bfile_byte(inner),
+            Some(SpecialBFileRead::Utf8(ptr, inner)) => {
+                return self.get_utf8_bfile_byte(ptr, inner);
+            }
             Some(SpecialBFileRead::Crlf(inner)) => return self.get_crlf_bfile_byte(inner),
             Some(SpecialBFileRead::Rle) => return self.get_rle_bfile_byte(ptr),
             Some(SpecialBFileRead::Base64) => return self.get_base64_bfile_byte(ptr),
@@ -5604,12 +5627,13 @@ impl Program {
         }
     }
 
-    fn get_utf8_bfile_byte(&mut self, inner: i64) -> Result<i64, EvalError> {
+    fn get_utf8_bfile_byte(&mut self, ptr: i64, inner: i64) -> Result<i64, EvalError> {
         let c1 = self.get_bfile_byte(inner)?;
         if c1 < 0 {
             return Ok(-1);
         }
         if (c1 & 0x80) == 0 {
+            self.refill_utf8_ascii(ptr, inner)?;
             return Ok(c1);
         }
         let c2 = self.get_bfile_byte(inner)?;
@@ -5646,6 +5670,67 @@ impl Program {
             return Ok(c);
         }
         Err(EvalError::InvalidByteString)
+    }
+
+    fn refill_utf8_ascii(&mut self, ptr: i64, inner: i64) -> Result<(), EvalError> {
+        if !self.can_refill_utf8_ascii(ptr, inner)? {
+            return Ok(());
+        }
+        let bytes = self.read_bfile_bytes(inner, UTF8_ASCII_REFILL)?;
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let ascii_len = bytes
+            .iter()
+            .position(|byte| (byte & 0x80) != 0)
+            .unwrap_or(bytes.len());
+        for byte in bytes[ascii_len..].iter().rev() {
+            self.unget_bfile_byte(inner, i64::from(*byte))?;
+        }
+        if ascii_len == 0 {
+            return Ok(());
+        }
+        let bfile = self.bfile_mut(ptr)?;
+        match &mut bfile.kind {
+            BFileKind::Utf8 {
+                pending,
+                pending_pos,
+                ..
+            } => {
+                pending.clear();
+                pending.extend_from_slice(&bytes[..ascii_len]);
+                *pending_pos = 0;
+                Ok(())
+            }
+            _ => Err(EvalError::InvalidHandle),
+        }
+    }
+
+    fn can_refill_utf8_ascii(&self, ptr: i64, inner: i64) -> Result<bool, EvalError> {
+        let outer = self.bfile(ptr)?;
+        let BFileKind::Utf8 {
+            unget,
+            pending,
+            pending_pos,
+            ..
+        } = &outer.kind
+        else {
+            return Err(EvalError::InvalidHandle);
+        };
+        if unget.is_some() || *pending_pos < pending.len() {
+            return Ok(false);
+        }
+        if handle_from_ptr(inner).is_some() {
+            return Ok(false);
+        }
+
+        let inner = self.bfile(inner)?;
+        match &inner.kind {
+            BFileKind::Memory { .. } => Ok(true),
+            #[cfg(not(target_arch = "wasm32"))]
+            BFileKind::NativeFile { .. } => Ok(true),
+            _ => Ok(false),
+        }
     }
 
     fn put_utf8_bfile_byte(&mut self, inner: i64, byte: i64) -> Result<(), EvalError> {
