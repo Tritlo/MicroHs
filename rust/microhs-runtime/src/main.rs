@@ -1,8 +1,9 @@
 use std::env;
 use std::fs;
+use std::io::Write as _;
 use std::process::ExitCode;
 
-use microhs_runtime::{EvalProfile, parse_program};
+use microhs_runtime::{EvalError, EvalProfile, parse_program};
 
 enum Mode {
     Dump,
@@ -98,14 +99,47 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
             Err(err) => {
-                eprintln!("{file}: {err}");
+                let code = report_eval_error(&mut program, &file, err);
                 if let Some(profile) = program.take_profile() {
                     print_profile(&profile, profile_top);
                 }
-                ExitCode::from(1)
+                code
             }
         },
     }
+}
+
+fn report_eval_error(
+    program: &mut microhs_runtime::Program,
+    file: &str,
+    err: EvalError,
+) -> ExitCode {
+    match err {
+        EvalError::Raised(exn) => match program.uncaught_exception_message_bytes(exn) {
+            Ok(message) if message == b"ExitSuccess" => ExitCode::SUCCESS,
+            Ok(message) => {
+                print_uncaught_exception(file, &message);
+                ExitCode::from(1)
+            }
+            Err(err) => {
+                eprintln!("{file}: {err}");
+                ExitCode::from(1)
+            }
+        },
+        err => {
+            eprintln!("{file}: {err}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn print_uncaught_exception(program_name: &str, message: &[u8]) {
+    let mut stderr = std::io::stderr().lock();
+    let _ = stderr.write_all(b"\n");
+    let _ = stderr.write_all(program_name.as_bytes());
+    let _ = stderr.write_all(b": uncaught exception: ");
+    let _ = stderr.write_all(message);
+    let _ = stderr.write_all(b"\n");
 }
 
 fn print_profile(profile: &EvalProfile, top: usize) {
