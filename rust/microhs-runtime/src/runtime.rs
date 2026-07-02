@@ -283,6 +283,7 @@ pub struct Program {
     masking_state: i64,
     reductions: usize,
     js_program_handle: Option<u32>,
+    js_wrapper_tags: Vec<String>,
 }
 
 struct Spine {
@@ -313,6 +314,7 @@ impl Program {
             masking_state: 0,
             reductions: 0,
             js_program_handle: None,
+            js_wrapper_tags: Vec::new(),
         }
     }
 
@@ -409,6 +411,21 @@ impl Program {
         let root = self.app(perform_io, root);
         let root = self.reduce_node_whnf(root, limit)?;
         self.js_value_from_node(tags[0], root)
+    }
+
+    pub fn apply_js_wrapper_index(
+        &mut self,
+        wrapper_index: u32,
+        stable_ptr: usize,
+        args: &[JsValue],
+        limit: usize,
+    ) -> Result<JsValue, EvalError> {
+        let tags = self
+            .js_wrapper_tags
+            .get(usize::try_from(wrapper_index).map_err(|_| EvalError::Overflow)?)
+            .ok_or(EvalError::InvalidArray)?
+            .clone();
+        self.apply_js_wrapper(&tags, stable_ptr, args, limit)
     }
 
     fn step(&mut self, root: NodeId, budget: usize) -> Result<Option<StepResult>, EvalError> {
@@ -2721,8 +2738,9 @@ impl Program {
             return Ok(None);
         }
         let program_handle = self.js_program_handle.ok_or(EvalError::UnsupportedJsFfi)?;
+        let wrapper_index = self.register_js_wrapper_tags(tags)?;
         let stable_ptr = self.new_stable_ptr_handle(args[0])?;
-        let object = match host_js_make_wrapper(program_handle, tags.as_bytes(), stable_ptr) {
+        let object = match host_js_make_wrapper(program_handle, stable_ptr, wrapper_index) {
             Ok(object) => object,
             Err(err) => {
                 let _ = self.free_stable_ptr(usize::try_from(stable_ptr).unwrap_or(usize::MAX));
@@ -2731,6 +2749,12 @@ impl Program {
         };
         let result = self.push_node(self.js_object_node(object));
         Ok(Some((2, self.pair(result, args[1]))))
+    }
+
+    fn register_js_wrapper_tags(&mut self, tags: &str) -> Result<u32, EvalError> {
+        let index = u32::try_from(self.js_wrapper_tags.len()).map_err(|_| EvalError::Overflow)?;
+        self.js_wrapper_tags.push(tags.to_owned());
+        Ok(index)
     }
 
     fn js_value_node(&mut self, tag: u8, value: &JsValue) -> Result<NodeId, EvalError> {
@@ -7007,20 +7031,19 @@ fn host_js_call_string(body: &[u8], arity: usize, args: &[JsArg]) -> Result<Vec<
 
 fn host_js_make_wrapper(
     program_handle: u32,
-    tags: &[u8],
     stable_ptr: i64,
+    wrapper_index: u32,
 ) -> Result<u32, EvalError> {
     #[cfg(target_arch = "wasm32")]
     {
-        let tags = nul_terminated(tags)?;
         let stable_ptr = u32::try_from(stable_ptr).map_err(|_| EvalError::Overflow)?;
-        let result = unsafe { mhs_js_make_wrapper(program_handle, tags.as_ptr(), stable_ptr) };
+        let result = unsafe { mhs_js_make_wrapper(program_handle, stable_ptr, wrapper_index) };
         host_js_check_error()?;
         Ok(result)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (program_handle, tags, stable_ptr);
+        let _ = (program_handle, stable_ptr, wrapper_index);
         Err(EvalError::UnsupportedJsFfi)
     }
 }
@@ -7115,7 +7138,7 @@ unsafe extern "C" {
     fn mhs_js_call_bool(idx: i32) -> i32;
     fn mhs_js_call_str(idx: i32) -> *const std::os::raw::c_char;
     fn mhs_js_call_void(idx: i32);
-    fn mhs_js_make_wrapper(program_handle: u32, tags: *const u8, stable_ptr: u32) -> u32;
+    fn mhs_js_make_wrapper(program_handle: u32, stable_ptr: u32, wrapper_index: u32) -> u32;
     fn mhs_js_slen() -> i32;
     fn mhs_js_haserr() -> i32;
     fn mhs_js_logerr();
