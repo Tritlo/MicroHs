@@ -355,6 +355,8 @@ const ALLOCATION_PTR_BASE: i64 = -(1_i64 << 62);
 const ALLOCATION_PTR_STRIDE: i64 = 1_i64 << 32;
 const BFILE_PTR_BASE: i64 = i64::MIN + (1_i64 << 32);
 const FORCE_REDUCTION_LIMIT: usize = usize::MAX;
+const RTS_EXN_DIVIDE_BY_ZERO: i64 = 4;
+const RTS_EXN_OVERFLOW: i64 = 7;
 const BFILE_PTR_STRIDE: i64 = 1_i64 << 32;
 const DIR_PTR_BASE: i64 = i64::MIN + (1_i64 << 61);
 const DIR_PTR_STRIDE: i64 = 1_i64 << 32;
@@ -1904,6 +1906,19 @@ impl Program {
         }
     }
 
+    fn rts_exception(&mut self, code: i64) -> EvalError {
+        let exn = self.push_node(Node::Int(code));
+        EvalError::Raised(exn)
+    }
+
+    fn arithmetic_eval_error(&mut self, err: EvalError) -> EvalError {
+        match err {
+            EvalError::DivideByZero => self.rts_exception(RTS_EXN_DIVIDE_BY_ZERO),
+            EvalError::Overflow => self.rts_exception(RTS_EXN_OVERFLOW),
+            other => other,
+        }
+    }
+
     fn ordering(&mut self, ord: Ordering) -> NodeId {
         let name = match ord {
             Ordering::Less => "K2",
@@ -1923,7 +1938,10 @@ impl Program {
         };
         let x = self.eval_int(args[0])?;
         let y = self.eval_int(args[1])?;
-        let node = match op.apply(x, y)? {
+        let result = op
+            .apply(x, y)
+            .map_err(|err| self.arithmetic_eval_error(err))?;
+        let node = match result {
             IntResult::Int(n) => self.push_node(Node::Int(n)),
             IntResult::Bool(b) => self.prim(if b { "A" } else { "K" }),
             IntResult::Ordering(ord) => self.ordering(ord),
@@ -1940,7 +1958,8 @@ impl Program {
             return Ok(None);
         };
         let x = self.eval_int(args[0])?;
-        let node = self.push_node(Node::Int(op.apply(x)?));
+        let n = op.apply(x).map_err(|err| self.arithmetic_eval_error(err))?;
+        let node = self.push_node(Node::Int(n));
         Ok(Some((1, node)))
     }
 
@@ -1958,7 +1977,10 @@ impl Program {
         } else {
             self.eval_int64(args[1])?
         };
-        let node = match op.apply(x, y)? {
+        let result = op
+            .apply(x, y)
+            .map_err(|err| self.arithmetic_eval_error(err))?;
+        let node = match result {
             Int64Result::Int64(n) => self.push_node(Node::Int64(n)),
             Int64Result::Bool(b) => self.prim(if b { "A" } else { "K" }),
             Int64Result::Ordering(ord) => self.ordering(ord),
@@ -1975,7 +1997,8 @@ impl Program {
             return Ok(None);
         };
         let x = self.eval_int64(args[0])?;
-        let node = match op.apply(x)? {
+        let result = op.apply(x).map_err(|err| self.arithmetic_eval_error(err))?;
+        let node = match result {
             Int64UnResult::Int64(n) => self.push_node(Node::Int64(n)),
             Int64UnResult::Int(n) => self.push_node(Node::Int(n)),
         };
@@ -10594,6 +10617,28 @@ mod tests {
             whnf(b"v8.4\n0\nIO.performIO catch raise #7 @ @ K IO.return #42 @ @ @ @ }"),
             "42"
         );
+        assert_eq!(
+            whnf(b"v8.4\n0\nIO.performIO catch IO.strict IO.return @ quot #1 @ #0 @ @ @ IO.return @ @ }"),
+            "4"
+        );
+        assert_eq!(
+            whnf(b"v8.4\n0\nIO.performIO catch IO.strict IO.return @ + #9223372036854775807 @ #1 @ @ @ IO.return @ @ }"),
+            "7"
+        );
+        assert_eq!(
+            whnf(b"v8.4\n0\nIO.performIO catch IO.strict IO.return @ Iuquot ##1 @ ##0 @ @ @ IO.return @ @ }"),
+            "4"
+        );
+        assert_eq!(
+            whnf(b"v8.4\n0\nIO.performIO catch IO.strict IO.return @ Ineg ##-9223372036854775808 @ @ @ IO.return @ @ }"),
+            "7"
+        );
+
+        let mut program = parse_program(b"v8.4\n0\nshl #1 @ #64 @ }").unwrap();
+        assert!(matches!(
+            program.reduce_whnf(100),
+            Err(EvalError::InvalidShift(64))
+        ));
     }
 
     #[test]
