@@ -11,23 +11,23 @@ performance, or benchmark classification changes.
 |---|---|
 | branch | `microhs-rust` |
 | upstream tracking | `origin/microhs-rust` |
-| local commits ahead after this snapshot commit | 83 |
-| runtime code baseline | buffered stdio writes checkpoint |
+| local commits ahead after this snapshot commit | 84 |
+| runtime code baseline | cached world token checkpoint |
 | dirty files after this snapshot commit | none expected |
 | dirty work | none in tracked runtime files |
 | matrix file | `MATRIX.md`, tracked from this snapshot |
 
 ## Verification Baseline
 
-Last fully verified state: buffered stdio writes checkpoint.
+Last fully verified state: cached world token checkpoint.
 
 | gate | status |
 |---|---|
-| `cargo test -p microhs-runtime --quiet` | passed before buffered stdio writes commit; 34 tests |
-| `cargo check -p microhs-runtime --lib --quiet` | passed before buffered stdio writes commit |
-| `cargo check -p microhs-runtime --bins --quiet` | passed before buffered stdio writes commit |
-| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before buffered stdio writes commit |
-| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before buffered stdio writes commit |
+| `cargo test -p microhs-runtime --quiet` | passed before cached world token commit; 34 tests |
+| `cargo check -p microhs-runtime --lib --quiet` | passed before cached world token commit |
+| `cargo check -p microhs-runtime --bins --quiet` | passed before cached world token commit |
+| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before cached world token commit |
+| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before cached world token commit |
 | `node --check rust/microhs-runtime/js/host.mjs` | passed at `f8b9e1d5` |
 | Node wasm core render smoke | passed at `9cbef47e`; host shim instantiated wasm, reduced `v8.4\n0\nI #5 @ }\n`, and rendered `5` |
 | Node wasm dynamic `~I` JS FFI smoke | passed at `58280b6e`; path-loaded wasm reduced `IO.performIO ~I "return 40 + 2" @` and rendered `42` |
@@ -36,10 +36,10 @@ Last fully verified state: buffered stdio writes checkpoint.
 | Node wasm wrapper tag coverage smoke | passed at `f8b9e1d5`; `II`, `UU`, `DD`, `FF`, `BB`, `SS`, `JJ`, and `PP` wrappers round-trip through JS and render expected values |
 | Node wasm unsigned/high-bit JS smoke | passed at `f8b9e1d5`; direct `~U` rendered `4294967295`; direct and wrapper `~P` rendered `Ptr#2147483648` |
 | Node wasm Response-source smoke | passed at `58280b6e`; `Response(bytes)` source reduced `~S "return 'hi'"` and rendered `"hi"` |
-| `cargo fmt --all --check` | passed before buffered stdio writes commit |
-| `git diff --check` | passed before buffered stdio writes commit |
+| `cargo fmt --all --check` | passed before cached world token commit |
+| `git diff --check` | passed before cached world token commit |
 | `make bin/mhsbench` | passed/up to date at `70eabf4d` |
-| `cargo build --release -p microhs-runtime --bins --quiet` | passed before buffered stdio writes commit |
+| `cargo build --release -p microhs-runtime --bins --quiet` | passed before cached world token commit |
 | signed `i64::MIN` comb parser smoke | passed before checkpoint commit; Rust now parses the self-host compiler comb containing `##-9223372036854775808` |
 | unbounded internal force budget smoke | passed before checkpoint commit; self-hosting no longer trips the old internal `10_000` WHNF cap |
 | main-mode benchmark harness smoke | passed before checkpoint commit; Rust and C support `--mode main -- PROGRAM ARGS...`; main mode measures execution and validates external output instead of serializing the whole root graph |
@@ -47,7 +47,7 @@ Last fully verified state: buffered stdio writes checkpoint.
 | self-host C main smoke | passed before checkpoint commit; updated `bin/mhsbench --mode main` produced `/tmp/mhs-selfhost-c-mainmode.comb`, a 647 KiB `v8.4` comb that parses under C WHNF smoke |
 | lazy `readFile` CPP scan smoke | passed before checkpoint commit; temporary `hasLangCPP` reproducer now prints `False` under Rust like C, dropping the Rust one-shot time from ~433 ms before the fix to ~10 ms |
 | self-host Rust main smoke | not yet passing; no-shim run no longer falsely invokes `cpphs`; latest full compile run at `0ae17536` hit `timeout 600s` with exit `124`, printed only the missing `mhs.conf` warning to `/tmp/mhs-selfhost-rust-0ae17536.out`, and produced no output comb at `/tmp/mhs-selfhost-rust-0ae17536.comb` |
-| `performio-apply-chain:200` benchmark | passed before checkpoint commit; Rust/C sinks match at `130000`, Rust `114,126` ns/iter vs C `123,407` ns/iter |
+| `performio-apply-chain:200` benchmark | passed before cached world token commit; Rust/C sinks match at `130000`, Rust `78,559` ns/iter vs C `124,271` ns/iter |
 | direct Scott-pair selector perf probe | passed before checkpoint commit; current probe recognizes `U K (P x y)`/`U A (P x y)` after forcing the pair to WHNF; `hasLangCPP` proxy drops from `23,392` to `23,226` reductions/iter and measured `4,576,282` ns/iter Rust vs `635,079` ns/iter C, while self-host still exceeds the 1,200s cutoff |
 | UTF-8 ASCII refill perf probe | passed before checkpoint commit; text `readFile` proxy improved to `3,134,640` ns/iter, `hasLangCPP` proxy to `4,395,391` ns/iter, and self-host `--help` main smoke to `123,325,990` ns/iter Rust vs `12,412,585` ns/iter C |
 | direct `IO.return` bind perf probe | passed before checkpoint commit; self-host `--help` main smoke improved to `101,524,666` ns/iter Rust vs `10,021,074` ns/iter C; text proxies and common canaries stayed in-band |
@@ -77,6 +77,7 @@ Last fully verified state: buffered stdio writes checkpoint.
 | C-compatible uncaught exception display smoke | passed before checkpoint commit; raw RTS exception ints use C's `die_exn` message table, non-RTS exceptions are displayed by evaluating `U (U (K2 A)) exn`, and a compiled `exitSuccess` comb now completes main-mode release benchmark execution instead of panicking |
 | compression cross-runtime fixture smoke | passed before checkpoint commit; Rust unit fixtures decode C-runtime LZ77/BWT/LZMA frames for an adversarial repeated/high-byte/NUL payload, Rust compressor/decompressor self-roundtrips the same payload, and an external C-runtime smoke decoded Rust-produced LZ77/BWT/LZMA frames as `(True,True,True)` |
 | buffered stdio write smoke | passed before checkpoint commit; stdout/stderr writes no longer flush after every byte/buffer write, while explicit flush/close paths still call `flush_io_handle`; no dedicated output-heavy timing row exists yet |
+| cached world token perf probe | passed before checkpoint commit; `performio-apply-chain:200` improved to Rust `78,559` ns/iter vs C `124,271` with sink `130000`, `io-chain:200` stayed in-band at Rust `63,910` vs C `121,829` with sink `132000`, and self-host `--help` proxy ran at `69,636,341` ns/iter with unchanged 297,417 steps |
 | ignored IO action shortcut perf probe | passed before checkpoint commit; `io-chain`, `io-control-chain`, `argref-chain`, `ffi-chain`, `ffi-math-chain`, `ffi-const-chain`, `env-set-chain`, and `remove-missing-chain` improved with matching sinks; `ffi-mem-chain` and `bfile-read-chain` canaries stayed in the same band |
 | direct lazyBind FFI-continuation perf probe | passed before checkpoint commit; against a clean `50e11139` temp worktree, `ffi-mem-chain` improved from ~1.31 ms to ~0.18 ms and `bfile-read-chain` improved from ~1.50 ms to ~0.34 ms with matching sinks; direct BFILE/env rows improved, while complex continuation canaries stayed in the same noisy band |
 | reducer inline-spine perf probe | passed at `63d03844`; against `f8b9e1d5` temp build, current Rust improved `arith-chain`, `io-chain`, `ffi-chain`, `ffi-mem-chain`, and `bfile-read-chain` by roughly 4-13% |
@@ -151,7 +152,7 @@ Last fully verified state: buffered stdio writes checkpoint.
 | C-compatible graph serializer spacing | passed at `6438ec82`; `argref-chain`, `mvar-chain`, `weak-chain` sinks match |
 | benchmark StablePtr harness reset | passed at `6438ec82`; `stableptr-chain` sink matches |
 
-Latest tracked runtime behavior change is buffered stdio writes; stdout/stderr writes now rely on normal buffering instead of flushing on every runtime write, while explicit flush/close paths remain intact.
+Latest tracked runtime behavior change is cached world token reuse; the runtime now shares one immutable `Int(99999)` world node instead of allocating a fresh world for every `performIO`/main entry.
 
 ## Tier Status
 
@@ -222,11 +223,11 @@ runtime primitives.
 | `unpack-chain:200` | 8,678 | 97,157 | 0.09 | yes |
 | `fromutf8-chain:200` | 9,939 | 97,162 | 0.10 | yes |
 | `array-chain:200` | 3,572 | 91,485 | 0.04 | yes |
-| `io-chain:200` | 61,899 | 124,948 | 0.50 | yes |
+| `io-chain:200` | 63,910 | 121,829 | 0.52 | yes |
 | `io-array-chain:200` | 3,747 | 92,561 | 0.04 | yes |
 | `io-bytes-chain:200` | 1,814 | 90,873 | 0.02 | yes |
 | `io-control-chain:200` | 59,303 | 131,295 | 0.45 | yes |
-| `performio-apply-chain:200` | 114,126 | 123,407 | 0.92 | yes |
+| `performio-apply-chain:200` | 78,559 | 124,271 | 0.63 | yes |
 | `argref-chain:200` | 55,481 | 128,597 | 0.43 | yes |
 | `stdio-chain:200` | 143,397 | 112,014 | 1.28 | yes |
 | `ffi-chain:200` | 60,830 | 152,403 | 0.40 | yes |
@@ -281,7 +282,7 @@ section only measures the C and Rust runtimes executing that compiler.
 | check | C runtime | Rust runtime | status |
 |---|---:|---:|---|
 | compiler comb input | 647 KiB `/tmp/mhs-selfhost.comb`; generated by native `bin/mhs` | parses after signed-`i64::MIN` parser fix | input ready |
-| `--help` main smoke | 9,934,460 ns/iter; sink `661902` per iter | 71,545,707 ns/iter; sink `921731` per iter | both run and print identical usage text; not a full compile; refreshed with `--warmup-iters 1 --iters 3` after C-style `Y` knot; Rust sink changed because the final internal graph now preserves the cyclic `Y` shape, while external output is byte-identical to the previous run |
+| `--help` main smoke | 9,934,460 ns/iter; sink `661902` per iter | 69,636,341 ns/iter; sink `921722` per iter | both run and print identical usage text; not a full compile; refreshed with `--warmup-iters 1 --iters 3` after cached world token reuse; Rust sink changed because the shared world token trims final graph nodes, while external output is byte-identical to the previous run |
 | self-host compiler smoke | 56,387,928,187 ns/iter; output `/tmp/mhs-selfhost-c-refresh.comb` is a 647 KiB `v8.4` comb | latest full run at `0ae17536` hit `timeout 600s` with exit `124`; no output comb at `/tmp/mhs-selfhost-rust-0ae17536.comb` | not at parity |
 
 ### Self-Host Comb Static Profile
@@ -425,7 +426,7 @@ performance idea, not merely whether it has matching behavior.
 | Walk application spines directly on the evaluator stack | `evali` follows `T_AP` nodes with `PUSH(n)` until the head tag is known | Rust's owned `Spine` object, argument reversal, and repeated resolve/node classification are now the main structural gap; a stack-like reducer loop is the highest-value C-shaped experiment | no |
 | Rewrite the consumed redex cell and continue | `GOIND`, `GOAP`, and `GOAP2` mutate the current node/root app and jump back to `top`/`ap` | App-reuse work moved in this direction, but Rust still returns `StepResult` and rebuilds extra arguments through helper slices instead of staying in one tight evaluator loop | partial |
 | Tie fixpoint knots in the consumed redex | `T_Y` does `GOAP(x, n)`, so `n@(Y x)` becomes `x n` instead of allocating a fresh `(Y x)` | Rust now reuses `apps[0]` as the recursive argument for `Y`, which preserves sharing and reduces self-host `--help` reductions/nodes; no-op self-updates avoid self-indirection hangs for divergent cycles like `Y I` | yes |
-| Treat common values as permanent/cached nodes | `init_nodes` creates permanent primitive nodes, small ints live in `intTable`, and helpers reuse `combK`, `combB`, `combIOBIND`, etc. | Rust has `PrimCache` for a small set of heads but no permanent primitive/small-int arena; more caching only matters if it cuts reducer traffic, not just allocation | partial |
+| Treat common values as permanent/cached nodes | `init_nodes` creates permanent primitive nodes, small ints live in `intTable`, and helpers reuse `combK`, `combB`, `combIOBIND`, `combWorld`, etc. | Rust has `PrimCache` for a small set of heads and now reuses the world token, but no permanent primitive/small-int arena; more caching only matters if it cuts reducer traffic, not just allocation | partial |
 | Use marker continuations for strict primitive forcing | Binary/unary int, int64, float, double, and bytes primops push nodes such as `T_BININT2`/`T_BININT1` and finish in `ret` | Rust's strict helpers still force via helper calls and fallback string dispatch; if numeric/bytes paths become hot at compiler scale, marker-continuation evaluation is the C model | no |
 | Hand-shape arity-specific rewrites | `T_T3`..`T_T16`, `T_TAG0`..`T_TAG32`, `B`, `C`, `C'B`, `P`, and partial `K2`/`K3`/`K4` have direct switch arms | Rust has direct `KnownPrim` arms, reducer macros, tuple first-field shortcuts, and app reuse, but generic spine rebuild still costs more than C's macro-shaped rewrites | partial |
 | Simplify graph fragments when traversal is already happening | `GCRED` folds `A/K/I`, `B I`, `B x I`, `C op`, `C' I`, and related shapes while marking | Rust has no parse/GC simplification pass; current profiles point to reducer shape first, so this is a remembered later option rather than an active target | no |
