@@ -269,6 +269,7 @@ pub struct Program {
     errno_ptr: Option<i64>,
     masking_state: i64,
     reductions: usize,
+    js_program_handle: Option<u32>,
 }
 
 struct Spine {
@@ -298,6 +299,7 @@ impl Program {
             errno_ptr: None,
             masking_state: 0,
             reductions: 0,
+            js_program_handle: None,
         }
     }
 
@@ -311,6 +313,10 @@ impl Program {
 
     pub fn set_program_args(&mut self, args: Vec<Vec<u8>>) {
         self.program_args = args;
+    }
+
+    pub fn set_js_program_handle(&mut self, handle: u32) {
+        self.js_program_handle = Some(handle);
     }
 
     pub fn label(&self, label: usize) -> Option<NodeId> {
@@ -2677,8 +2683,9 @@ impl Program {
         if args.len() < 2 {
             return Ok(None);
         }
+        let program_handle = self.js_program_handle.ok_or(EvalError::UnsupportedJsFfi)?;
         let stable_ptr = self.new_stable_ptr_handle(args[0])?;
-        let object = match host_js_make_wrapper(tags.as_bytes(), stable_ptr) {
+        let object = match host_js_make_wrapper(program_handle, tags.as_bytes(), stable_ptr) {
             Ok(object) => object,
             Err(err) => {
                 let _ = self.free_stable_ptr(usize::try_from(stable_ptr).unwrap_or(usize::MAX));
@@ -6924,18 +6931,22 @@ fn host_js_call_string(body: &[u8], arity: usize, args: &[JsArg]) -> Result<Vec<
     }
 }
 
-fn host_js_make_wrapper(tags: &[u8], stable_ptr: i64) -> Result<u32, EvalError> {
+fn host_js_make_wrapper(
+    program_handle: u32,
+    tags: &[u8],
+    stable_ptr: i64,
+) -> Result<u32, EvalError> {
     #[cfg(target_arch = "wasm32")]
     {
         let tags = nul_terminated(tags)?;
         let stable_ptr = u32::try_from(stable_ptr).map_err(|_| EvalError::Overflow)?;
-        let result = unsafe { mhs_js_make_wrapper(tags.as_ptr(), stable_ptr) };
+        let result = unsafe { mhs_js_make_wrapper(program_handle, tags.as_ptr(), stable_ptr) };
         host_js_check_error()?;
         Ok(result)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (tags, stable_ptr);
+        let _ = (program_handle, tags, stable_ptr);
         Err(EvalError::UnsupportedJsFfi)
     }
 }
@@ -7030,7 +7041,7 @@ unsafe extern "C" {
     fn mhs_js_call_bool(idx: i32) -> i32;
     fn mhs_js_call_str(idx: i32) -> *const std::os::raw::c_char;
     fn mhs_js_call_void(idx: i32);
-    fn mhs_js_make_wrapper(tags: *const u8, stable_ptr: u32) -> u32;
+    fn mhs_js_make_wrapper(program_handle: u32, tags: *const u8, stable_ptr: u32) -> u32;
     fn mhs_js_slen() -> i32;
     fn mhs_js_haserr() -> i32;
     fn mhs_js_logerr();
