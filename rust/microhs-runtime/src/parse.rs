@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::runtime::{Node, NodeId, Program};
+use crate::runtime::{Node, NodeId, Program, is_runtime_prim_name};
 
 const COMB_VERSION: &[u8] = b"v8.4\n";
 
@@ -16,6 +16,7 @@ pub enum ParseError {
     StackJunk,
     DuplicateLabel(usize),
     DanglingLabel(usize),
+    UnknownPrim(String),
 }
 
 impl fmt::Display for ParseError {
@@ -37,6 +38,7 @@ impl fmt::Display for ParseError {
             Self::StackJunk => write!(f, "combinator parse stack left extra values"),
             Self::DuplicateLabel(label) => write!(f, "duplicate shared label {label}"),
             Self::DanglingLabel(label) => write!(f, "dangling shared label {label}"),
+            Self::UnknownPrim(name) => write!(f, "unknown primitive {name}"),
         }
     }
 }
@@ -196,6 +198,9 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     let name = self.token_string(c)?;
+                    if !is_runtime_prim_name(&name) {
+                        return Err(ParseError::UnknownPrim(name));
+                    }
                     let id = self.push(Node::prim(&name));
                     self.stack.push(id);
                 }
