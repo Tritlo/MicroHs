@@ -1862,6 +1862,12 @@ impl Program {
                 return Ok(Some((1, self.pair(result, args[0]))));
             }
         }
+        if args.len() >= 2 && is_unary_math_ffi_candidate(name) {
+            if let Some(result) = self.unary_math_ffi_result(name, args[0])? {
+                let result = self.push_node(result);
+                return Ok(Some((2, self.pair(result, args[1]))));
+            }
+        }
 
         let arity = ffi_arity(name).ok_or_else(|| EvalError::UnknownFfi(name.to_owned()))?;
         if args.len() < arity + 1 {
@@ -2827,6 +2833,35 @@ impl Program {
             "&closeb" => Node::FunPtr("closeb".to_owned()),
             "&free" => Node::FunPtr("free".to_owned()),
             "&errno" | "errno" => Node::Ptr(self.errno_ptr()?),
+            _ => return Ok(None),
+        };
+        Ok(Some(result))
+    }
+
+    fn unary_math_ffi_result(
+        &mut self,
+        name: &str,
+        arg: NodeId,
+    ) -> Result<Option<Node>, EvalError> {
+        let result = match name {
+            "acos" => Node::Float64(self.eval_float64(arg)?.acos()),
+            "asin" => Node::Float64(self.eval_float64(arg)?.asin()),
+            "atan" => Node::Float64(self.eval_float64(arg)?.atan()),
+            "cos" => Node::Float64(self.eval_float64(arg)?.cos()),
+            "exp" => Node::Float64(self.eval_float64(arg)?.exp()),
+            "log" => Node::Float64(self.eval_float64(arg)?.ln()),
+            "sin" => Node::Float64(self.eval_float64(arg)?.sin()),
+            "sqrt" => Node::Float64(self.eval_float64(arg)?.sqrt()),
+            "tan" => Node::Float64(self.eval_float64(arg)?.tan()),
+            "acosf" => Node::Float32(self.eval_float32(arg)?.acos()),
+            "asinf" => Node::Float32(self.eval_float32(arg)?.asin()),
+            "atanf" => Node::Float32(self.eval_float32(arg)?.atan()),
+            "cosf" => Node::Float32(self.eval_float32(arg)?.cos()),
+            "expf" => Node::Float32(self.eval_float32(arg)?.exp()),
+            "logf" => Node::Float32(self.eval_float32(arg)?.ln()),
+            "sinf" => Node::Float32(self.eval_float32(arg)?.sin()),
+            "sqrtf" => Node::Float32(self.eval_float32(arg)?.sqrt()),
+            "tanf" => Node::Float32(self.eval_float32(arg)?.tan()),
             _ => return Ok(None),
         };
         Ok(Some(result))
@@ -9121,6 +9156,21 @@ fn ffi_arity(name: &str) -> Option<usize> {
         "strerror_r" => 3,
         _ => return None,
     })
+}
+
+fn is_unary_math_ffi_candidate(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    match bytes.first() {
+        Some(b'a') => {
+            bytes.starts_with(b"ac") || bytes.starts_with(b"as") || bytes.starts_with(b"at")
+        }
+        Some(b'c') => bytes.starts_with(b"co"),
+        Some(b'e') => bytes.starts_with(b"ex"),
+        Some(b'l') => bytes.starts_with(b"lo"),
+        Some(b's') => bytes.starts_with(b"si") || bytes.starts_with(b"sq"),
+        Some(b't') => bytes.starts_with(b"ta"),
+        _ => false,
+    }
 }
 
 fn std_handle(name: &str) -> Option<StdHandle> {
