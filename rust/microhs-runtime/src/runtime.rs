@@ -606,6 +606,10 @@ pub struct EvalProfile {
     pub step_attempts: usize,
     pub successful_steps: usize,
     pub reductions: usize,
+    pub app_allocations: usize,
+    pub small_int_cache_hits: usize,
+    pub small_int_cache_misses: usize,
+    pub non_small_int_allocations: usize,
     pub heap_spines: usize,
     pub max_spine_arity: usize,
     pub resolve_calls: usize,
@@ -974,6 +978,34 @@ impl Program {
             *existing += count;
         } else {
             profile.shortcut_hits.insert(key.to_owned(), count);
+        }
+    }
+
+    #[cold]
+    fn profile_app_allocation(&mut self) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.app_allocations += 1;
+        }
+    }
+
+    #[cold]
+    fn profile_small_int_cache_hit(&mut self) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.small_int_cache_hits += 1;
+        }
+    }
+
+    #[cold]
+    fn profile_small_int_cache_miss(&mut self) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.small_int_cache_misses += 1;
+        }
+    }
+
+    #[cold]
+    fn profile_non_small_int_allocation(&mut self) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.non_small_int_allocations += 1;
         }
     }
 
@@ -1851,6 +1883,9 @@ impl Program {
     }
 
     fn app(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
+        if self.profile.is_some() {
+            self.profile_app_allocation();
+        }
         self.push_node(Node::App(fun, arg))
     }
 
@@ -1899,10 +1934,19 @@ impl Program {
 
     fn int(&mut self, value: i64) -> NodeId {
         let Some(index) = small_int_index(value) else {
+            if self.profile.is_some() {
+                self.profile_non_small_int_allocation();
+            }
             return self.push_node(Node::Int(value));
         };
         if let Some(id) = self.small_ints[index] {
+            if self.profile.is_some() {
+                self.profile_small_int_cache_hit();
+            }
             return id;
+        }
+        if self.profile.is_some() {
+            self.profile_small_int_cache_miss();
         }
         let id = self.push_node(Node::Int(value));
         self.small_ints[index] = Some(id);

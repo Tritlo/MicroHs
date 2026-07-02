@@ -146,6 +146,19 @@ fn print_profile(profile: &EvalProfile, top: usize) {
     eprintln!("profile_step_attempts: {}", profile.step_attempts);
     eprintln!("profile_successful_steps: {}", profile.successful_steps);
     eprintln!("profile_reductions: {}", profile.reductions);
+    eprintln!("profile_app_allocations: {}", profile.app_allocations);
+    eprintln!(
+        "profile_small_int_cache_hits: {}",
+        profile.small_int_cache_hits
+    );
+    eprintln!(
+        "profile_small_int_cache_misses: {}",
+        profile.small_int_cache_misses
+    );
+    eprintln!(
+        "profile_non_small_int_allocations: {}",
+        profile.non_small_int_allocations
+    );
     eprintln!("profile_heap_spines: {}", profile.heap_spines);
     eprintln!("profile_max_spine_arity: {}", profile.max_spine_arity);
     eprintln!("profile_resolve_calls: {}", profile.resolve_calls);

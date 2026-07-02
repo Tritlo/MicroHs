@@ -945,6 +945,7 @@ struct ProfileBench {
     elapsed: Duration,
     steps: usize,
     serialize_sink: usize,
+    nodes_before: usize,
     nodes_after: usize,
     profile: EvalProfile,
 }
@@ -1016,6 +1017,7 @@ fn profile_eval(
     let mut program = parse_program(black_box(input)).expect("profile benchmark input");
     program.set_program_args(program_args.to_vec());
     program.set_executable_path(executable_path.map(Vec::from));
+    let nodes_before = program.nodes().len();
     program.enable_profile();
     let (steps, serialize_sink) = match mode {
         BenchMode::Whnf => {
@@ -1042,6 +1044,7 @@ fn profile_eval(
         elapsed,
         steps,
         serialize_sink,
+        nodes_before,
         nodes_after,
         profile,
     }
@@ -1051,13 +1054,34 @@ fn print_profile(profile: &ProfileBench, top: usize) {
     println!("profile_total_ms: {:.3}", millis(profile.elapsed));
     println!("profile_steps: {}", profile.steps);
     println!("profile_sink: {}", profile.serialize_sink);
+    println!("profile_nodes_before: {}", profile.nodes_before);
     println!("profile_nodes_after: {}", profile.nodes_after);
+    println!(
+        "profile_node_growth: {}",
+        profile.nodes_after.saturating_sub(profile.nodes_before)
+    );
     println!("profile_step_attempts: {}", profile.profile.step_attempts);
     println!(
         "profile_successful_steps: {}",
         profile.profile.successful_steps
     );
     println!("profile_reductions: {}", profile.profile.reductions);
+    println!(
+        "profile_app_allocations: {}",
+        profile.profile.app_allocations
+    );
+    println!(
+        "profile_small_int_cache_hits: {}",
+        profile.profile.small_int_cache_hits
+    );
+    println!(
+        "profile_small_int_cache_misses: {}",
+        profile.profile.small_int_cache_misses
+    );
+    println!(
+        "profile_non_small_int_allocations: {}",
+        profile.profile.non_small_int_allocations
+    );
     println!("profile_heap_spines: {}", profile.profile.heap_spines);
     println!(
         "profile_max_spine_arity: {}",
