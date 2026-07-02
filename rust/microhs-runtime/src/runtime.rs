@@ -361,6 +361,9 @@ const BFILE_PTR_STRIDE: i64 = 1_i64 << 32;
 const DIR_PTR_BASE: i64 = i64::MIN + (1_i64 << 61);
 const DIR_PTR_STRIDE: i64 = 1_i64 << 32;
 const INLINE_SPINE: usize = 16;
+const SMALL_INT_MIN: i64 = -10;
+const SMALL_INT_MAX: i64 = 255;
+const SMALL_INT_COUNT: usize = (SMALL_INT_MAX - SMALL_INT_MIN + 1) as usize;
 const IGNORED_IO_SHORTCUT_RECURSION_LIMIT: usize = 256;
 const UTF8_ASCII_REFILL: usize = 1024;
 
@@ -593,6 +596,7 @@ pub struct Program {
     js_program_handle: Option<u32>,
     js_wrapper_tags: Vec<String>,
     prim_cache: PrimCache,
+    small_ints: [Option<NodeId>; SMALL_INT_COUNT],
     world: Option<NodeId>,
     profile: Option<EvalProfile>,
 }
@@ -696,6 +700,14 @@ fn initialized_node_slice(storage: &[MaybeUninit<NodeId>], len: usize) -> &[Node
     unsafe { std::slice::from_raw_parts(storage.as_ptr().cast::<NodeId>(), len) }
 }
 
+fn small_int_index(value: i64) -> Option<usize> {
+    if (SMALL_INT_MIN..=SMALL_INT_MAX).contains(&value) {
+        Some((value - SMALL_INT_MIN) as usize)
+    } else {
+        None
+    }
+}
+
 struct StepResult {
     node: NodeId,
     in_place: bool,
@@ -704,6 +716,14 @@ struct StepResult {
 
 impl Program {
     pub fn new(nodes: Vec<Node>, root: NodeId, labels: HashMap<usize, NodeId>) -> Self {
+        let mut small_ints = [None; SMALL_INT_COUNT];
+        for (index, node) in nodes.iter().enumerate() {
+            if let Node::Int(value) = node {
+                if let Some(slot) = small_int_index(*value) {
+                    small_ints[slot].get_or_insert(NodeId(index));
+                }
+            }
+        }
         Self {
             nodes,
             root,
@@ -722,6 +742,7 @@ impl Program {
             js_program_handle: None,
             js_wrapper_tags: Vec::new(),
             prim_cache: PrimCache::default(),
+            small_ints,
             world: None,
             profile: None,
         }
@@ -1170,12 +1191,8 @@ impl Program {
                 Some((2, self.pair(unit, args[1])))
             }
             Some(IoStats) if !args.is_empty() => {
-                let alloc = self.push_node(Node::Int(
-                    i64::try_from(self.nodes.len()).unwrap_or(i64::MAX),
-                ));
-                let reductions = self.push_node(Node::Int(
-                    i64::try_from(self.reductions).unwrap_or(i64::MAX),
-                ));
+                let alloc = self.int(i64::try_from(self.nodes.len()).unwrap_or(i64::MAX));
+                let reductions = self.int(i64::try_from(self.reductions).unwrap_or(i64::MAX));
                 let stats = self.pair(alloc, reductions);
                 Some((1, self.pair(stats, args[0])))
             }
@@ -1217,7 +1234,7 @@ impl Program {
                 Some((1, self.pair(unit, args[0])))
             }
             Some(IoGetMaskingState) if !args.is_empty() => {
-                let state = self.push_node(Node::Int(self.masking_state));
+                let state = self.int(self.masking_state);
                 Some((1, self.pair(state, args[0])))
             }
             Some(IoSetMaskingState) if args.len() >= 2 => {
@@ -1231,7 +1248,7 @@ impl Program {
             }
             Some(IoThreadStatus) if args.len() >= 2 => {
                 self.eval_thread_id(args[0])?;
-                let status = self.push_node(Node::Int(0));
+                let status = self.int(0);
                 Some((2, self.pair(status, args[1])))
             }
             Some(IoNewMVar) if !args.is_empty() => {
@@ -1302,11 +1319,11 @@ impl Program {
                     Node::Int(n) => n,
                     _ => -1,
                 };
-                Some((1, self.push_node(Node::Int(n))))
+                Some((1, self.int(n)))
             }
             Some(Thnum) if !args.is_empty() => {
                 let thread = self.eval_thread_id(args[0])?;
-                Some((1, self.push_node(Node::Int(thread))))
+                Some((1, self.int(thread)))
             }
             Some(S) if args.len() >= 3 => {
                 let x = args[2];
@@ -1406,7 +1423,7 @@ impl Program {
                 app_step!(1, args[0], apps[0]);
             }
             Some(Tag(tag)) if args.len() >= 2 => {
-                let tag = self.push_node(Node::Int(i64::from(tag)));
+                let tag = self.int(i64::from(tag));
                 let ytag = self.app(args[1], tag);
                 app_step!(2, ytag, args[0]);
             }
@@ -1632,7 +1649,7 @@ impl Program {
                 Ok(Some((result, world)))
             }
             Node::Prim(name) if name == IoGetMaskingState && args.is_empty() => {
-                let result = self.push_node(Node::Int(self.masking_state));
+                let result = self.int(self.masking_state);
                 Ok(Some((result, world)))
             }
             Node::Prim(name) if name == IoSetMaskingState && args.len() == 1 => {
@@ -1880,6 +1897,26 @@ impl Program {
         id
     }
 
+    fn int(&mut self, value: i64) -> NodeId {
+        let Some(index) = small_int_index(value) else {
+            return self.push_node(Node::Int(value));
+        };
+        if let Some(id) = self.small_ints[index] {
+            return id;
+        }
+        let id = self.push_node(Node::Int(value));
+        self.small_ints[index] = Some(id);
+        id
+    }
+
+    fn push_value_node(&mut self, node: Node) -> NodeId {
+        match node {
+            Node::Int(value) => self.int(value),
+            Node::Prim(prim) => self.prim(prim.name()),
+            node => self.push_node(node),
+        }
+    }
+
     fn world(&mut self) -> NodeId {
         if let Some(world) = self.world {
             return world;
@@ -1940,7 +1977,7 @@ impl Program {
     }
 
     fn rts_exception(&mut self, code: i64) -> EvalError {
-        let exn = self.push_node(Node::Int(code));
+        let exn = self.int(code);
         EvalError::Raised(exn)
     }
 
@@ -1975,7 +2012,7 @@ impl Program {
             .apply(x, y)
             .map_err(|err| self.arithmetic_eval_error(err))?;
         let node = match result {
-            IntResult::Int(n) => self.push_node(Node::Int(n)),
+            IntResult::Int(n) => self.int(n),
             IntResult::Bool(b) => self.prim(if b { "A" } else { "K" }),
             IntResult::Ordering(ord) => self.ordering(ord),
         };
@@ -1992,7 +2029,7 @@ impl Program {
         };
         let x = self.eval_int(args[0])?;
         let n = op.apply(x).map_err(|err| self.arithmetic_eval_error(err))?;
-        let node = self.push_node(Node::Int(n));
+        let node = self.int(n);
         Ok(Some((1, node)))
     }
 
@@ -2033,7 +2070,7 @@ impl Program {
         let result = op.apply(x).map_err(|err| self.arithmetic_eval_error(err))?;
         let node = match result {
             Int64UnResult::Int64(n) => self.push_node(Node::Int64(n)),
-            Int64UnResult::Int(n) => self.push_node(Node::Int(n)),
+            Int64UnResult::Int(n) => self.int(n),
         };
         Ok(Some((1, node)))
     }
@@ -2050,7 +2087,7 @@ impl Program {
             }
             "Itoi" | "Utou" => {
                 let n = self.eval_int64(args[0])?;
-                self.push_node(Node::Int(n))
+                self.int(n)
             }
             _ => return Ok(None),
         };
@@ -2137,7 +2174,7 @@ impl Program {
             }
             "dtoi" => {
                 let n = self.eval_float64(args[0])?;
-                self.push_node(Node::Int(n as i64))
+                self.int(n as i64)
             }
             "itof" => {
                 let n = self.eval_int(args[0])?;
@@ -2153,7 +2190,7 @@ impl Program {
             }
             "ftoi" => {
                 let n = self.eval_float32(args[0])?;
-                self.push_node(Node::Int(n as i64))
+                self.int(n as i64)
             }
             "dtof" => {
                 let n = self.eval_float64(args[0])?;
@@ -2177,7 +2214,7 @@ impl Program {
             }
             "fromFlt" => {
                 let n = self.eval_float32(args[0])?;
-                self.push_node(Node::Int((n.to_bits() as i32) as i64))
+                self.int((n.to_bits() as i32) as i64)
             }
             _ => return Ok(None),
         };
@@ -2195,7 +2232,7 @@ impl Program {
             "toFunPtr" => Node::RawFunPtr(self.eval_pointer_value(args[0])?),
             _ => return Ok(None),
         };
-        Ok(Some((1, self.push_node(value))))
+        Ok(Some((1, self.push_value_node(value))))
     }
 
     fn foreign_ptr_op(
@@ -2378,14 +2415,14 @@ impl Program {
                 let array = self.eval_array_id(args[0])?;
                 let len =
                     i64::try_from(self.array(array)?.len()).map_err(|_| EvalError::Overflow)?;
-                let size = self.push_node(Node::Int(len));
+                let size = self.int(len);
                 self.pair(size, args[1])
             }
             "A.size" => {
                 let array = self.eval_array_id(args[0])?;
                 let len =
                     i64::try_from(self.array(array)?.len()).map_err(|_| EvalError::Overflow)?;
-                self.push_node(Node::Int(len))
+                self.int(len)
             }
             _ => return Ok(None),
         };
@@ -2559,7 +2596,7 @@ impl Program {
                     .get(index)
                     .copied()
                     .ok_or(EvalError::InvalidByteString)?;
-                let byte = self.push_node(Node::Int(byte as i64));
+                let byte = self.int(byte as i64);
                 Some((3, self.pair(byte, args[2])))
             }
             "bsread" => {
@@ -2570,7 +2607,7 @@ impl Program {
                     .get(index)
                     .copied()
                     .ok_or(EvalError::InvalidByteString)?;
-                Some((2, self.push_node(Node::Int(byte as i64))))
+                Some((2, self.int(byte as i64)))
             }
             "bswrite" if args.len() >= 4 => {
                 let bytes = self.eval_bytes_id(args[0])?;
@@ -2663,7 +2700,7 @@ impl Program {
                     .get(index)
                     .copied()
                     .ok_or(EvalError::InvalidByteString)?;
-                Some((2, self.push_node(Node::Int(byte as i64))))
+                Some((2, self.int(byte as i64)))
             }
             "bssubstr" if args.len() >= 3 => {
                 let bytes = self.eval_bytes(args[0])?;
@@ -2699,11 +2736,11 @@ impl Program {
             "bslength" => {
                 let len = i64::try_from(self.eval_bytes(args[0])?.len())
                     .map_err(|_| EvalError::Overflow)?;
-                self.push_node(Node::Int(len))
+                self.int(len)
             }
             "headUTF8" => {
                 let (codepoint, _) = head_utf8(&self.eval_bytes(args[0])?)?;
-                self.push_node(Node::Int(codepoint as i64))
+                self.int(codepoint as i64)
             }
             "tailUTF8" => {
                 let bytes = self.eval_bytes(args[0])?;
@@ -2736,13 +2773,13 @@ impl Program {
     ) -> Result<Option<(usize, NodeId)>, EvalError> {
         if !args.is_empty() {
             if let Some(result) = self.zero_arity_ffi_result(name)? {
-                let result = self.push_node(result);
+                let result = self.push_value_node(result);
                 return Ok(Some((1, self.pair(result, args[0]))));
             }
         }
         if args.len() >= 2 && is_unary_math_ffi_candidate(name) {
             if let Some(result) = self.unary_math_ffi_result(name, args[0])? {
-                let result = self.push_node(result);
+                let result = self.push_value_node(result);
                 return Ok(Some((2, self.pair(result, args[1]))));
             }
         }
@@ -3425,7 +3462,7 @@ impl Program {
             }
             "peekWord" => {
                 let ptr = self.eval_pointer_value(args[0])?;
-                let result = self.push_node(Node::Int(self.peek_unsigned(ptr, 8)? as i64));
+                let result = self.int(self.peek_unsigned(ptr, 8)? as i64);
                 return Ok(Some((2, self.pair(result, args[1]))));
             }
             "pokeWord" => {
@@ -3705,7 +3742,7 @@ impl Program {
             }
             _ => unreachable!("checked FFI symbol"),
         };
-        let result = self.push_node(result);
+        let result = self.push_value_node(result);
         Ok(Some((arity + 1, self.pair(result, args[arity]))))
     }
 
@@ -3858,7 +3895,7 @@ impl Program {
             (b'S', JsValue::Bytes(value)) => Node::Bytes(value.clone()),
             _ => return Err(EvalError::InvalidByteString),
         };
-        Ok(self.push_node(node))
+        Ok(self.push_value_node(node))
     }
 
     fn js_value_from_node(&mut self, tag: u8, id: NodeId) -> Result<JsValue, EvalError> {
@@ -6629,7 +6666,7 @@ impl Program {
 
     fn new_stable_ptr(&mut self, value: NodeId) -> Result<NodeId, EvalError> {
         let handle = self.new_stable_ptr_handle(value)?;
-        Ok(self.push_node(Node::Int(handle)))
+        Ok(self.int(handle))
     }
 
     fn stable_ptr_handle(&mut self, id: NodeId) -> Result<usize, EvalError> {
@@ -6824,7 +6861,7 @@ impl Program {
         let mut list = self.prim("K");
         for value in values.into_iter().rev() {
             let cons = self.prim("O");
-            let value = self.push_node(Node::Int(value));
+            let value = self.int(value);
             let head = self.app(cons, value);
             list = self.app(head, list);
         }
