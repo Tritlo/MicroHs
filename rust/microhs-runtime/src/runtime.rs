@@ -120,6 +120,7 @@ pub enum KnownPrim {
     IoStderr,
     IoStdin,
     IoStdout,
+    IoStats,
     IoStrict,
     IoTakeMVar,
     IoThen,
@@ -185,6 +186,7 @@ impl KnownPrim {
             "IO.stderr" => Self::IoStderr,
             "IO.stdin" => Self::IoStdin,
             "IO.stdout" => Self::IoStdout,
+            "IO.stats" => Self::IoStats,
             "IO.strict" => Self::IoStrict,
             "IO.takemvar" => Self::IoTakeMVar,
             "IO.>>" => Self::IoThen,
@@ -268,6 +270,7 @@ impl KnownPrim {
             Self::IoStderr => "IO.stderr",
             Self::IoStdin => "IO.stdin",
             Self::IoStdout => "IO.stdout",
+            Self::IoStats => "IO.stats",
             Self::IoStrict => "IO.strict",
             Self::IoTakeMVar => "IO.takemvar",
             Self::IoThen => "IO.>>",
@@ -1031,9 +1034,10 @@ impl Program {
         let Node::Prim(prim) = self.nodes[head.0].clone() else {
             return Ok(None);
         };
-        let name = prim.name();
+        let known = prim.known();
+        use KnownPrim::*;
 
-        if name == "U" && args.len() >= 2 {
+        if known == Some(U) && args.len() >= 2 {
             if let Some(mut node) = self.selector_pair_field(args[0], args[1])? {
                 self.profile_shortcut("selector_pair_field", 1);
                 let in_place = self.apply_reduction_spine(&mut node, 2, args, apps);
@@ -1041,7 +1045,7 @@ impl Program {
             }
         }
 
-        if name == "IO.>>" && args.len() >= 3 && budget >= 2 {
+        if known == Some(IoThen) && args.len() >= 3 && budget >= 2 {
             if let Some(reductions) = self.ignored_io_action_reductions(args[0], budget - 1)? {
                 self.profile_shortcut("io_then_ignored_action", 1);
                 let world = self
@@ -1064,7 +1068,7 @@ impl Program {
             return Ok(Some(self.step_result(&profile_head, node, in_place, 2)));
         }
 
-        if name == "IO.>>=" && args.len() >= 3 {
+        if known == Some(IoBind) && args.len() >= 3 {
             if let Some(result) = self.io_return_action_result(args[0])? {
                 self.profile_shortcut("io_bind_return_action", 1);
                 let next = self.app(args[1], result);
@@ -1074,21 +1078,21 @@ impl Program {
             }
         }
 
-        let rewrite = match name {
-            "I" | "ord" | "chr" if !args.is_empty() => Some((1, args[0])),
-            "K" if args.len() >= 2 => Some((2, args[0])),
-            "A" if args.len() >= 2 => Some((2, args[1])),
-            "U" if args.len() >= 2 => {
+        let rewrite = match known {
+            Some(I | Ord | Chr) if !args.is_empty() => Some((1, args[0])),
+            Some(K) if args.len() >= 2 => Some((2, args[0])),
+            Some(A) if args.len() >= 2 => Some((2, args[1])),
+            Some(U) if args.len() >= 2 => {
                 app_step!(2, args[1], args[0]);
             }
-            "IO.performIO" if !args.is_empty() => {
+            Some(IoPerformIo) if !args.is_empty() => {
                 let world = self.world();
                 let k = self.prim("K");
                 let action = self.app(args[0], world);
                 let n = self.app(action, k);
                 Some((1, n))
             }
-            "IO.atomic" if args.len() >= 2 => {
+            Some(IoAtomic) if args.len() >= 2 => {
                 let k = self.prim("K");
                 let action = self.app(args[0], args[1]);
                 let result = self.app(action, k);
@@ -1097,12 +1101,12 @@ impl Program {
                 let n = self.app(result_pair, args[1]);
                 Some((2, n))
             }
-            "IO.>>=" if args.len() >= 3 => {
+            Some(IoBind) if args.len() >= 3 => {
                 let action = self.app(args[0], args[2]);
                 let n = self.app(action, args[1]);
                 Some((3, n))
             }
-            "IO.>>" if args.len() >= 2 => {
+            Some(IoThen) if args.len() >= 2 => {
                 let bind = self.prim("IO.>>=");
                 let bind_action = self.app(bind, args[0]);
                 let k = self.prim("K");
@@ -1110,12 +1114,12 @@ impl Program {
                 let n = self.app(bind_action, then);
                 Some((2, n))
             }
-            "IO.return" if args.len() >= 3 => {
+            Some(IoReturn) if args.len() >= 3 => {
                 let kx = self.app(args[2], args[0]);
                 let n = self.app(kx, args[1]);
                 Some((3, n))
             }
-            "IO.lazyBind" if args.len() >= 3 => {
+            Some(IoLazyBind) if args.len() >= 3 => {
                 let world_result = self.app(args[0], args[2]);
                 let fst = self.fst();
                 let snd = self.snd();
@@ -1125,16 +1129,16 @@ impl Program {
                 let n = self.app(next, world);
                 Some((3, n))
             }
-            "IO.strict" if args.len() >= 2 => {
+            Some(IoStrict) if args.len() >= 2 => {
                 self.reduce_node_whnf(args[1], FORCE_REDUCTION_LIMIT)?;
                 let n = self.app(args[0], args[1]);
                 Some((2, n))
             }
-            "IO.gc" if args.len() >= 2 => {
+            Some(IoGc) if args.len() >= 2 => {
                 let unit = self.prim("I");
                 Some((2, self.pair(unit, args[1])))
             }
-            "IO.stats" if !args.is_empty() => {
+            Some(IoStats) if !args.is_empty() => {
                 let alloc = self.push_node(Node::Int(
                     i64::try_from(self.nodes.len()).unwrap_or(i64::MAX),
                 ));
@@ -1144,7 +1148,7 @@ impl Program {
                 let stats = self.pair(alloc, reductions);
                 Some((1, self.pair(stats, args[0])))
             }
-            "IO.pp" if args.len() >= 2 => {
+            Some(IoPp) if args.len() >= 2 => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     let rendered = self.render(args[0]);
@@ -1153,7 +1157,7 @@ impl Program {
                 let unit = self.prim("I");
                 Some((2, self.pair(unit, args[1])))
             }
-            "IO.print" if args.len() >= 3 => {
+            Some(IoPrint) if args.len() >= 3 => {
                 let handle = self.eval_io_handle(args[0])?;
                 let value = self.reduce_node_whnf(args[1], FORCE_REDUCTION_LIMIT)?;
                 let rendered = self.render(value);
@@ -1161,7 +1165,7 @@ impl Program {
                 let unit = self.prim("I");
                 Some((3, self.pair(unit, args[2])))
             }
-            "IO.serialize" if args.len() >= 3 => {
+            Some(IoSerialize) if args.len() >= 3 => {
                 let handle = self.eval_io_handle(args[0])?;
                 let value = self.reduce_node_whnf(args[1], FORCE_REDUCTION_LIMIT)?;
                 let serialized = self.serialize_program(value)?;
@@ -1169,57 +1173,57 @@ impl Program {
                 let unit = self.prim("I");
                 Some((3, self.pair(unit, args[2])))
             }
-            "IO.getArgRef" if !args.is_empty() => {
+            Some(IoGetArgRef) if !args.is_empty() => {
                 let arg_array = self.arg_ref_array();
                 Some((1, self.pair(arg_array, args[0])))
             }
-            "IO.thid" if !args.is_empty() => {
+            Some(IoThid) if !args.is_empty() => {
                 let thread = self.push_node(Node::ThreadId(1));
                 Some((1, self.pair(thread, args[0])))
             }
-            "IO.yield" if !args.is_empty() => {
+            Some(IoYield) if !args.is_empty() => {
                 let unit = self.prim("I");
                 Some((1, self.pair(unit, args[0])))
             }
-            "IO.getmaskingstate" if !args.is_empty() => {
+            Some(IoGetMaskingState) if !args.is_empty() => {
                 let state = self.push_node(Node::Int(self.masking_state));
                 Some((1, self.pair(state, args[0])))
             }
-            "IO.setmaskingstate" if args.len() >= 2 => {
+            Some(IoSetMaskingState) if args.len() >= 2 => {
                 self.masking_state = self.eval_int(args[0])?;
                 let unit = self.prim("I");
                 Some((2, self.pair(unit, args[1])))
             }
-            "dynsym" if !args.is_empty() => {
+            Some(Dynsym) if !args.is_empty() => {
                 let name = self.eval_ffi_name(args[0])?;
                 Some((1, self.push_node(Node::Ffi(name))))
             }
-            "IO.threadstatus" if args.len() >= 2 => {
+            Some(IoThreadStatus) if args.len() >= 2 => {
                 self.eval_thread_id(args[0])?;
                 let status = self.push_node(Node::Int(0));
                 Some((2, self.pair(status, args[1])))
             }
-            "IO.newmvar" if !args.is_empty() => {
+            Some(IoNewMVar) if !args.is_empty() => {
                 let mvar = self.push_node(Node::MVar(None));
                 Some((1, self.pair(mvar, args[0])))
             }
-            "IO.takemvar" if args.len() >= 2 => {
+            Some(IoTakeMVar) if args.len() >= 2 => {
                 let mvar = self.eval_mvar_id(args[0])?;
                 let value = self.take_mvar(mvar)?.ok_or(EvalError::InvalidMVar)?;
                 Some((2, self.pair(value, args[1])))
             }
-            "IO.readmvar" if args.len() >= 2 => {
+            Some(IoReadMVar) if args.len() >= 2 => {
                 let mvar = self.eval_mvar_id(args[0])?;
                 let value = self.read_mvar(mvar)?.ok_or(EvalError::InvalidMVar)?;
                 Some((2, self.pair(value, args[1])))
             }
-            "IO.putmvar" if args.len() >= 3 => {
+            Some(IoPutMVar) if args.len() >= 3 => {
                 let mvar = self.eval_mvar_id(args[0])?;
                 self.put_mvar(mvar, args[1])?;
                 let unit = self.prim("I");
                 Some((3, self.pair(unit, args[2])))
             }
-            "IO.trytakemvar" if args.len() >= 2 => {
+            Some(IoTryTakeMVar) if args.len() >= 2 => {
                 let mvar = self.eval_mvar_id(args[0])?;
                 let value = match self.take_mvar(mvar)? {
                     Some(value) => self.just(value),
@@ -1227,7 +1231,7 @@ impl Program {
                 };
                 Some((2, self.pair(value, args[1])))
             }
-            "IO.tryreadmvar" if args.len() >= 2 => {
+            Some(IoTryReadMVar) if args.len() >= 2 => {
                 let mvar = self.eval_mvar_id(args[0])?;
                 let value = match self.read_mvar(mvar)? {
                     Some(value) => self.just(value),
@@ -1235,7 +1239,7 @@ impl Program {
                 };
                 Some((2, self.pair(value, args[1])))
             }
-            "IO.tryputmvar" if args.len() >= 3 => {
+            Some(IoTryPutMVar) if args.len() >= 3 => {
                 let mvar = self.eval_mvar_id(args[0])?;
                 let value = if self.try_put_mvar(mvar, args[1])? {
                     self.prim("A")
@@ -1244,22 +1248,24 @@ impl Program {
                 };
                 Some((3, self.pair(value, args[2])))
             }
-            "catch" if args.len() >= 3 => {
+            Some(Catch) if args.len() >= 3 => {
                 let action = self.app(args[0], args[2]);
                 Some((3, self.catch_result(action, args[1], args[2])?))
             }
-            "catchr" if args.len() >= 3 => Some((3, self.catch_result(args[0], args[1], args[2])?)),
-            "raise" if !args.is_empty() => return Err(EvalError::Raised(args[0])),
-            "rnf" if args.len() >= 2 => {
+            Some(CatchR) if args.len() >= 3 => {
+                Some((3, self.catch_result(args[0], args[1], args[2])?))
+            }
+            Some(Raise) if !args.is_empty() => return Err(EvalError::Raised(args[0])),
+            Some(Rnf) if args.len() >= 2 => {
                 let noerr = self.eval_int(args[0])? != 0;
                 self.rnf(noerr, args[1])?;
                 Some((2, self.prim("I")))
             }
-            "seq" if args.len() >= 2 => {
+            Some(Seq) if args.len() >= 2 => {
                 self.reduce_node_whnf(args[0], FORCE_REDUCTION_LIMIT)?;
                 Some((2, args[1]))
             }
-            "isint" if !args.is_empty() => {
+            Some(IsInt) if !args.is_empty() => {
                 let root = self.reduce_node_whnf(args[0], FORCE_REDUCTION_LIMIT)?;
                 let n = match self.nodes[self.resolve(root)?.0] {
                     Node::Int(n) => n,
@@ -1267,116 +1273,116 @@ impl Program {
                 };
                 Some((1, self.push_node(Node::Int(n))))
             }
-            "thnum" if !args.is_empty() => {
+            Some(Thnum) if !args.is_empty() => {
                 let thread = self.eval_thread_id(args[0])?;
                 Some((1, self.push_node(Node::Int(thread))))
             }
-            "S" if args.len() >= 3 => {
+            Some(S) if args.len() >= 3 => {
                 let x = args[2];
                 let left = self.app(args[0], x);
                 let right = self.app(args[1], x);
                 app_step!(3, left, right);
             }
-            "S'" if args.len() >= 4 => {
+            Some(SPrime) if args.len() >= 4 => {
                 let yw = self.app(args[1], args[3]);
                 let zw = self.app(args[2], args[3]);
                 let left = self.app(args[0], yw);
                 app_step!(4, left, zw);
             }
-            "B" if args.len() >= 3 => {
+            Some(B) if args.len() >= 3 => {
                 let yz = self.app(args[1], args[2]);
                 app_step!(3, args[0], yz);
             }
-            "B'" if args.len() >= 4 => {
+            Some(BPrime) if args.len() >= 4 => {
                 let zw = self.app(args[2], args[3]);
                 let xy = self.app(args[0], args[1]);
                 app_step!(4, xy, zw);
             }
-            "B'" if args.len() >= 2 => {
+            Some(BPrime) if args.len() >= 2 => {
                 let xy = self.app(args[0], args[1]);
                 let b = self.prim("B");
                 app_step!(2, b, xy);
             }
-            "Z" if args.len() >= 3 => {
+            Some(Z) if args.len() >= 3 => {
                 app_step!(3, args[0], args[1]);
             }
-            "Z" if args.len() >= 2 => {
+            Some(Z) if args.len() >= 2 => {
                 let xy = self.app(args[0], args[1]);
                 let k = self.prim("K");
                 app_step!(2, k, xy);
             }
-            "J" if args.len() >= 3 => {
+            Some(J) if args.len() >= 3 => {
                 app_step!(3, args[2], args[0]);
             }
-            "L" if args.len() >= 3 => {
+            Some(L) if args.len() >= 3 => {
                 app_step!(3, args[1], args[0]);
             }
-            "KK" if args.len() >= 3 => Some((3, args[1])),
-            "KA" if args.len() >= 3 => Some((3, args[2])),
-            "C" if args.len() >= 3 => {
+            Some(KK) if args.len() >= 3 => Some((3, args[1])),
+            Some(KA) if args.len() >= 3 => Some((3, args[2])),
+            Some(C) if args.len() >= 3 => {
                 let xz = self.app(args[0], args[2]);
                 app_step!(3, xz, args[1]);
             }
-            "C'" if args.len() >= 4 => {
+            Some(CPrime) if args.len() >= 4 => {
                 let yw = self.app(args[1], args[3]);
                 let xyw = self.app(args[0], yw);
                 app_step!(4, xyw, args[2]);
             }
-            "P" if args.len() >= 3 => {
+            Some(P) if args.len() >= 3 => {
                 let zx = self.app(args[2], args[0]);
                 app_step!(3, zx, args[1]);
             }
-            "R" if args.len() >= 3 => {
+            Some(R) if args.len() >= 3 => {
                 let yz = self.app(args[1], args[2]);
                 app_step!(3, yz, args[0]);
             }
-            "R" if args.len() >= 2 => {
+            Some(R) if args.len() >= 2 => {
                 let c = self.prim("C");
                 let cy = self.app(c, args[1]);
                 app_step!(2, cy, args[0]);
             }
-            "O" if args.len() >= 4 => {
+            Some(O) if args.len() >= 4 => {
                 let wx = self.app(args[3], args[0]);
                 app_step!(4, wx, args[1]);
             }
-            "K2" if args.len() >= 3 => Some((3, args[0])),
-            "K2" if args.len() >= 2 => {
+            Some(K2) if args.len() >= 3 => Some((3, args[0])),
+            Some(K2) if args.len() >= 2 => {
                 let k = self.prim("K");
                 app_step!(2, k, args[0]);
             }
-            "K3" if args.len() >= 4 => Some((4, args[0])),
-            "K3" if args.len() >= 2 => {
+            Some(K3) if args.len() >= 4 => Some((4, args[0])),
+            Some(K3) if args.len() >= 2 => {
                 let k2 = self.prim("K2");
                 app_step!(2, k2, args[0]);
             }
-            "K4" if args.len() >= 5 => Some((5, args[0])),
-            "K4" if args.len() >= 2 => {
+            Some(K4) if args.len() >= 5 => Some((5, args[0])),
+            Some(K4) if args.len() >= 2 => {
                 let k3 = self.prim("K3");
                 app_step!(2, k3, args[0]);
             }
-            "C'B" if args.len() >= 4 => {
+            Some(CPrimeB) if args.len() >= 4 => {
                 let yw = self.app(args[1], args[3]);
                 let xz = self.app(args[0], args[2]);
                 app_step!(4, xz, yw);
             }
-            "C'B" if args.len() >= 3 => {
+            Some(CPrimeB) if args.len() >= 3 => {
                 let xz = self.app(args[0], args[2]);
                 let b = self.prim("B");
                 let bxz = self.app(b, xz);
                 app_step!(3, bxz, args[1]);
             }
-            "Y" if !args.is_empty() => {
+            Some(Y) if !args.is_empty() => {
                 let y = self.prim("Y");
                 let yy = self.app(y, args[0]);
                 app_step!(1, args[0], yy);
             }
-            name if args.len() >= 2 && tag_index(name).is_some() => {
-                let tag = self.push_node(Node::Int(tag_index(name).expect("checked tag") as i64));
+            Some(Tag(tag)) if args.len() >= 2 => {
+                let tag = self.push_node(Node::Int(i64::from(tag)));
                 let ytag = self.app(args[1], tag);
                 app_step!(2, ytag, args[0]);
             }
-            name if tuple_fields(name).is_some_and(|fields| args.len() > fields) => {
-                let fields = tuple_fields(name).expect("checked tuple constructor");
+            Some(Tuple(fields)) if args.len() > usize::from(fields) => {
+                let fields = usize::from(fields);
                 if budget >= 2 {
                     let selector = args[fields];
                     let available_extra = args.len() - fields - 1;
@@ -1396,38 +1402,42 @@ impl Program {
                 }
                 app_step!(fields + 1, n, args[fields - 1]);
             }
-            name if args.len() >= 2 => self
-                .array_op(name, &args)?
-                .or(self.foreign_ptr_op(name, &args)?)
-                .or(self.stable_ptr_op(name, &args)?)
-                .or(self.weak_ptr_op(name, &args)?)
-                .or(self.bytes_op(name, &args)?)
-                .or(self.float64_binop(name, &args)?)
-                .or(self.float32_binop(name, &args)?)
-                .or(self.int64_binop(name, &args)?)
-                .or(self.int_binop(name, &args)?)
-                .or(self.array_unop(name, &args)?)
-                .or(self.bytes_unop(name, &args)?)
-                .or(self.float64_unop(name, &args)?)
-                .or(self.float32_unop(name, &args)?)
-                .or(self.pointer_conversion(name, &args)?)
-                .or(self.float_conversion(name, &args)?)
-                .or(self.int64_unop(name, &args)?)
-                .or(self.int_conversion(name, &args)?)
-                .or(self.int_unop(name, &args)?),
-            name if !args.is_empty() => self
-                .array_unop(name, &args)?
-                .or(self.foreign_ptr_unop(name, &args)?)
-                .or(self.stable_ptr_unop(name, &args)?)
-                .or(self.weak_ptr_unop(name, &args)?)
-                .or(self.bytes_unop(name, &args)?)
-                .or(self.float64_unop(name, &args)?)
-                .or(self.float32_unop(name, &args)?)
-                .or(self.pointer_conversion(name, &args)?)
-                .or(self.float_conversion(name, &args)?)
-                .or(self.int64_unop(name, &args)?)
-                .or(self.int_conversion(name, &args)?)
-                .or(self.int_unop(name, &args)?),
+            _ if args.len() >= 2 => {
+                let name = prim.name();
+                self.array_op(name, &args)?
+                    .or(self.foreign_ptr_op(name, &args)?)
+                    .or(self.stable_ptr_op(name, &args)?)
+                    .or(self.weak_ptr_op(name, &args)?)
+                    .or(self.bytes_op(name, &args)?)
+                    .or(self.float64_binop(name, &args)?)
+                    .or(self.float32_binop(name, &args)?)
+                    .or(self.int64_binop(name, &args)?)
+                    .or(self.int_binop(name, &args)?)
+                    .or(self.array_unop(name, &args)?)
+                    .or(self.bytes_unop(name, &args)?)
+                    .or(self.float64_unop(name, &args)?)
+                    .or(self.float32_unop(name, &args)?)
+                    .or(self.pointer_conversion(name, &args)?)
+                    .or(self.float_conversion(name, &args)?)
+                    .or(self.int64_unop(name, &args)?)
+                    .or(self.int_conversion(name, &args)?)
+                    .or(self.int_unop(name, &args)?)
+            }
+            _ if !args.is_empty() => {
+                let name = prim.name();
+                self.array_unop(name, &args)?
+                    .or(self.foreign_ptr_unop(name, &args)?)
+                    .or(self.stable_ptr_unop(name, &args)?)
+                    .or(self.weak_ptr_unop(name, &args)?)
+                    .or(self.bytes_unop(name, &args)?)
+                    .or(self.float64_unop(name, &args)?)
+                    .or(self.float32_unop(name, &args)?)
+                    .or(self.pointer_conversion(name, &args)?)
+                    .or(self.float_conversion(name, &args)?)
+                    .or(self.int64_unop(name, &args)?)
+                    .or(self.int_conversion(name, &args)?)
+                    .or(self.int_unop(name, &args)?)
+            }
             _ => None,
         };
 
@@ -1435,7 +1445,7 @@ impl Program {
             return Ok(None);
         };
         let mut reductions = 1;
-        if is_identity_alias(name) {
+        if matches!(known, Some(I | Ord | Chr)) {
             let mut alias_shortcuts = 0;
             while reductions < budget && used < args.len() && self.is_identity_alias_node(node)? {
                 node = args[used];
