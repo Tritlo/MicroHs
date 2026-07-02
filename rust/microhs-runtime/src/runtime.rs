@@ -6425,14 +6425,12 @@ impl Program {
                     stdout
                         .write_all(bytes)
                         .map_err(|_| EvalError::InvalidHandle)?;
-                    stdout.flush().map_err(|_| EvalError::InvalidHandle)?;
                 }
                 StdHandle::Stderr => {
                     let mut stderr = std::io::stderr().lock();
                     stderr
                         .write_all(bytes)
                         .map_err(|_| EvalError::InvalidHandle)?;
-                    stderr.flush().map_err(|_| EvalError::InvalidHandle)?;
                 }
                 StdHandle::Stdin => unreachable!("checked above"),
             }
