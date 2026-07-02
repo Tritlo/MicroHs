@@ -85,6 +85,13 @@ enum BFileKind {
     Crlf {
         inner: i64,
     },
+    Rle {
+        inner: i64,
+        read: bool,
+        count: usize,
+        byte: i64,
+        unget: Option<i64>,
+    },
     Buf {
         inner: i64,
         unget: Option<i64>,
@@ -1649,6 +1656,14 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 Node::Ptr(self.add_crlf_bfile(ptr)?)
             }
+            "add_rle_decompressor" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Ptr(self.add_rle_bfile(ptr, true)?)
+            }
+            "add_rle_compressor" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Ptr(self.add_rle_bfile(ptr, false)?)
+            }
             "add_buf" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let size = self.eval_int(args[1])?;
@@ -2317,6 +2332,21 @@ impl Program {
         })
     }
 
+    fn add_rle_bfile(&mut self, ptr: i64, read: bool) -> Result<i64, EvalError> {
+        let (inner_readable, inner_writable) = self.bfile_permissions(ptr)?;
+        self.alloc_bfile(BFile {
+            kind: BFileKind::Rle {
+                inner: ptr,
+                read,
+                count: 0,
+                byte: -1,
+                unget: None,
+            },
+            readable: read && inner_readable,
+            writable: !read && inner_writable,
+        })
+    }
+
     fn add_buf_bfile(&mut self, ptr: i64, bufsize: i64) -> Result<i64, EvalError> {
         let (readable, writable) = self.bfile_permissions(ptr)?;
         let linebuf = bufsize < 0;
@@ -2597,7 +2627,10 @@ impl Program {
                 .get(slot)
                 .and_then(Option::as_ref)
                 .ok_or(EvalError::InvalidHandle)?;
-            matches!(&bfile.kind, BFileKind::Buf { read: false, .. })
+            matches!(
+                &bfile.kind,
+                BFileKind::Buf { read: false, .. } | BFileKind::Rle { read: false, .. }
+            )
         };
         if flush_self {
             self.flush_bfile(ptr)?;
@@ -2611,6 +2644,7 @@ impl Program {
             match &bfile.kind {
                 BFileKind::Utf8 { inner, .. }
                 | BFileKind::Crlf { inner }
+                | BFileKind::Rle { inner, .. }
                 | BFileKind::Buf { inner, .. } => Some(*inner),
                 _ => None,
             }
@@ -2643,6 +2677,21 @@ impl Program {
             match &mut bfile.kind {
                 BFileKind::Utf8 { inner, .. } => Some((*inner, Vec::new())),
                 BFileKind::Crlf { inner } => Some((*inner, Vec::new())),
+                BFileKind::Rle {
+                    inner,
+                    read,
+                    count,
+                    byte,
+                    ..
+                } => {
+                    if *read {
+                        None
+                    } else {
+                        let bytes = rle_pending_bytes(*count, *byte)?;
+                        *count = 0;
+                        Some((*inner, bytes))
+                    }
+                }
                 BFileKind::Buf {
                     inner,
                     buffer,
@@ -2692,6 +2741,7 @@ impl Program {
         enum SpecialBFileRead {
             Utf8(i64),
             Crlf(i64),
+            Rle,
             Buf,
         }
         let special = {
@@ -2707,6 +2757,7 @@ impl Program {
                     Some(SpecialBFileRead::Utf8(*inner))
                 }
                 BFileKind::Crlf { inner } => Some(SpecialBFileRead::Crlf(*inner)),
+                BFileKind::Rle { read, .. } if *read => Some(SpecialBFileRead::Rle),
                 BFileKind::Buf { .. } => Some(SpecialBFileRead::Buf),
                 _ => None,
             }
@@ -2714,6 +2765,7 @@ impl Program {
         match special {
             Some(SpecialBFileRead::Utf8(inner)) => return self.get_utf8_bfile_byte(inner),
             Some(SpecialBFileRead::Crlf(inner)) => return self.get_crlf_bfile_byte(inner),
+            Some(SpecialBFileRead::Rle) => return self.get_rle_bfile_byte(ptr),
             Some(SpecialBFileRead::Buf) => return self.get_buf_bfile_byte(ptr),
             None => {}
         }
@@ -2743,6 +2795,7 @@ impl Program {
             }
             BFileKind::Utf8 { .. } => unreachable!("handled above"),
             BFileKind::Crlf { .. } => unreachable!("handled above"),
+            BFileKind::Rle { .. } => unreachable!("handled above"),
             BFileKind::Buf { .. } => unreachable!("handled above"),
         }
     }
@@ -2760,6 +2813,83 @@ impl Program {
             self.unget_bfile_byte(inner, next)?;
         }
         Ok(byte)
+    }
+
+    fn get_rle_bfile_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
+        let inner = {
+            let bfile = self.bfile_mut(ptr)?;
+            if !bfile.readable {
+                return Err(EvalError::InvalidHandle);
+            }
+            match &mut bfile.kind {
+                BFileKind::Rle {
+                    inner,
+                    read,
+                    count,
+                    byte,
+                    unget,
+                } => {
+                    if !*read {
+                        return Err(EvalError::InvalidHandle);
+                    }
+                    if let Some(byte) = unget.take() {
+                        return Ok(byte);
+                    }
+                    if *count > 0 {
+                        *count -= 1;
+                        return Ok(*byte);
+                    }
+                    *inner
+                }
+                _ => return Err(EvalError::InvalidHandle),
+            }
+        };
+
+        let Some(rep) = self.get_rle_rep(inner)? else {
+            return Ok(-1);
+        };
+        if rep == 1 {
+            let byte = self.get_bfile_byte(inner)?;
+            if byte < 0 {
+                return Ok(-1);
+            }
+            return Ok(byte | 0x80);
+        }
+
+        let byte = self.get_bfile_byte(inner)?;
+        if byte < 0 {
+            return Ok(-1);
+        }
+        let bfile = self.bfile_mut(ptr)?;
+        match &mut bfile.kind {
+            BFileKind::Rle {
+                count, byte: out, ..
+            } => {
+                *count = rep;
+                *out = byte;
+                Ok(byte)
+            }
+            _ => Err(EvalError::InvalidHandle),
+        }
+    }
+
+    fn get_rle_rep(&mut self, inner: i64) -> Result<Option<usize>, EvalError> {
+        let mut n = 0usize;
+        loop {
+            let byte = self.get_bfile_byte(inner)?;
+            if byte < 0 {
+                return Ok(None);
+            }
+            if byte < 128 {
+                self.unget_bfile_byte(inner, byte)?;
+                return Ok(Some(n));
+            }
+            let digit = usize::try_from(byte - 128).map_err(|_| EvalError::Overflow)?;
+            n = n
+                .checked_mul(128)
+                .and_then(|n| n.checked_add(digit))
+                .ok_or(EvalError::Overflow)?;
+        }
     }
 
     fn get_buf_bfile_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
@@ -2866,6 +2996,13 @@ impl Program {
                 Ok(())
             }
             BFileKind::Crlf { .. } => unreachable!("handled above"),
+            BFileKind::Rle { unget, .. } => {
+                if unget.is_some() {
+                    return Err(EvalError::InvalidHandle);
+                }
+                *unget = Some(byte);
+                Ok(())
+            }
             BFileKind::Buf { unget, .. } => {
                 if unget.is_some() {
                     return Err(EvalError::InvalidHandle);
@@ -2883,6 +3020,7 @@ impl Program {
         enum SpecialBFileWrite {
             Utf8(i64),
             Crlf(i64),
+            Rle,
             Buf,
         }
         let special = {
@@ -2893,6 +3031,7 @@ impl Program {
             match &bfile.kind {
                 BFileKind::Utf8 { inner, .. } => Some(SpecialBFileWrite::Utf8(*inner)),
                 BFileKind::Crlf { inner } => Some(SpecialBFileWrite::Crlf(*inner)),
+                BFileKind::Rle { read, .. } if !*read => Some(SpecialBFileWrite::Rle),
                 BFileKind::Buf { .. } => Some(SpecialBFileWrite::Buf),
                 _ => None,
             }
@@ -2900,6 +3039,7 @@ impl Program {
         match special {
             Some(SpecialBFileWrite::Utf8(inner)) => return self.put_utf8_bfile_byte(inner, byte),
             Some(SpecialBFileWrite::Crlf(inner)) => return self.put_crlf_bfile_byte(inner, byte),
+            Some(SpecialBFileWrite::Rle) => return self.put_rle_bfile_byte(ptr, byte),
             Some(SpecialBFileWrite::Buf) => return self.put_buf_bfile_byte(ptr, byte),
             None => {}
         }
@@ -2926,6 +3066,7 @@ impl Program {
             }
             BFileKind::Utf8 { .. } => unreachable!("handled above"),
             BFileKind::Crlf { .. } => unreachable!("handled above"),
+            BFileKind::Rle { .. } => unreachable!("handled above"),
             BFileKind::Buf { .. } => unreachable!("handled above"),
         }
     }
@@ -2935,6 +3076,57 @@ impl Program {
             self.put_bfile_byte(inner, i64::from(b'\r'))?;
         }
         self.put_bfile_byte(inner, byte)
+    }
+
+    fn put_rle_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
+        if byte < 0 {
+            return Err(EvalError::InvalidByteString);
+        }
+        let (inner, pending) = {
+            let bfile = self.bfile_mut(ptr)?;
+            if !bfile.writable {
+                return Err(EvalError::InvalidHandle);
+            }
+            match &mut bfile.kind {
+                BFileKind::Rle {
+                    inner,
+                    read,
+                    count,
+                    byte: current,
+                    ..
+                } => {
+                    if *read {
+                        return Err(EvalError::InvalidHandle);
+                    }
+                    if (byte & 0x80) != 0 {
+                        let pending = rle_pending_bytes(*count, *current)?;
+                        *count = 0;
+                        *current = -1;
+                        (*inner, Some((pending, vec![0x81, (byte as u8) & 0x7f])))
+                    } else if byte == *current {
+                        *count = count.checked_add(1).ok_or(EvalError::Overflow)?;
+                        (*inner, None)
+                    } else {
+                        let pending = rle_pending_bytes(*count, *current)?;
+                        *count = 1;
+                        *current = byte;
+                        (*inner, Some((pending, Vec::new())))
+                    }
+                }
+                _ => return Err(EvalError::InvalidHandle),
+            }
+        };
+        if let Some((pending, suffix)) = pending {
+            let pending_written = self.write_bfile_bytes(inner, &pending)?;
+            if pending_written != pending.len() {
+                return Err(EvalError::InvalidHandle);
+            }
+            let suffix_written = self.write_bfile_bytes(inner, &suffix)?;
+            if suffix_written != suffix.len() {
+                return Err(EvalError::InvalidHandle);
+            }
+        }
+        Ok(())
     }
 
     fn put_buf_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
@@ -3038,7 +3230,10 @@ impl Program {
             }
             matches!(
                 &bfile.kind,
-                BFileKind::Utf8 { .. } | BFileKind::Crlf { .. } | BFileKind::Buf { .. }
+                BFileKind::Utf8 { .. }
+                    | BFileKind::Crlf { .. }
+                    | BFileKind::Rle { .. }
+                    | BFileKind::Buf { .. }
             )
         };
         if uses_getb_fallback {
@@ -3085,9 +3280,10 @@ impl Program {
                 bytes.truncate(read);
                 Ok(bytes)
             }
-            BFileKind::Utf8 { .. } | BFileKind::Crlf { .. } | BFileKind::Buf { .. } => {
-                unreachable!("handled above")
-            }
+            BFileKind::Utf8 { .. }
+            | BFileKind::Crlf { .. }
+            | BFileKind::Rle { .. }
+            | BFileKind::Buf { .. } => unreachable!("handled above"),
         }
     }
 
@@ -3108,7 +3304,10 @@ impl Program {
             }
             matches!(
                 &bfile.kind,
-                BFileKind::Utf8 { .. } | BFileKind::Crlf { .. } | BFileKind::Buf { .. }
+                BFileKind::Utf8 { .. }
+                    | BFileKind::Crlf { .. }
+                    | BFileKind::Rle { .. }
+                    | BFileKind::Buf { .. }
             )
         };
         if uses_putb_fallback {
@@ -3135,9 +3334,10 @@ impl Program {
                     .write_all(bytes)
                     .map_err(|_| EvalError::InvalidHandle)?;
             }
-            BFileKind::Utf8 { .. } | BFileKind::Crlf { .. } | BFileKind::Buf { .. } => {
-                unreachable!("handled above")
-            }
+            BFileKind::Utf8 { .. }
+            | BFileKind::Crlf { .. }
+            | BFileKind::Rle { .. }
+            | BFileKind::Buf { .. } => unreachable!("handled above"),
         }
         Ok(bytes.len())
     }
@@ -3153,6 +3353,7 @@ impl Program {
             BFileKind::NativeFile { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Utf8 { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Crlf { .. } => Err(EvalError::InvalidHandle),
+            BFileKind::Rle { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Buf { .. } => Err(EvalError::InvalidHandle),
         }
     }
@@ -4293,6 +4494,33 @@ fn int_to_usize(n: i64) -> Result<usize, EvalError> {
     usize::try_from(n).map_err(|_| EvalError::InvalidByteString)
 }
 
+fn rle_pending_bytes(count: usize, byte: i64) -> Result<Vec<u8>, EvalError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if !(0..128).contains(&byte) {
+        return Err(EvalError::InvalidHandle);
+    }
+    let byte = byte as u8;
+    if count > 2 {
+        let mut out = Vec::new();
+        push_rle_rep(count - 1, &mut out)?;
+        out.push(byte);
+        Ok(out)
+    } else {
+        Ok(vec![byte; count])
+    }
+}
+
+fn push_rle_rep(n: usize, out: &mut Vec<u8>) -> Result<(), EvalError> {
+    if n > 127 {
+        push_rle_rep(n / 128, out)?;
+    }
+    let digit = u8::try_from(n % 128).map_err(|_| EvalError::Overflow)?;
+    out.push(digit | 0x80);
+    Ok(())
+}
+
 fn int_to_i32(n: i64) -> Result<i32, EvalError> {
     i32::try_from(n).map_err(|_| EvalError::Overflow)
 }
@@ -4485,14 +4713,61 @@ fn ffi_arity(name: &str) -> Option<usize> {
         "GETRAW" | "GETTIMEMICRO" | "islinux" | "ismacos" | "iswindows" | "sizeof_char"
         | "sizeof_short" | "sizeof_int" | "sizeof_long" | "sizeof_llong" | "sizeof_size_t"
         | "want_gmp" | "want_imath" | "&closeb" | "&free" | "openb_wr_mem" => 0,
-        "malloc" | "free" | "strlen" | "getenv" | "remove" | "add_FILE" | "add_utf8"
-        | "add_crlf" | "closeb" | "flushb" | "getb" | "peekPtr" | "peekWord" | "peek_uint8"
-        | "peek_uint16" | "peek_uint32" | "peek_uint64" | "peek_int8" | "peek_int16"
-        | "peek_int32" | "peek_int64" | "peek_char" | "peek_schar" | "peek_uchar"
-        | "peek_short" | "peek_ushort" | "peek_int" | "peek_uint" | "peek_long" | "peek_ulong"
-        | "peek_llong" | "peek_ullong" | "peek_size_t" | "peek_flt32" | "peek_flt64" | "acos"
-        | "asin" | "atan" | "cos" | "exp" | "log" | "sin" | "sqrt" | "tan" | "acosf" | "asinf"
-        | "atanf" | "cosf" | "expf" | "logf" | "sinf" | "sqrtf" | "tanf" => 1,
+        "malloc"
+        | "free"
+        | "strlen"
+        | "getenv"
+        | "remove"
+        | "add_FILE"
+        | "add_utf8"
+        | "add_crlf"
+        | "add_rle_compressor"
+        | "add_rle_decompressor"
+        | "closeb"
+        | "flushb"
+        | "getb"
+        | "peekPtr"
+        | "peekWord"
+        | "peek_uint8"
+        | "peek_uint16"
+        | "peek_uint32"
+        | "peek_uint64"
+        | "peek_int8"
+        | "peek_int16"
+        | "peek_int32"
+        | "peek_int64"
+        | "peek_char"
+        | "peek_schar"
+        | "peek_uchar"
+        | "peek_short"
+        | "peek_ushort"
+        | "peek_int"
+        | "peek_uint"
+        | "peek_long"
+        | "peek_ulong"
+        | "peek_llong"
+        | "peek_ullong"
+        | "peek_size_t"
+        | "peek_flt32"
+        | "peek_flt64"
+        | "acos"
+        | "asin"
+        | "atan"
+        | "cos"
+        | "exp"
+        | "log"
+        | "sin"
+        | "sqrt"
+        | "tan"
+        | "acosf"
+        | "asinf"
+        | "atanf"
+        | "cosf"
+        | "expf"
+        | "logf"
+        | "sinf"
+        | "sqrtf"
+        | "tanf" => 1,
         "calloc" | "realloc" | "strcpy" | "fopen" | "add_buf" | "pokePtr" | "pokeWord"
         | "poke_uint8" | "poke_uint16" | "poke_uint32" | "poke_uint64" | "poke_int8"
         | "poke_int16" | "poke_int32" | "poke_int64" | "poke_char" | "poke_schar"
