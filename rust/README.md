@@ -51,6 +51,7 @@ cargo run --release --bin mhs-rust-bench -- --scenario ffi-ptr-mem-chain:200 --i
 cargo run --release --bin mhs-rust-bench -- --scenario ffi-strcpy-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario getenv-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario remove-missing-chain:200 --iters 1000
+cargo run --release --bin mhs-rust-bench -- --scenario file-read-close-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario bfile-read-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario mvar-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario ptr-chain:200 --iters 1000
