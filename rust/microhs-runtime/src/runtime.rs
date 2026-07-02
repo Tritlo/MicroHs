@@ -1631,6 +1631,9 @@ impl Program {
             name if errno_constant(name).is_some() => {
                 Node::Int(errno_constant(name).expect("checked errno constant"))
             }
+            name if host_constant(name).is_some() => {
+                Node::Int(host_constant(name).expect("checked host constant"))
+            }
             "GETRAW" => Node::Int(-1),
             "GETTIMEMICRO" => Node::Int(current_time_micro()),
             "islinux" => Node::Int(i64::from(cfg!(target_os = "linux"))),
@@ -1646,7 +1649,7 @@ impl Program {
             "want_imath" => Node::Int(1),
             "&closeb" => Node::FunPtr("closeb".to_owned()),
             "&free" => Node::FunPtr("free".to_owned()),
-            "&errno" => Node::Ptr(self.errno_ptr()?),
+            "&errno" | "errno" => Node::Ptr(self.errno_ptr()?),
             "malloc" => {
                 let size = int_to_usize(self.eval_int(args[0])?)?;
                 Node::Ptr(self.alloc_memory(size)?)
@@ -1879,12 +1882,29 @@ impl Program {
                     }
                 }
             }
+            "open" => {
+                let path_ptr = self.eval_pointer_value(args[0])?;
+                let flags = int_to_i32(self.eval_int(args[1])?)?;
+                let mode = self.eval_int(args[2])?;
+                let path = self.read_c_string(path_ptr)?;
+                self.host_int_node(open_fd_path_bytes(&path, flags, mode))?
+            }
             "add_FILE" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 if ptr != 0 && handle_from_ptr(ptr).is_none() {
                     self.bfile(ptr)?;
                 }
                 Node::Ptr(ptr)
+            }
+            "add_fd" => {
+                let fd = int_to_i32(self.eval_int(args[0])?)?;
+                match native_fd_bfile(fd) {
+                    Ok(bfile) => Node::Ptr(self.alloc_bfile(bfile)?),
+                    Err(errno) => {
+                        self.set_errno_value(errno)?;
+                        Node::Ptr(0)
+                    }
+                }
             }
             "add_utf8" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -1976,6 +1996,83 @@ impl Program {
                 self.poke_unsigned(sec_ptr, size_of::<std::os::raw::c_ulong>(), sec)?;
                 self.poke_unsigned(nsec_ptr, size_of::<std::os::raw::c_ulong>(), nsec)?;
                 Node::Prim("I".to_owned())
+            }
+            "gettimeofday" => {
+                let timeval_ptr = self.eval_pointer_value(args[0])?;
+                let timezone_ptr = self.eval_pointer_value(args[1])?;
+                self.gettimeofday_node(timeval_ptr, timezone_ptr)?
+            }
+            "accept" => {
+                let fd = int_to_i32(self.eval_int(args[0])?)?;
+                let addr_ptr = self.eval_pointer_value(args[1])?;
+                let len_ptr = self.eval_pointer_value(args[2])?;
+                self.accept_socket_node(fd, addr_ptr, len_ptr)?
+            }
+            "bind" => {
+                let fd = int_to_i32(self.eval_int(args[0])?)?;
+                let addr_ptr = self.eval_pointer_value(args[1])?;
+                let len = int_to_usize(self.eval_int(args[2])?)?;
+                let addr = self.read_pointer_bytes(addr_ptr, len)?;
+                self.host_int_node(bind_socket(fd, &addr))?
+            }
+            "close" => {
+                let fd = int_to_i32(self.eval_int(args[0])?)?;
+                self.host_int_node(close_fd(fd))?
+            }
+            "connect" => {
+                let fd = int_to_i32(self.eval_int(args[0])?)?;
+                let addr_ptr = self.eval_pointer_value(args[1])?;
+                let len = int_to_usize(self.eval_int(args[2])?)?;
+                let addr = self.read_pointer_bytes(addr_ptr, len)?;
+                self.host_int_node(connect_socket(fd, &addr))?
+            }
+            "fcntl" => {
+                let fd = int_to_i32(self.eval_int(args[0])?)?;
+                let cmd = int_to_i32(self.eval_int(args[1])?)?;
+                let arg = int_to_i32(self.eval_int(args[2])?)?;
+                self.host_int_node(fcntl_fd(fd, cmd, arg))?
+            }
+            "getsockopt" => {
+                let fd = int_to_i32(self.eval_int(args[0])?)?;
+                let level = int_to_i32(self.eval_int(args[1])?)?;
+                let optname = int_to_i32(self.eval_int(args[2])?)?;
+                let optval_ptr = self.eval_pointer_value(args[3])?;
+                let optlen_ptr = self.eval_pointer_value(args[4])?;
+                self.getsockopt_node(fd, level, optname, optval_ptr, optlen_ptr)?
+            }
+            "listen" => {
+                let fd = int_to_i32(self.eval_int(args[0])?)?;
+                let backlog = int_to_i32(self.eval_int(args[1])?)?;
+                self.host_int_node(listen_socket(fd, backlog))?
+            }
+            "recv" => {
+                let fd = int_to_i32(self.eval_int(args[0])?)?;
+                let buf_ptr = self.eval_pointer_value(args[1])?;
+                let len = int_to_usize(self.eval_int(args[2])?)?;
+                let flags = int_to_i32(self.eval_int(args[3])?)?;
+                self.recv_socket_node(fd, buf_ptr, len, flags)?
+            }
+            "send" => {
+                let fd = int_to_i32(self.eval_int(args[0])?)?;
+                let buf_ptr = self.eval_pointer_value(args[1])?;
+                let len = int_to_usize(self.eval_int(args[2])?)?;
+                let flags = int_to_i32(self.eval_int(args[3])?)?;
+                self.send_socket_node(fd, buf_ptr, len, flags)?
+            }
+            "setsockopt" => {
+                let fd = int_to_i32(self.eval_int(args[0])?)?;
+                let level = int_to_i32(self.eval_int(args[1])?)?;
+                let optname = int_to_i32(self.eval_int(args[2])?)?;
+                let optval_ptr = self.eval_pointer_value(args[3])?;
+                let optlen = int_to_usize(self.eval_int(args[4])?)?;
+                let optval = self.read_pointer_bytes(optval_ptr, optlen)?;
+                self.host_int_node(setsockopt_socket(fd, level, optname, &optval))?
+            }
+            "socket" => {
+                let domain = int_to_i32(self.eval_int(args[0])?)?;
+                let typ = int_to_i32(self.eval_int(args[1])?)?;
+                let protocol = int_to_i32(self.eval_int(args[2])?)?;
+                self.host_int_node(socket_fd(domain, typ, protocol))?
             }
             "closeb" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -2554,6 +2651,194 @@ impl Program {
             self.set_errno_value(errno)?;
         }
         Ok(Node::Int(result.value))
+    }
+
+    #[cfg_attr(not(all(unix, not(target_arch = "wasm32"))), allow(dead_code))]
+    fn syscall_result_node(&mut self, value: i64) -> Result<Node, EvalError> {
+        if value < 0 {
+            self.set_errno_value(last_errno())?;
+        }
+        Ok(Node::Int(value))
+    }
+
+    fn gettimeofday_node(
+        &mut self,
+        timeval_ptr: i64,
+        timezone_ptr: i64,
+    ) -> Result<Node, EvalError> {
+        #[cfg(all(unix, not(target_arch = "wasm32")))]
+        {
+            let _ = timezone_ptr;
+            let mut tv = std::mem::MaybeUninit::<libc::timeval>::uninit();
+            // SAFETY: libc writes the timeval on success. The timezone argument is obsolete.
+            let rc = unsafe { libc::gettimeofday(tv.as_mut_ptr(), std::ptr::null_mut()) };
+            if rc < 0 {
+                return self.syscall_result_node(i64::from(rc));
+            }
+            if timeval_ptr != 0 {
+                // SAFETY: gettimeofday succeeded, so tv is initialized.
+                let tv = unsafe { tv.assume_init() };
+                // SAFETY: tv is a plain C struct; copying its bytes matches the C FFI layout.
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(
+                        (&tv as *const libc::timeval).cast::<u8>(),
+                        size_of::<libc::timeval>(),
+                    )
+                };
+                self.write_pointer_bytes(timeval_ptr, bytes)?;
+            }
+            Ok(Node::Int(i64::from(rc)))
+        }
+        #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+        {
+            let _ = (timeval_ptr, timezone_ptr);
+            self.host_int_node(HostIntResult::err(errno_i32("ENOSYS")))
+        }
+    }
+
+    fn accept_socket_node(
+        &mut self,
+        fd: i32,
+        addr_ptr: i64,
+        len_ptr: i64,
+    ) -> Result<Node, EvalError> {
+        #[cfg(all(unix, not(target_arch = "wasm32")))]
+        {
+            let mut len = 0 as libc::socklen_t;
+            let mut buffer = Vec::new();
+            let (addr_arg, len_arg) = if addr_ptr != 0 && len_ptr != 0 {
+                let raw_len = self.peek_unsigned(len_ptr, size_of::<libc::socklen_t>())?;
+                len = libc::socklen_t::try_from(raw_len).map_err(|_| EvalError::Overflow)?;
+                buffer.resize(usize::try_from(len).map_err(|_| EvalError::Overflow)?, 0);
+                (buffer.as_mut_ptr().cast(), &mut len as *mut _)
+            } else {
+                (std::ptr::null_mut(), std::ptr::null_mut())
+            };
+            // SAFETY: pointers either point to temporary buffers or are null, as accepted by libc.
+            let rc = unsafe { libc::accept(fd, addr_arg, len_arg) };
+            if rc >= 0 && addr_ptr != 0 && len_ptr != 0 {
+                let written = usize::try_from(len)
+                    .map_err(|_| EvalError::Overflow)?
+                    .min(buffer.len());
+                self.write_pointer_bytes(addr_ptr, &buffer[..written])?;
+                self.poke_unsigned(
+                    len_ptr,
+                    size_of::<libc::socklen_t>(),
+                    u64::try_from(len).map_err(|_| EvalError::Overflow)?,
+                )?;
+            }
+            self.syscall_result_node(i64::from(rc))
+        }
+        #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+        {
+            let _ = (fd, addr_ptr, len_ptr);
+            self.host_int_node(HostIntResult::err(errno_i32("ENOSYS")))
+        }
+    }
+
+    fn getsockopt_node(
+        &mut self,
+        fd: i32,
+        level: i32,
+        optname: i32,
+        optval_ptr: i64,
+        optlen_ptr: i64,
+    ) -> Result<Node, EvalError> {
+        #[cfg(all(unix, not(target_arch = "wasm32")))]
+        {
+            if optlen_ptr == 0 {
+                return self.host_int_node(HostIntResult::err(errno_i32("EINVAL")));
+            }
+            let raw_len = self.peek_unsigned(optlen_ptr, size_of::<libc::socklen_t>())?;
+            let mut len = libc::socklen_t::try_from(raw_len).map_err(|_| EvalError::Overflow)?;
+            let mut buffer = vec![0; usize::try_from(len).map_err(|_| EvalError::Overflow)?];
+            let optval = if optval_ptr == 0 {
+                std::ptr::null_mut()
+            } else {
+                buffer.as_mut_ptr().cast()
+            };
+            // SAFETY: optval points to a temporary output buffer or is null; len points to stack storage.
+            let rc = unsafe { libc::getsockopt(fd, level, optname, optval, &mut len) };
+            if rc >= 0 {
+                if optval_ptr != 0 {
+                    let written = usize::try_from(len)
+                        .map_err(|_| EvalError::Overflow)?
+                        .min(buffer.len());
+                    self.write_pointer_bytes(optval_ptr, &buffer[..written])?;
+                }
+                self.poke_unsigned(
+                    optlen_ptr,
+                    size_of::<libc::socklen_t>(),
+                    u64::try_from(len).map_err(|_| EvalError::Overflow)?,
+                )?;
+            }
+            self.syscall_result_node(i64::from(rc))
+        }
+        #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+        {
+            let _ = (fd, level, optname, optval_ptr, optlen_ptr);
+            self.host_int_node(HostIntResult::err(errno_i32("ENOSYS")))
+        }
+    }
+
+    fn recv_socket_node(
+        &mut self,
+        fd: i32,
+        buf_ptr: i64,
+        len: usize,
+        flags: i32,
+    ) -> Result<Node, EvalError> {
+        #[cfg(all(unix, not(target_arch = "wasm32")))]
+        {
+            let mut buffer = vec![0; len];
+            let ptr = if len == 0 {
+                std::ptr::null_mut()
+            } else {
+                buffer.as_mut_ptr().cast()
+            };
+            // SAFETY: ptr points to a temporary buffer large enough for len bytes, or is null for len 0.
+            let rc = unsafe { libc::recv(fd, ptr, len, flags) };
+            if rc >= 0 && len != 0 {
+                let read = usize::try_from(rc).map_err(|_| EvalError::Overflow)?;
+                self.write_pointer_bytes(buf_ptr, &buffer[..read])?;
+            }
+            self.syscall_result_node(rc as i64)
+        }
+        #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+        {
+            let _ = (fd, buf_ptr, len, flags);
+            self.host_int_node(HostIntResult::err(errno_i32("ENOSYS")))
+        }
+    }
+
+    fn send_socket_node(
+        &mut self,
+        fd: i32,
+        buf_ptr: i64,
+        len: usize,
+        flags: i32,
+    ) -> Result<Node, EvalError> {
+        #[cfg(all(unix, not(target_arch = "wasm32")))]
+        {
+            let buffer = if len == 0 {
+                Vec::new()
+            } else {
+                self.read_pointer_bytes(buf_ptr, len)?
+            };
+            let ptr = if len == 0 {
+                std::ptr::null()
+            } else {
+                buffer.as_ptr().cast()
+            };
+            // SAFETY: ptr points to len bytes copied from guest memory, or is null for len 0.
+            let rc = unsafe { libc::send(fd, ptr, len, flags) };
+            self.syscall_result_node(rc as i64)
+        }
+        #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+        {
+            let _ = (fd, buf_ptr, len, flags);
+            self.host_int_node(HostIntResult::err(errno_i32("ENOSYS")))
+        }
     }
 
     fn write_strerror(&mut self, errno: i32, ptr: i64, size: usize) -> Result<i64, EvalError> {
@@ -6130,6 +6415,35 @@ fn errno_i32(name: &str) -> i32 {
     errno_constant(name).unwrap_or(-1) as i32
 }
 
+fn host_constant(name: &str) -> Option<i64> {
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    {
+        return Some(i64::from(match name {
+            "F_SETFL" => libc::F_SETFL,
+            "O_NONBLOCK" => libc::O_NONBLOCK,
+            "SOL_SOCKET" => libc::SOL_SOCKET,
+            "SO_DEBUG" => libc::SO_DEBUG,
+            "SO_ERROR" => libc::SO_ERROR,
+            "SO_REUSEADDR" => libc::SO_REUSEADDR,
+            "SO_TYPE" => libc::SO_TYPE,
+            _ => return None,
+        }));
+    }
+    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    {
+        const HOST_CONSTANTS: &[&str] = &[
+            "F_SETFL",
+            "O_NONBLOCK",
+            "SOL_SOCKET",
+            "SO_DEBUG",
+            "SO_ERROR",
+            "SO_REUSEADDR",
+            "SO_TYPE",
+        ];
+        HOST_CONSTANTS.contains(&name).then_some(-1)
+    }
+}
+
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn last_errno() -> i32 {
     std::io::Error::last_os_error()
@@ -6963,6 +7277,187 @@ fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
     })
 }
 
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn native_fd_bfile(fd: i32) -> Result<BFile, i32> {
+    use std::os::unix::io::FromRawFd;
+
+    if fd < 0 {
+        return Err(errno_i32("EBADF"));
+    }
+    // SAFETY: add_fd transfers fd ownership to the BFILE, matching the C runtime closeb_fd path.
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    Ok(BFile {
+        kind: BFileKind::NativeFile {
+            file: std::rc::Rc::new(std::cell::RefCell::new(file)),
+            ungot: Vec::new(),
+        },
+        readable: true,
+        writable: true,
+    })
+}
+
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+fn native_fd_bfile(fd: i32) -> Result<BFile, i32> {
+    let _ = fd;
+    Err(errno_i32("ENOSYS"))
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn open_fd_path_bytes(path: &[u8], flags: i32, mode: i64) -> HostIntResult {
+    let path = match std::ffi::CString::new(path) {
+        Ok(path) => path,
+        Err(_) => return HostIntResult::err(errno_i32("EINVAL")),
+    };
+    let mode = match libc::mode_t::try_from(mode) {
+        Ok(mode) => mode,
+        Err(_) => return HostIntResult::err(errno_i32("EINVAL")),
+    };
+    // SAFETY: path is NUL-terminated and flags/mode are plain C values.
+    let fd = unsafe { libc::open(path.as_ptr(), flags, mode) };
+    if fd < 0 {
+        HostIntResult::err(last_errno())
+    } else {
+        HostIntResult::ok(i64::from(fd))
+    }
+}
+
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+fn open_fd_path_bytes(path: &[u8], flags: i32, mode: i64) -> HostIntResult {
+    let _ = (path, flags, mode);
+    HostIntResult::err(errno_i32("ENOSYS"))
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn close_fd(fd: i32) -> HostIntResult {
+    // SAFETY: close only consumes the integer file descriptor.
+    let rc = unsafe { libc::close(fd) };
+    if rc < 0 {
+        HostIntResult::err(last_errno())
+    } else {
+        HostIntResult::ok(i64::from(rc))
+    }
+}
+
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+fn close_fd(fd: i32) -> HostIntResult {
+    let _ = fd;
+    HostIntResult::err(errno_i32("ENOSYS"))
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn fcntl_fd(fd: i32, cmd: i32, arg: i32) -> HostIntResult {
+    // SAFETY: this mirrors the C runtime's three-int fcntl wrapper.
+    let rc = unsafe { libc::fcntl(fd, cmd, arg) };
+    if rc < 0 {
+        HostIntResult::err(last_errno())
+    } else {
+        HostIntResult::ok(i64::from(rc))
+    }
+}
+
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+fn fcntl_fd(fd: i32, cmd: i32, arg: i32) -> HostIntResult {
+    let _ = (fd, cmd, arg);
+    HostIntResult::err(errno_i32("ENOSYS"))
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn socket_fd(domain: i32, typ: i32, protocol: i32) -> HostIntResult {
+    // SAFETY: socket takes plain integer arguments.
+    let fd = unsafe { libc::socket(domain, typ, protocol) };
+    if fd < 0 {
+        HostIntResult::err(last_errno())
+    } else {
+        HostIntResult::ok(i64::from(fd))
+    }
+}
+
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+fn socket_fd(domain: i32, typ: i32, protocol: i32) -> HostIntResult {
+    let _ = (domain, typ, protocol);
+    HostIntResult::err(errno_i32("ENOSYS"))
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn bind_socket(fd: i32, addr: &[u8]) -> HostIntResult {
+    let len = match libc::socklen_t::try_from(addr.len()) {
+        Ok(len) => len,
+        Err(_) => return HostIntResult::err(errno_i32("EINVAL")),
+    };
+    // SAFETY: addr points to len bytes copied from guest memory.
+    let rc = unsafe { libc::bind(fd, addr.as_ptr().cast(), len) };
+    if rc < 0 {
+        HostIntResult::err(last_errno())
+    } else {
+        HostIntResult::ok(i64::from(rc))
+    }
+}
+
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+fn bind_socket(fd: i32, addr: &[u8]) -> HostIntResult {
+    let _ = (fd, addr);
+    HostIntResult::err(errno_i32("ENOSYS"))
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn connect_socket(fd: i32, addr: &[u8]) -> HostIntResult {
+    let len = match libc::socklen_t::try_from(addr.len()) {
+        Ok(len) => len,
+        Err(_) => return HostIntResult::err(errno_i32("EINVAL")),
+    };
+    // SAFETY: addr points to len bytes copied from guest memory.
+    let rc = unsafe { libc::connect(fd, addr.as_ptr().cast(), len) };
+    if rc < 0 {
+        HostIntResult::err(last_errno())
+    } else {
+        HostIntResult::ok(i64::from(rc))
+    }
+}
+
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+fn connect_socket(fd: i32, addr: &[u8]) -> HostIntResult {
+    let _ = (fd, addr);
+    HostIntResult::err(errno_i32("ENOSYS"))
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn listen_socket(fd: i32, backlog: i32) -> HostIntResult {
+    // SAFETY: listen takes plain integer arguments.
+    let rc = unsafe { libc::listen(fd, backlog) };
+    if rc < 0 {
+        HostIntResult::err(last_errno())
+    } else {
+        HostIntResult::ok(i64::from(rc))
+    }
+}
+
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+fn listen_socket(fd: i32, backlog: i32) -> HostIntResult {
+    let _ = (fd, backlog);
+    HostIntResult::err(errno_i32("ENOSYS"))
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn setsockopt_socket(fd: i32, level: i32, optname: i32, optval: &[u8]) -> HostIntResult {
+    let len = match libc::socklen_t::try_from(optval.len()) {
+        Ok(len) => len,
+        Err(_) => return HostIntResult::err(errno_i32("EINVAL")),
+    };
+    // SAFETY: optval points to len bytes copied from guest memory.
+    let rc = unsafe { libc::setsockopt(fd, level, optname, optval.as_ptr().cast(), len) };
+    if rc < 0 {
+        HostIntResult::err(last_errno())
+    } else {
+        HostIntResult::ok(i64::from(rc))
+    }
+}
+
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+fn setsockopt_socket(fd: i32, level: i32, optname: i32, optval: &[u8]) -> HostIntResult {
+    let _ = (fd, level, optname, optval);
+    HostIntResult::err(errno_i32("ENOSYS"))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_native_file_mode(mode: &[u8]) -> Option<NativeFileMode> {
     let mut normalized = Vec::with_capacity(mode.len());
@@ -7035,6 +7530,9 @@ fn ffi_arity(name: &str) -> Option<usize> {
     if errno_constant(name).is_some() {
         return Some(0);
     }
+    if host_constant(name).is_some() {
+        return Some(0);
+    }
     Some(match name {
         "GETRAW"
         | "GETTIMEMICRO"
@@ -7052,6 +7550,7 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "&closeb"
         | "&free"
         | "&errno"
+        | "errno"
         | "environ"
         | "get_executable_path"
         | "openb_wr_mem" => 0,
@@ -7064,10 +7563,12 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "system"
         | "chdir"
         | "get_permissions"
+        | "add_fd"
         | "opendir"
         | "readdir"
         | "closedir"
         | "c_d_name"
+        | "close"
         | "add_FILE"
         | "add_utf8"
         | "add_crlf"
@@ -7132,9 +7633,12 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "poke_int32" | "poke_int64" | "poke_char" | "poke_schar" | "poke_uchar"
         | "poke_short" | "poke_ushort" | "poke_int" | "poke_uint" | "poke_long" | "poke_ulong"
         | "poke_llong" | "poke_ullong" | "poke_size_t" | "poke_flt32" | "poke_flt64"
-        | "openb_rd_mem" | "getcpu" | "putb" | "ungetb" | "atan2" | "pow" | "scalbn" | "atan2f"
-        | "powf" | "scalbnf" => 2,
-        "memcpy" | "memmove" | "setenv" | "md5Array" | "get_mem" | "readb" | "writeb" => 3,
+        | "openb_rd_mem" | "getcpu" | "gettimeofday" | "listen" | "putb" | "ungetb" | "atan2"
+        | "pow" | "scalbn" | "atan2f" | "powf" | "scalbnf" => 2,
+        "memcpy" | "memmove" | "setenv" | "md5Array" | "get_mem" | "readb" | "writeb" | "open"
+        | "accept" | "bind" | "connect" | "fcntl" | "socket" => 3,
+        "recv" | "send" => 4,
+        "getsockopt" | "setsockopt" => 5,
         "strerror_r" => 3,
         _ => return None,
     })
