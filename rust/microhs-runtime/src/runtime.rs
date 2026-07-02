@@ -506,7 +506,7 @@ impl Program {
             let Some((used, mut node)) = self.ffi_call(&name, &args)? else {
                 return Ok(None);
             };
-            let in_place = self.apply_remaining_spine(&mut node, &args[used..], &apps[used..]);
+            let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
             return Ok(Some(StepResult {
                 node,
                 in_place,
@@ -517,7 +517,7 @@ impl Program {
             let Some((used, mut node)) = self.js_call(&tags, &body, &args)? else {
                 return Ok(None);
             };
-            let in_place = self.apply_remaining_spine(&mut node, &args[used..], &apps[used..]);
+            let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
             return Ok(Some(StepResult {
                 node,
                 in_place,
@@ -528,7 +528,7 @@ impl Program {
             let Some((used, mut node)) = self.js_wrap(&tags, &args)? else {
                 return Ok(None);
             };
-            let in_place = self.apply_remaining_spine(&mut node, &args[used..], &apps[used..]);
+            let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
             return Ok(Some(StepResult {
                 node,
                 in_place,
@@ -546,7 +546,7 @@ impl Program {
                     .run_ignored_io_action(args[0], args[2])?
                     .expect("preflighted ignored IO action should execute");
                 let mut node = self.app(args[1], world);
-                let in_place = self.apply_remaining_spine(&mut node, &args[3..], &apps[3..]);
+                let in_place = self.apply_reduction_spine(&mut node, 3, args, apps);
                 return Ok(Some(StepResult {
                     node,
                     in_place,
@@ -557,7 +557,7 @@ impl Program {
             let then = self.app(k, args[1]);
             let action = self.app(args[0], args[2]);
             let mut node = self.app(action, then);
-            let in_place = self.apply_remaining_spine(&mut node, &args[3..], &apps[3..]);
+            let in_place = self.apply_reduction_spine(&mut node, 3, args, apps);
             return Ok(Some(StepResult {
                 node,
                 in_place,
@@ -943,7 +943,7 @@ impl Program {
                 reductions += 1;
             }
         }
-        let in_place = self.apply_remaining_spine(&mut node, &args[used..], &apps[used..]);
+        let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
         Ok(Some(StepResult {
             node,
             in_place,
@@ -1166,14 +1166,21 @@ impl Program {
         })
     }
 
-    fn apply_remaining_spine(
+    fn apply_reduction_spine(
         &mut self,
         node: &mut NodeId,
+        used: usize,
         args: &[NodeId],
         apps: &[NodeId],
     ) -> bool {
         let mut in_place = false;
-        for (arg, app) in args.iter().zip(apps) {
+        // Match the C reducer's update point: the consumed redex root is shared
+        // even when the current evaluation has extra arguments on the spine.
+        if used > 0 && used < args.len() {
+            self.nodes[apps[used - 1].0] = Node::Indir(Some(*node));
+            in_place = true;
+        }
+        for (arg, app) in args[used..].iter().zip(&apps[used..]) {
             self.nodes[app.0] = Node::App(*node, *arg);
             *node = *app;
             in_place = true;

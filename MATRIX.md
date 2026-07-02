@@ -11,15 +11,15 @@ performance, or benchmark classification changes.
 |---|---|
 | branch | `microhs-rust` |
 | upstream tracking | `origin/microhs-rust` |
-| local commits ahead after this snapshot commit | 49 |
-| runtime code baseline | self-hosting benchmark harness checkpoint |
+| local commits ahead after this snapshot commit | 50 |
+| runtime code baseline | lazy performIO spine-sharing checkpoint |
 | dirty files after this snapshot commit | none expected |
 | dirty work | none in tracked runtime files |
 | matrix file | `MATRIX.md`, tracked from this snapshot |
 
 ## Verification Baseline
 
-Last fully verified state: self-hosting benchmark harness checkpoint.
+Last fully verified state: lazy performIO spine-sharing checkpoint.
 
 | gate | status |
 |---|---|
@@ -46,7 +46,9 @@ Last fully verified state: self-hosting benchmark harness checkpoint.
 | main-mode benchmark harness smoke | passed before checkpoint commit; Rust and C support `--mode main -- PROGRAM ARGS...`; main mode measures execution and validates external output instead of serializing the whole root graph |
 | self-host compiler input generation | passed before checkpoint commit; `./bin/mhs -i -imhs -isrc -ilib MicroHs.Main -o/tmp/mhs-selfhost.comb` produced a 647 KiB `v8.4` comb |
 | self-host C main smoke | passed before checkpoint commit; updated `bin/mhsbench --mode main` produced `/tmp/mhs-selfhost-c-mainmode.comb`, a 647 KiB `v8.4` comb that parses under C WHNF smoke |
-| self-host Rust main smoke | not yet passing; without a CPP shim Rust falsely invokes `cpphs` for `MicroHs.Main`; with `/tmp/mhs-cpphs-copy`, the run exceeded ~210s and was stopped with no output comb |
+| lazy `readFile` CPP scan smoke | passed before checkpoint commit; temporary `hasLangCPP` reproducer now prints `False` under Rust like C, dropping the Rust one-shot time from ~433 ms before the fix to ~10 ms |
+| self-host Rust main smoke | not yet passing; no-shim run no longer falsely invokes `cpphs`, but `timeout 300s target/release/mhs-rust-bench --input /tmp/mhs-selfhost.comb --mode main ...` produced no output comb before cutoff |
+| `performio-apply-chain:200` benchmark | passed before checkpoint commit; Rust/C sinks match at `130000`, Rust `114,126` ns/iter vs C `123,407` ns/iter |
 | ignored IO action shortcut perf probe | passed before checkpoint commit; `io-chain`, `io-control-chain`, `argref-chain`, `ffi-chain`, `ffi-math-chain`, `ffi-const-chain`, `env-set-chain`, and `remove-missing-chain` improved with matching sinks; `ffi-mem-chain` and `bfile-read-chain` canaries stayed in the same band |
 | direct lazyBind FFI-continuation perf probe | passed before checkpoint commit; against a clean `50e11139` temp worktree, `ffi-mem-chain` improved from ~1.31 ms to ~0.18 ms and `bfile-read-chain` improved from ~1.50 ms to ~0.34 ms with matching sinks; direct BFILE/env rows improved, while complex continuation canaries stayed in the same noisy band |
 | reducer inline-spine perf probe | passed at `63d03844`; against `f8b9e1d5` temp build, current Rust improved `arith-chain`, `io-chain`, `ffi-chain`, `ffi-mem-chain`, and `bfile-read-chain` by roughly 4-13% |
@@ -180,7 +182,7 @@ runtime primitives.
 
 | scenario | Rust ns/iter | C ns/iter | ratio | sink match |
 |---|---:|---:|---:|---|
-| `identity-chain:1000` | 39,040 | 136,138 | 0.29 | yes |
+| `identity-chain:1000` | 37,794 | 140,241 | 0.27 | yes |
 | `arith-chain:200` | 46,687 | 98,981 | 0.47 | yes |
 | `int64-chain:200` | 49,591 | 112,916 | 0.44 | yes |
 | `float64-chain:200` | 61,633 | 112,001 | 0.55 | yes |
@@ -191,21 +193,22 @@ runtime primitives.
 | `unpack-chain:200` | 8,678 | 97,157 | 0.09 | yes |
 | `fromutf8-chain:200` | 9,939 | 97,162 | 0.10 | yes |
 | `array-chain:200` | 3,572 | 91,485 | 0.04 | yes |
-| `io-chain:200` | 55,205 | 158,453 | 0.35 | yes |
+| `io-chain:200` | 55,694 | 129,826 | 0.43 | yes |
 | `io-array-chain:200` | 3,747 | 92,561 | 0.04 | yes |
 | `io-bytes-chain:200` | 1,814 | 90,873 | 0.02 | yes |
 | `io-control-chain:200` | 75,528 | 142,687 | 0.53 | yes |
+| `performio-apply-chain:200` | 114,126 | 123,407 | 0.92 | yes |
 | `argref-chain:200` | 55,481 | 128,597 | 0.43 | yes |
 | `stdio-chain:200` | 143,397 | 112,014 | 1.28 | yes |
 | `ffi-chain:200` | 64,427 | 158,747 | 0.41 | yes |
 | `ffi-math-chain:200` | 82,002 | 170,476 | 0.48 | yes |
 | `ffi-const-chain:200` | 76,276 | 200,473 | 0.38 | yes |
-| `ffi-mem-chain:200` | 176,820 | 276,792 | 0.64 | yes |
+| `ffi-mem-chain:200` | 173,216 | 238,083 | 0.73 | yes |
 | `ffi-wide-mem-chain:200` | 4,591,002 | 412,413 | 11.13 | yes |
 | `ffi-word-mem-chain:200` | 3,996,918 | 373,408 | 10.70 | yes |
 | `ffi-ptr-mem-chain:200` | 1,975,729 | 359,302 | 5.50 | yes |
 | `ffi-strcpy-chain:200` | 4,358,649 | 401,217 | 10.86 | yes |
-| `bfile-read-chain:200` | 344,309 | 320,306 | 1.07 | yes |
+| `bfile-read-chain:200` | 298,515 | 266,671 | 1.12 | yes |
 | `getenv-chain:200` | 930,970 | 370,071 | 2.52 | yes |
 | `env-set-chain:200` | 675,467 | 646,157 | 1.05 | yes |
 | `getcwd-chain:200` | 3,972,309 | 1,174,708 | 3.38 | yes |
@@ -250,13 +253,13 @@ section only measures the C and Rust runtimes executing that compiler.
 |---|---:|---:|---|
 | compiler comb input | 647 KiB `/tmp/mhs-selfhost.comb`; generated by native `bin/mhs` | parses after signed-`i64::MIN` parser fix | input ready |
 | `--help` main smoke | 10,580,482 ns/iter; sink `661902` | 237,415,489 ns/iter; sink `2027745` | both run and print usage; not a full compile |
-| self-host compiler smoke | 55,999,952,506 ns/iter; output `/tmp/mhs-selfhost-c-mainmode.comb` is a 647 KiB `v8.4` comb and C WHNF smoke passes | no comparable number yet; no-shim run raises after trying `cpphs`; copy-shim run exceeded ~210s and produced no output before manual stop | not at parity |
+| self-host compiler smoke | 55,999,952,506 ns/iter; output `/tmp/mhs-selfhost-c-mainmode.comb` is a 647 KiB `v8.4` comb and C WHNF smoke passes | no comparable number yet; no-shim run passed the old CPP misdetection point but exceeded a 300s cutoff and produced no output comb | not at parity |
 
 ### Comment
 
 | topic | current theory |
 |---|---|
-| Rust/C performance gap | The ignored-action and direct lazyBind shortcuts confirm the gap is mostly semantic overhead, not parity noise: simple `IO.>>`, direct FFI, and unary result-fed FFI/BFILE chains are now close to or faster than C. The remaining common gaps are concentrated in complex `IO.lazyBind` continuations, string/pointer memory paths, buffered/native-file BFILE stacks, and adapter copies where Rust still allocates pair/app nodes and walks reducer spines. Self-hosting adds a correctness blocker: Rust currently mis-detects CPP while scanning `MicroHs.Main` through lazy `readFile`, and even with a copy-style `MHSCPPHS` shim the full compile exceeded the current cutoff. |
+| Rust/C performance gap | The ignored-action, direct lazyBind, and performIO extra-spine updates confirm the gap is mostly semantic overhead, not parity noise: simple `IO.>>`, direct FFI, unary result-fed FFI/BFILE chains, and lazy performIO application are now close to or faster than C. The remaining common gaps are concentrated in complex `IO.lazyBind` continuations, string/pointer memory paths, buffered/native-file BFILE stacks, and adapter copies where Rust still allocates pair/app nodes and walks reducer spines. Self-hosting no longer has the false-CPP correctness blocker, but full Rust self-host still exceeded the 300s cutoff against a ~56s C oracle, so the next blocker is compile-scale performance. |
 
 ### Compiler-Generated Compressor Write Smokes
 
@@ -276,12 +279,12 @@ Rows in this section are generated from temporary pure Haskell programs compiled
 | compression BFILE write-path benchmarks | decompressor rows existed; compiler-generated high-level compressor smokes now cover RLE/LZ77/BWT/LZMA write paths | partial done; built-in repeat scenarios still pending |
 | MD5 broader coverage | committed runtime covers all three FFI names; only `md5String` has a repeat benchmark | pending full high-level `System.IO.MD5` test once the compiler binary is available |
 | directory iteration FFI | committed runtime covers `opendir`, `readdir`, `closedir`, `c_d_name` | pending full high-level `System.Directory` test once the compiler binary is available |
-| self-hosting parity | C runtime can execute the compiler comb and produce a new compiler comb | Rust main-mode harness exists, but false CPP detection/lazy file IO and full-compile runtime cost need investigation |
+| self-hosting parity | C runtime can execute the compiler comb and produce a new compiler comb | Rust main-mode harness exists and lazy file IO now matches the C CPP scan smoke; full-compile runtime cost still exceeds the 300s cutoff |
 | high-level environment tests | runtime now covers `getenv`, `setenv`, `unsetenv`, `environ`; benchmark covers mutation plus lookup | pending full high-level `System.Environment` test once the compiler binary is available |
 | high-level errno/error tests | runtime now covers errno constants, `&errno`, `strerror_r`, and errno recording for implemented host failures | pending full high-level `Foreign.C.Error` / `throwErrnoIf*` tests once the compiler binary is available |
 | high-level temp/CPU tests | runtime now covers `tmpname` and `getcpu`; direct smokes cover the raw FFI actions only | pending full high-level `System.IO.openTmpFile` / `System.CPUTime` tests once the compiler binary is available |
 | commit runtime parity checkpoint | `63702f10 Add Rust mpz and JS FFI coverage` | done |
 | JS full parity | runtimeFFI missing-symbol coverage is zero; `JSVal` object result/argument handles, wrapper creation boundary, owning-program handle plumbing, wrapper tag registry, internal StablePtr callback trampoline, typed JS wrapper callback API, real Rust `.wasm` build artifact, wasm embedding exports, browser-loadable JS host shim, direct wasm dynamic JS FFI smoke, same-program wrapper callback smoke, and broad wrapper tag coverage are in place, but high-level `foreign import javascript` browser parity is not complete; `.combffi` probing did not expose enough JavaScript import metadata for a runtime-only bridge | pending compiler-emitted metadata or generated glue path |
-| performance phase | nine performance checkpoints plus one benchmark parity checkpoint committed; numeric benchmark matrix rows now all sink-match C; rows are split into common-case and rare/specialized; common-operation targets should continue with complex `IO.lazyBind`, guest-memory string/pointer, and buffered/native BFILE rows where Rust is still roughly 3x-11x slower than C | active |
+| performance phase | ten performance checkpoints plus one benchmark parity checkpoint committed; numeric benchmark matrix rows now all sink-match C; rows are split into common-case and rare/specialized; common-operation targets should continue with complex `IO.lazyBind`, guest-memory string/pointer, buffered/native BFILE rows, and self-host compile-scale reducer overhead where Rust is still well behind C | active |
 | rejected performance probes | `KnownFfi` enum/symbol specialization, single-pass BFILE read dispatch, direct unit-return FFI pairing, direct Unix `getcwd` into guest allocation, head-node clone collapse in `step`, primitive-node cache, broad fixed-primitive borrowed classifier, pre-clone `IO.>>` branch, broad borrowed C-string host paths, borrowed `md5String`, over-broad pointer FFI pre-dispatch, generic-arm `peekPtr`/`pokePtr` direct returns, zero-arity FFI candidate guard, direct zero-arity FFI under `IO.>>`, direct FFI shortcut under `IO.lazyBind`, borrowed fixed-size peeks, runtime handle-table free lists, shared `Rc<str>` node symbols, and the `IO.return`/`K` continuation collapse were measured and reverted because important end-to-end rows were neutral or slower | done, do not reapply blindly |
 | keep compiler Haskell | scope is C runtime/evaluator rewrite; Haskell compiler remains authoritative `.comb` producer | ongoing |
