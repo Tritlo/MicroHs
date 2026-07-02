@@ -62,10 +62,35 @@ const BFILE_PTR_STRIDE: i64 = 1_i64 << 32;
 
 #[derive(Clone, Debug)]
 struct BFile {
-    bytes: Vec<u8>,
-    pos: usize,
+    kind: BFileKind,
     readable: bool,
     writable: bool,
+}
+
+#[derive(Clone, Debug)]
+enum BFileKind {
+    Memory {
+        bytes: Vec<u8>,
+        pos: usize,
+    },
+    #[cfg(not(target_arch = "wasm32"))]
+    NativeFile {
+        file: NativeFileHandle,
+        ungot: Vec<u8>,
+    },
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+type NativeFileHandle = std::rc::Rc<std::cell::RefCell<std::fs::File>>;
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
+struct NativeFileMode {
+    readable: bool,
+    writable: bool,
+    append: bool,
+    truncate: bool,
+    create: bool,
 }
 
 #[derive(Debug)]
@@ -1582,9 +1607,29 @@ impl Program {
                 let path = self.read_c_string(ptr)?;
                 Node::Int(remove_path_bytes(&path))
             }
+            "fopen" => {
+                let path_ptr = self.eval_pointer_value(args[0])?;
+                let mode_ptr = self.eval_pointer_value(args[1])?;
+                let path = self.read_c_string(path_ptr)?;
+                let mode = self.read_c_string(mode_ptr)?;
+                if let Some(bfile) = native_fopen_bfile(&path, &mode) {
+                    Node::Ptr(self.alloc_bfile(bfile)?)
+                } else {
+                    Node::Ptr(0)
+                }
+            }
+            "add_FILE" | "add_utf8" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                if ptr != 0 && handle_from_ptr(ptr).is_none() {
+                    self.bfile(ptr)?;
+                }
+                Node::Ptr(ptr)
+            }
             "openb_wr_mem" => Node::Ptr(self.alloc_bfile(BFile {
-                bytes: Vec::new(),
-                pos: 0,
+                kind: BFileKind::Memory {
+                    bytes: Vec::new(),
+                    pos: 0,
+                },
                 readable: false,
                 writable: true,
             })?),
@@ -1593,8 +1638,7 @@ impl Program {
                 let len = int_to_usize(self.eval_int(args[1])?)?;
                 let bytes = self.read_pointer_bytes(ptr, len)?;
                 Node::Ptr(self.alloc_bfile(BFile {
-                    bytes,
-                    pos: 0,
+                    kind: BFileKind::Memory { bytes, pos: 0 },
                     readable: true,
                     writable: false,
                 })?)
@@ -2463,8 +2507,16 @@ impl Program {
         }
         let slot = self.decode_bfile_pointer(ptr)?;
         let slot = self.bfiles.get_mut(slot).ok_or(EvalError::InvalidHandle)?;
-        if slot.is_none() {
-            return Err(EvalError::InvalidHandle);
+        let _bfile = slot.as_ref().ok_or(EvalError::InvalidHandle)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let BFileKind::NativeFile { file, .. } = &_bfile.kind {
+            use std::io::Write as _;
+
+            if _bfile.writable {
+                file.borrow_mut()
+                    .flush()
+                    .map_err(|_| EvalError::InvalidHandle)?;
+            }
         }
         *slot = None;
         Ok(())
@@ -2474,7 +2526,17 @@ impl Program {
         if let Some(handle) = handle_from_ptr(ptr) {
             return self.flush_io_handle(handle);
         }
-        self.bfile(ptr)?;
+        let _bfile = self.bfile(ptr)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let BFileKind::NativeFile { file, .. } = &_bfile.kind {
+            use std::io::Write as _;
+
+            if _bfile.writable {
+                file.borrow_mut()
+                    .flush()
+                    .map_err(|_| EvalError::InvalidHandle)?;
+            }
+        }
         Ok(())
     }
 
@@ -2486,25 +2548,55 @@ impl Program {
         if !bfile.readable {
             return Err(EvalError::InvalidHandle);
         }
-        if bfile.pos >= bfile.bytes.len() {
-            return Ok(-1);
+        match &mut bfile.kind {
+            BFileKind::Memory { bytes, pos } => {
+                if *pos >= bytes.len() {
+                    return Ok(-1);
+                }
+                let byte = bytes[*pos];
+                *pos += 1;
+                Ok(i64::from(byte))
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            BFileKind::NativeFile { file, ungot } => {
+                if let Some(byte) = ungot.pop() {
+                    return Ok(i64::from(byte));
+                }
+                use std::io::Read as _;
+
+                let mut byte = [0];
+                match file.borrow_mut().read(&mut byte) {
+                    Ok(0) => Ok(-1),
+                    Ok(_) => Ok(i64::from(byte[0])),
+                    Err(_) => Err(EvalError::InvalidHandle),
+                }
+            }
         }
-        let byte = bfile.bytes[bfile.pos];
-        bfile.pos += 1;
-        Ok(i64::from(byte))
     }
 
     fn unget_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
         let bfile = self.bfile_mut(ptr)?;
-        if !bfile.readable || bfile.pos == 0 {
+        if !bfile.readable {
             return Err(EvalError::InvalidHandle);
         }
-        let byte = byte as u8;
-        if bfile.bytes[bfile.pos - 1] != byte {
-            return Err(EvalError::InvalidHandle);
+        match &mut bfile.kind {
+            BFileKind::Memory { bytes, pos } => {
+                if *pos == 0 {
+                    return Err(EvalError::InvalidHandle);
+                }
+                let byte = byte as u8;
+                if bytes[*pos - 1] != byte {
+                    return Err(EvalError::InvalidHandle);
+                }
+                *pos -= 1;
+                Ok(())
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            BFileKind::NativeFile { ungot, .. } => {
+                ungot.push(byte as u8);
+                Ok(())
+            }
         }
-        bfile.pos -= 1;
-        Ok(())
     }
 
     fn put_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
@@ -2515,15 +2607,27 @@ impl Program {
         if !bfile.writable {
             return Err(EvalError::InvalidHandle);
         }
-        if bfile.pos == bfile.bytes.len() {
-            bfile.bytes.push(byte as u8);
-        } else if bfile.pos < bfile.bytes.len() {
-            bfile.bytes[bfile.pos] = byte as u8;
-        } else {
-            return Err(EvalError::InvalidHandle);
+        match &mut bfile.kind {
+            BFileKind::Memory { bytes, pos } => {
+                if *pos == bytes.len() {
+                    bytes.push(byte as u8);
+                } else if *pos < bytes.len() {
+                    bytes[*pos] = byte as u8;
+                } else {
+                    return Err(EvalError::InvalidHandle);
+                }
+                *pos += 1;
+                Ok(())
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            BFileKind::NativeFile { file, .. } => {
+                use std::io::Write as _;
+
+                file.borrow_mut()
+                    .write_all(&[byte as u8])
+                    .map_err(|_| EvalError::InvalidHandle)
+            }
         }
-        bfile.pos += 1;
-        Ok(())
     }
 
     fn read_bfile(&mut self, ptr: i64, dst: i64, len: usize) -> Result<usize, EvalError> {
@@ -2548,17 +2652,45 @@ impl Program {
                 return Ok(0);
             }
         }
-        let bfile = self.bfile_mut(ptr)?;
-        if !bfile.readable {
-            return Err(EvalError::InvalidHandle);
-        }
-        let end = bfile
-            .pos
-            .checked_add(len)
-            .map(|end| end.min(bfile.bytes.len()))
-            .ok_or(EvalError::Overflow)?;
-        let bytes = bfile.bytes[bfile.pos..end].to_vec();
-        bfile.pos = end;
+        let bytes = {
+            let bfile = self.bfile_mut(ptr)?;
+            if !bfile.readable {
+                return Err(EvalError::InvalidHandle);
+            }
+            match &mut bfile.kind {
+                BFileKind::Memory { bytes, pos } => {
+                    let end = pos
+                        .checked_add(len)
+                        .map(|end| end.min(bytes.len()))
+                        .ok_or(EvalError::Overflow)?;
+                    let out = bytes[*pos..end].to_vec();
+                    *pos = end;
+                    out
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                BFileKind::NativeFile { file, ungot } => {
+                    use std::io::Read as _;
+
+                    let mut bytes = vec![0; len];
+                    let mut read = 0;
+                    while read < len {
+                        let Some(byte) = ungot.pop() else {
+                            break;
+                        };
+                        bytes[read] = byte;
+                        read += 1;
+                    }
+                    if read < len {
+                        read += file
+                            .borrow_mut()
+                            .read(&mut bytes[read..])
+                            .map_err(|_| EvalError::InvalidHandle)?;
+                    }
+                    bytes.truncate(read);
+                    bytes
+                }
+            }
+        };
         self.write_pointer_bytes(dst, &bytes)?;
         Ok(bytes.len())
     }
@@ -2569,8 +2701,27 @@ impl Program {
             self.write_io_handle_bytes(handle, &bytes)?;
             return Ok(bytes.len());
         }
-        for byte in &bytes {
-            self.put_bfile_byte(ptr, i64::from(*byte))?;
+        let bfile = self.bfile_mut(ptr)?;
+        if !bfile.writable {
+            return Err(EvalError::InvalidHandle);
+        }
+        match &mut bfile.kind {
+            BFileKind::Memory { bytes: buffer, pos } => {
+                let end = pos.checked_add(bytes.len()).ok_or(EvalError::Overflow)?;
+                if end > buffer.len() {
+                    buffer.resize(end, 0);
+                }
+                buffer[*pos..end].copy_from_slice(&bytes);
+                *pos = end;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            BFileKind::NativeFile { file, .. } => {
+                use std::io::Write as _;
+
+                file.borrow_mut()
+                    .write_all(&bytes)
+                    .map_err(|_| EvalError::InvalidHandle)?;
+            }
         }
         Ok(bytes.len())
     }
@@ -2580,7 +2731,11 @@ impl Program {
         if !bfile.writable {
             return Err(EvalError::InvalidHandle);
         }
-        Ok(bfile.bytes[..bfile.pos].to_vec())
+        match &bfile.kind {
+            BFileKind::Memory { bytes, pos } => Ok(bytes[..*pos].to_vec()),
+            #[cfg(not(target_arch = "wasm32"))]
+            BFileKind::NativeFile { .. } => Err(EvalError::InvalidHandle),
+        }
     }
 
     fn eval_io_handle(&mut self, id: NodeId) -> Result<StdHandle, EvalError> {
@@ -3732,25 +3887,132 @@ fn remove_path_bytes(path: &[u8]) -> i64 {
     }
 }
 
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Option<BFile> {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let mode = parse_native_file_mode(mode)?;
+    let file = open_native_file(std::path::Path::new(OsStr::from_bytes(path)), mode)?;
+    Some(BFile {
+        kind: BFileKind::NativeFile {
+            file: std::rc::Rc::new(std::cell::RefCell::new(file)),
+            ungot: Vec::new(),
+        },
+        readable: mode.readable,
+        writable: mode.writable,
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Option<BFile> {
+    let _ = (path, mode);
+    None
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Option<BFile> {
+    let path = std::str::from_utf8(path).ok()?;
+    let mode = parse_native_file_mode(mode)?;
+    let file = open_native_file(std::path::Path::new(path), mode)?;
+    Some(BFile {
+        kind: BFileKind::NativeFile {
+            file: std::rc::Rc::new(std::cell::RefCell::new(file)),
+            ungot: Vec::new(),
+        },
+        readable: mode.readable,
+        writable: mode.writable,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_native_file_mode(mode: &[u8]) -> Option<NativeFileMode> {
+    let mut normalized = Vec::with_capacity(mode.len());
+    for byte in mode {
+        if *byte != b'b' {
+            normalized.push(*byte);
+        }
+    }
+    let mode = match normalized.as_slice() {
+        b"r" => NativeFileMode {
+            readable: true,
+            writable: false,
+            append: false,
+            truncate: false,
+            create: false,
+        },
+        b"w" => NativeFileMode {
+            readable: false,
+            writable: true,
+            append: false,
+            truncate: true,
+            create: true,
+        },
+        b"a" => NativeFileMode {
+            readable: false,
+            writable: true,
+            append: true,
+            truncate: false,
+            create: true,
+        },
+        b"r+" => NativeFileMode {
+            readable: true,
+            writable: true,
+            append: false,
+            truncate: false,
+            create: false,
+        },
+        b"w+" => NativeFileMode {
+            readable: true,
+            writable: true,
+            append: false,
+            truncate: true,
+            create: true,
+        },
+        b"a+" => NativeFileMode {
+            readable: true,
+            writable: true,
+            append: true,
+            truncate: false,
+            create: true,
+        },
+        _ => return None,
+    };
+    Some(mode)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn open_native_file(path: &std::path::Path, mode: NativeFileMode) -> Option<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .read(mode.readable)
+        .write(mode.writable && !mode.append)
+        .append(mode.append)
+        .truncate(mode.truncate)
+        .create(mode.create)
+        .open(path)
+        .ok()
+}
+
 fn ffi_arity(name: &str) -> Option<usize> {
     Some(match name {
         "GETRAW" | "GETTIMEMICRO" | "islinux" | "ismacos" | "iswindows" | "sizeof_char"
         | "sizeof_short" | "sizeof_int" | "sizeof_long" | "sizeof_llong" | "sizeof_size_t"
         | "want_gmp" | "want_imath" | "&closeb" | "&free" | "openb_wr_mem" => 0,
-        "malloc" | "free" | "strlen" | "getenv" | "remove" | "closeb" | "flushb" | "getb"
-        | "peekPtr" | "peekWord" | "peek_uint8" | "peek_uint16" | "peek_uint32" | "peek_uint64"
-        | "peek_int8" | "peek_int16" | "peek_int32" | "peek_int64" | "peek_char" | "peek_schar"
-        | "peek_uchar" | "peek_short" | "peek_ushort" | "peek_int" | "peek_uint" | "peek_long"
-        | "peek_ulong" | "peek_llong" | "peek_ullong" | "peek_size_t" | "peek_flt32"
-        | "peek_flt64" | "acos" | "asin" | "atan" | "cos" | "exp" | "log" | "sin" | "sqrt"
-        | "tan" | "acosf" | "asinf" | "atanf" | "cosf" | "expf" | "logf" | "sinf" | "sqrtf"
-        | "tanf" => 1,
-        "calloc" | "realloc" | "strcpy" | "pokePtr" | "pokeWord" | "poke_uint8" | "poke_uint16"
-        | "poke_uint32" | "poke_uint64" | "poke_int8" | "poke_int16" | "poke_int32"
-        | "poke_int64" | "poke_char" | "poke_schar" | "poke_uchar" | "poke_short"
-        | "poke_ushort" | "poke_int" | "poke_uint" | "poke_long" | "poke_ulong" | "poke_llong"
-        | "poke_ullong" | "poke_size_t" | "poke_flt32" | "poke_flt64" | "openb_rd_mem" | "putb"
-        | "ungetb" | "atan2" | "pow" | "scalbn" | "atan2f" | "powf" | "scalbnf" => 2,
+        "malloc" | "free" | "strlen" | "getenv" | "remove" | "add_FILE" | "add_utf8" | "closeb"
+        | "flushb" | "getb" | "peekPtr" | "peekWord" | "peek_uint8" | "peek_uint16"
+        | "peek_uint32" | "peek_uint64" | "peek_int8" | "peek_int16" | "peek_int32"
+        | "peek_int64" | "peek_char" | "peek_schar" | "peek_uchar" | "peek_short"
+        | "peek_ushort" | "peek_int" | "peek_uint" | "peek_long" | "peek_ulong" | "peek_llong"
+        | "peek_ullong" | "peek_size_t" | "peek_flt32" | "peek_flt64" | "acos" | "asin"
+        | "atan" | "cos" | "exp" | "log" | "sin" | "sqrt" | "tan" | "acosf" | "asinf" | "atanf"
+        | "cosf" | "expf" | "logf" | "sinf" | "sqrtf" | "tanf" => 1,
+        "calloc" | "realloc" | "strcpy" | "fopen" | "pokePtr" | "pokeWord" | "poke_uint8"
+        | "poke_uint16" | "poke_uint32" | "poke_uint64" | "poke_int8" | "poke_int16"
+        | "poke_int32" | "poke_int64" | "poke_char" | "poke_schar" | "poke_uchar"
+        | "poke_short" | "poke_ushort" | "poke_int" | "poke_uint" | "poke_long" | "poke_ulong"
+        | "poke_llong" | "poke_ullong" | "poke_size_t" | "poke_flt32" | "poke_flt64"
+        | "openb_rd_mem" | "putb" | "ungetb" | "atan2" | "pow" | "scalbn" | "atan2f" | "powf"
+        | "scalbnf" => 2,
         "memcpy" | "memmove" | "get_mem" | "readb" | "writeb" => 3,
         _ => return None,
     })
