@@ -7,6 +7,7 @@ const CALLBACK_LIMIT: usize = 100_000;
 
 thread_local! {
     static PROGRAMS: RefCell<Vec<Option<Program>>> = const { RefCell::new(Vec::new()) };
+    static ACTIVE_PROGRAMS: RefCell<Vec<(u32, *mut Program)>> = const { RefCell::new(Vec::new()) };
     static RESULT_BYTES: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -160,16 +161,62 @@ fn with_program_mut<R>(
     handle: u32,
     f: impl FnOnce(&mut Program) -> Result<R, crate::EvalError>,
 ) -> Result<R, ()> {
-    PROGRAMS
-        .try_with(|programs| {
-            let mut programs = programs.try_borrow_mut().map_err(|_| ())?;
+    PROGRAMS.with(|programs| {
+        if let Ok(mut programs) = programs.try_borrow_mut() {
             let program = programs
                 .get_mut(handle as usize)
                 .and_then(Option::as_mut)
                 .ok_or(())?;
+            let _active = ActiveProgram::push(handle, program)?;
             f(program).map_err(|_| ())
+        } else {
+            with_active_program_mut(handle, f)
+        }
+    })
+}
+
+struct ActiveProgram;
+
+impl ActiveProgram {
+    fn push(handle: u32, program: &mut Program) -> Result<Self, ()> {
+        ACTIVE_PROGRAMS.with(|active| {
+            active
+                .try_borrow_mut()
+                .map_err(|_| ())?
+                .push((handle, program));
+            Ok(Self)
         })
-        .map_err(|_| ())?
+    }
+}
+
+impl Drop for ActiveProgram {
+    fn drop(&mut self) {
+        let _ = ACTIVE_PROGRAMS.try_with(|active| {
+            if let Ok(mut active) = active.try_borrow_mut() {
+                active.pop();
+            }
+        });
+    }
+}
+
+fn with_active_program_mut<R>(
+    handle: u32,
+    f: impl FnOnce(&mut Program) -> Result<R, crate::EvalError>,
+) -> Result<R, ()> {
+    ACTIVE_PROGRAMS.with(|active| {
+        let program = {
+            let active = active.try_borrow().map_err(|_| ())?;
+            active
+                .iter()
+                .rev()
+                .find_map(|(active_handle, program)| (*active_handle == handle).then_some(*program))
+                .ok_or(())?
+        };
+        // Wasm callback re-entry is single-threaded; the active guard keeps this pointer scoped
+        // to the outer runtime entry while JS is synchronously calling back into the same module.
+        let program = unsafe { program.as_mut() }.ok_or(())?;
+        f(program).map_err(|_| ())
+    })
 }
 
 fn read_wrapper_args(tags: &[u8]) -> Result<Vec<JsValue>, ()> {
