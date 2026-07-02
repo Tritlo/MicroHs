@@ -6460,8 +6460,7 @@ impl Program {
                 bytes, offset, ptr, ..
             } => {
                 if let Some(mpz) = self.mpz_decimal_bytes_for_ptr(*ptr) {
-                    out.push(b'%');
-                    serialize_bytes_quoted(mpz, out);
+                    serialize_bigint_decimal(mpz, out);
                 } else if let Some(bytes) = bytes {
                     if *offset == 0 {
                         out.extend_from_slice(b"bs2fp ");
@@ -6481,8 +6480,7 @@ impl Program {
                 }
             }
             Node::BigInt(bytes) => {
-                out.push(b'%');
-                serialize_bytes_quoted(bytes, out);
+                serialize_bigint_decimal(bytes, out);
             }
             Node::Bytes(bytes) | Node::MutableBytes { bytes, .. } => {
                 serialize_bytes_comb(bytes, out);
@@ -10134,6 +10132,12 @@ fn serialize_bytes_comb(bytes: &[u8], out: &mut Vec<u8>) {
     }
 }
 
+fn serialize_bigint_decimal(bytes: &[u8], out: &mut Vec<u8>) {
+    out.push(b'%');
+    out.extend_from_slice(bytes);
+    out.push(b'"');
+}
+
 fn serialize_bytes_quoted(bytes: &[u8], out: &mut Vec<u8>) {
     out.push(b'"');
     for &byte in bytes {
@@ -10343,6 +10347,21 @@ mod tests {
                     String::from_utf8_lossy(&input)
                 ),
             }
+        }
+    }
+
+    #[test]
+    fn serializes_bigints_with_c_wire_format() {
+        let program = parse_program(b"v8.4\n0\n%-123456789\" }\n").unwrap();
+        assert_eq!(
+            program.serialize_program(program.root()).unwrap(),
+            b"v8.4\n0\n%-123456789\" }\n"
+        );
+
+        let legacy = parse_program(b"v8.4\n0\n%\"123456789\" }\n").unwrap();
+        match &legacy.nodes()[legacy.root().0] {
+            Node::BigInt(bytes) => assert_eq!(bytes.as_slice(), b"123456789"),
+            other => panic!("legacy bigint parsed as {other:?}"),
         }
     }
 
