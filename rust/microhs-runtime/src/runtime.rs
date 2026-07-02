@@ -540,6 +540,17 @@ impl Program {
             return Ok(None);
         };
 
+        if name == "U" && args.len() >= 2 {
+            if let Some(mut node) = self.selector_pair_field(args[0], args[1])? {
+                let in_place = self.apply_reduction_spine(&mut node, 2, args, apps);
+                return Ok(Some(StepResult {
+                    node,
+                    in_place,
+                    reductions: 1,
+                }));
+            }
+        }
+
         if name == "IO.>>" && args.len() >= 3 && budget >= 2 {
             if let Some(reductions) = self.ignored_io_action_reductions(args[0], budget - 1)? {
                 let world = self
@@ -1119,6 +1130,24 @@ impl Program {
             Node::Prim(name) if name == "P" => Some((result, world)),
             _ => None,
         })
+    }
+
+    fn selector_pair_field(
+        &mut self,
+        selector: NodeId,
+        pair: NodeId,
+    ) -> Result<Option<NodeId>, EvalError> {
+        let selector = self.resolve(selector)?;
+        let field = match &self.nodes[selector.0] {
+            Node::Prim(name) if name == "K" => 0,
+            Node::Prim(name) if name == "A" => 1,
+            _ => return Ok(None),
+        };
+        let pair = self.reduce_node_whnf(pair, FORCE_REDUCTION_LIMIT)?;
+        let Some((result, world)) = self.pair_fields(pair)? else {
+            return Ok(None);
+        };
+        Ok(Some(if field == 0 { result } else { world }))
     }
 
     fn spine(&self, root: NodeId) -> Result<Spine, EvalError> {
