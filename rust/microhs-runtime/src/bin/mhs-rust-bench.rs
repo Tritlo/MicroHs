@@ -5,7 +5,7 @@ use std::process::Command;
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use microhs_runtime::{EvalError, EvalProfile, parse_program};
+use microhs_runtime::{EvalError, EvalProfile, Program, parse_program};
 
 const DEFAULT_ITERS: usize = 1_000;
 const DEFAULT_WARMUP_ITERS: usize = 0;
@@ -999,13 +999,7 @@ fn eval_once(
             (steps, sink)
         }
         BenchMode::Main => {
-            let (_, steps) = match program.reduce_main(usize::MAX) {
-                Ok(result) => result,
-                Err(EvalError::Raised(exn)) => {
-                    panic!("run benchmark main: {}", program.render(exn))
-                }
-                Err(err) => panic!("run benchmark main: {err}"),
-            };
+            let steps = reduce_main_steps_or_panic(&mut program, "run benchmark main");
             let sink = steps.wrapping_add(program.nodes().len());
             (steps, sink)
         }
@@ -1036,13 +1030,7 @@ fn profile_eval(
             (steps, sink)
         }
         BenchMode::Main => {
-            let (_, steps) = match program.reduce_main(usize::MAX) {
-                Ok(result) => result,
-                Err(EvalError::Raised(exn)) => {
-                    panic!("profile run benchmark main: {}", program.render(exn))
-                }
-                Err(err) => panic!("profile run benchmark main: {err}"),
-            };
+            let steps = reduce_main_steps_or_panic(&mut program, "profile run benchmark main");
             let sink = steps.wrapping_add(program.nodes().len());
             (steps, sink)
         }
@@ -1112,6 +1100,24 @@ fn bytes_sink(bytes: &[u8]) -> usize {
         sink = sink.wrapping_add(*first as usize);
     }
     sink
+}
+
+fn reduce_main_steps_or_panic(program: &mut Program, context: &str) -> usize {
+    let reductions = program.reduction_count();
+    match program.reduce_main(usize::MAX) {
+        Ok((_, steps)) => steps,
+        Err(EvalError::Raised(exn)) => {
+            let message = program
+                .uncaught_exception_message_bytes(exn)
+                .unwrap_or_else(|err| err.to_string().into_bytes());
+            if message == b"ExitSuccess" {
+                program.reduction_count().saturating_sub(reductions)
+            } else {
+                panic!("{context}: {}", String::from_utf8_lossy(&message));
+            }
+        }
+        Err(err) => panic!("{context}: {err}"),
+    }
 }
 
 struct CBench {

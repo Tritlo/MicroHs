@@ -824,6 +824,26 @@ impl Program {
         Ok((root, self.reductions - reductions))
     }
 
+    pub fn reduction_count(&self) -> usize {
+        self.reductions
+    }
+
+    pub fn uncaught_exception_message_bytes(&mut self, exn: NodeId) -> Result<Vec<u8>, EvalError> {
+        let exn = self.resolve(exn)?;
+        if let Node::Int(code) = self.nodes[exn.0] {
+            return Ok(rts_exception_message(code).to_vec());
+        }
+
+        let u = self.prim("U");
+        let k2 = self.prim("K2");
+        let true_ = self.prim("A");
+        let k2_true = self.app(k2, true_);
+        let inner = self.app(u, k2_true);
+        let show_exn = self.app(u, inner);
+        let displayed = self.app(show_exn, exn);
+        self.eval_string_bytes(displayed)
+    }
+
     pub fn apply_stable_ptr_pointer(
         &mut self,
         stable_ptr: usize,
@@ -3857,13 +3877,18 @@ impl Program {
     }
 
     fn eval_ffi_name(&mut self, id: NodeId) -> Result<String, EvalError> {
+        let bytes = self.eval_string_bytes(id)?;
+        String::from_utf8(bytes).map_err(|_| EvalError::InvalidByteString)
+    }
+
+    fn eval_string_bytes(&mut self, id: NodeId) -> Result<Vec<u8>, EvalError> {
         let root = self.reduce_node_whnf(id, FORCE_REDUCTION_LIMIT)?;
         let root = self.resolve(root)?;
         let bytes = match self.nodes[root.0].clone() {
             Node::Bytes(bytes) | Node::MutableBytes { bytes, .. } => bytes,
             _ => self.eval_char_list(root)?,
         };
-        String::from_utf8(bytes).map_err(|_| EvalError::InvalidByteString)
+        Ok(bytes)
     }
 
     fn eval_char_list(&mut self, mut id: NodeId) -> Result<Vec<u8>, EvalError> {
@@ -7479,6 +7504,20 @@ fn tuple_fields(name: &str) -> Option<usize> {
     (3..=16).contains(&fields).then_some(fields)
 }
 
+fn rts_exception_message(code: i64) -> &'static [u8] {
+    match code {
+        0 => b"stack overflow",
+        1 => b"heap overflow",
+        2 => b"thread killed",
+        3 => b"user interrupt",
+        4 => b"DivideByZero",
+        5 => b"blocked MVar",
+        6 => b"blocked STM",
+        7 => b"arithmetic overflow",
+        _ => b"unknown",
+    }
+}
+
 pub(crate) fn is_runtime_prim_name(name: &str) -> bool {
     is_supported_runtime_prim_name(name)
         || matches!(
@@ -10770,6 +10809,18 @@ mod tests {
             program.reduce_whnf(100),
             Err(EvalError::InvalidShift(64))
         ));
+    }
+
+    #[test]
+    fn formats_uncaught_rts_exceptions_like_c() {
+        let mut program = parse_program(b"v8.4\n0\nraise #4 @ }").unwrap();
+        let Err(EvalError::Raised(exn)) = program.reduce_whnf(100) else {
+            panic!("raise did not produce an exception");
+        };
+        assert_eq!(
+            program.uncaught_exception_message_bytes(exn).unwrap(),
+            b"DivideByZero"
+        );
     }
 
     #[test]

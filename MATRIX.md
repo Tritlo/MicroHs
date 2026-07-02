@@ -11,23 +11,23 @@ performance, or benchmark classification changes.
 |---|---|
 | branch | `microhs-rust` |
 | upstream tracking | `origin/microhs-rust` |
-| local commits ahead after this snapshot commit | 80 |
-| runtime code baseline | unknown primitive hard-failure checkpoint |
+| local commits ahead after this snapshot commit | 81 |
+| runtime code baseline | C-compatible uncaught exception display checkpoint |
 | dirty files after this snapshot commit | none expected |
 | dirty work | none in tracked runtime files |
 | matrix file | `MATRIX.md`, tracked from this snapshot |
 
 ## Verification Baseline
 
-Last fully verified state: unknown primitive hard-failure checkpoint.
+Last fully verified state: C-compatible uncaught exception display checkpoint.
 
 | gate | status |
 |---|---|
-| `cargo test -p microhs-runtime --quiet` | passed before unknown primitive hard-failure commit; 32 tests |
-| `cargo check -p microhs-runtime --lib --quiet` | passed before unknown primitive hard-failure commit |
-| `cargo check -p microhs-runtime --bins --quiet` | passed before unknown primitive hard-failure commit |
-| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before unknown primitive hard-failure commit |
-| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before unknown primitive hard-failure commit |
+| `cargo test -p microhs-runtime --quiet` | passed before C-compatible uncaught exception display commit; 33 tests |
+| `cargo check -p microhs-runtime --lib --quiet` | passed before C-compatible uncaught exception display commit |
+| `cargo check -p microhs-runtime --bins --quiet` | passed before C-compatible uncaught exception display commit |
+| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before C-compatible uncaught exception display commit |
+| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before C-compatible uncaught exception display commit |
 | `node --check rust/microhs-runtime/js/host.mjs` | passed at `f8b9e1d5` |
 | Node wasm core render smoke | passed at `9cbef47e`; host shim instantiated wasm, reduced `v8.4\n0\nI #5 @ }\n`, and rendered `5` |
 | Node wasm dynamic `~I` JS FFI smoke | passed at `58280b6e`; path-loaded wasm reduced `IO.performIO ~I "return 40 + 2" @` and rendered `42` |
@@ -36,10 +36,10 @@ Last fully verified state: unknown primitive hard-failure checkpoint.
 | Node wasm wrapper tag coverage smoke | passed at `f8b9e1d5`; `II`, `UU`, `DD`, `FF`, `BB`, `SS`, `JJ`, and `PP` wrappers round-trip through JS and render expected values |
 | Node wasm unsigned/high-bit JS smoke | passed at `f8b9e1d5`; direct `~U` rendered `4294967295`; direct and wrapper `~P` rendered `Ptr#2147483648` |
 | Node wasm Response-source smoke | passed at `58280b6e`; `Response(bytes)` source reduced `~S "return 'hi'"` and rendered `"hi"` |
-| `cargo fmt --all --check` | passed before unknown primitive hard-failure commit |
-| `git diff --check` | passed before unknown primitive hard-failure commit |
+| `cargo fmt --all --check` | passed before C-compatible uncaught exception display commit |
+| `git diff --check` | passed before C-compatible uncaught exception display commit |
 | `make bin/mhsbench` | passed/up to date at `70eabf4d` |
-| `cargo build --release -p microhs-runtime --bins --quiet` | passed before unknown primitive hard-failure commit |
+| `cargo build --release -p microhs-runtime --bins --quiet` | passed before C-compatible uncaught exception display commit |
 | signed `i64::MIN` comb parser smoke | passed before checkpoint commit; Rust now parses the self-host compiler comb containing `##-9223372036854775808` |
 | unbounded internal force budget smoke | passed before checkpoint commit; self-hosting no longer trips the old internal `10_000` WHNF cap |
 | main-mode benchmark harness smoke | passed before checkpoint commit; Rust and C support `--mode main -- PROGRAM ARGS...`; main mode measures execution and validates external output instead of serializing the whole root graph |
@@ -74,6 +74,7 @@ Last fully verified state: unknown primitive hard-failure checkpoint.
 | C-compatible `fromUTF8` malformed-input smoke | passed before checkpoint commit; `fromUTF8` now follows C's BFILE UTF-8 decoder for malformed inputs: accepts modified-UTF8 NUL, rejects overlong nonzero encodings, and treats a truncated tail as EOF; C's separate `headUTF8`/`tailUTF8` helper remains unchanged |
 | catchable arithmetic RTS exception smoke | passed before checkpoint commit; Int/Int64 divide-by-zero and signed-overflow primitive origins now raise catchable RTS exception nodes 4/7 under `catch`, while invalid shift and internal runtime overflow remain terminal runtime errors |
 | unknown primitive hard-failure smoke | passed before checkpoint commit; truly unknown bare primitive names now fail during `.comb` parse, C-known but currently unsupported primitives such as `IO.fork`/`IO.deserialize` still load but fail loudly if reduced with arguments, and `/tmp/mhs-selfhost.comb` parses/runs the `--help` main proxy under this gate |
+| C-compatible uncaught exception display smoke | passed before checkpoint commit; raw RTS exception ints use C's `die_exn` message table, non-RTS exceptions are displayed by evaluating `U (U (K2 A)) exn`, and a compiled `exitSuccess` comb now completes main-mode release benchmark execution instead of panicking |
 | ignored IO action shortcut perf probe | passed before checkpoint commit; `io-chain`, `io-control-chain`, `argref-chain`, `ffi-chain`, `ffi-math-chain`, `ffi-const-chain`, `env-set-chain`, and `remove-missing-chain` improved with matching sinks; `ffi-mem-chain` and `bfile-read-chain` canaries stayed in the same band |
 | direct lazyBind FFI-continuation perf probe | passed before checkpoint commit; against a clean `50e11139` temp worktree, `ffi-mem-chain` improved from ~1.31 ms to ~0.18 ms and `bfile-read-chain` improved from ~1.50 ms to ~0.34 ms with matching sinks; direct BFILE/env rows improved, while complex continuation canaries stayed in the same noisy band |
 | reducer inline-spine perf probe | passed at `63d03844`; against `f8b9e1d5` temp build, current Rust improved `arith-chain`, `io-chain`, `ffi-chain`, `ffi-mem-chain`, and `bfile-read-chain` by roughly 4-13% |
@@ -148,7 +149,7 @@ Last fully verified state: unknown primitive hard-failure checkpoint.
 | C-compatible graph serializer spacing | passed at `6438ec82`; `argref-chain`, `mvar-chain`, `weak-chain` sinks match |
 | benchmark StablePtr harness reset | passed at `6438ec82`; `stableptr-chain` sink matches |
 
-Latest tracked runtime behavior change is unknown primitive hard-failure; truly unknown bare primitive names are rejected at parse time, while C-known but unsupported primitives remain loadable and fail explicitly if a program tries to reduce them.
+Latest tracked runtime behavior change is C-compatible uncaught exception display; raw RTS exception ints use the C message table, real Haskell exceptions are displayed through the program's `displaySomeException`, and `ExitSuccess` is treated as successful termination.
 
 ## Tier Status
 
@@ -450,7 +451,7 @@ Rows in this section are generated from temporary pure Haskell programs compiled
 
 | item | reason | status |
 |---|---|---|
-| detailed `eval.c` correctness batch | finalized review ranks small oracle-checkable semantic fixes before the structural reducer rewrite | F1 quoted bytestring serializer, F3 catchable arithmetic RTS exceptions, F7 unknown primitive hard-failure, F11 Integer serializer, F15 missing FFI symbols, F16 `fromUTF8` malformed input, and F18 ignored-IO shortcut cap done; F4/F19 still pending |
+| detailed `eval.c` correctness batch | finalized review ranks small oracle-checkable semantic fixes before the structural reducer rewrite | F1 quoted bytestring serializer, F3 catchable arithmetic RTS exceptions, F4 uncaught exception display/`ExitSuccess`, F7 unknown primitive hard-failure, F11 Integer serializer, F15 missing FFI symbols, F16 `fromUTF8` malformed input, and F18 ignored-IO shortcut cap done; F19 still pending |
 | compression BFILE write-path benchmarks | decompressor rows existed; compiler-generated high-level compressor smokes now cover RLE/LZ77/BWT/LZMA write paths | partial done; built-in repeat scenarios still pending |
 | MD5 broader coverage | committed runtime covers all three FFI names; only `md5String` has a repeat benchmark | pending full high-level `System.IO.MD5` test once the compiler binary is available |
 | directory iteration FFI | committed runtime covers `opendir`, `readdir`, `closedir`, `c_d_name` | pending full high-level `System.Directory` test once the compiler binary is available |
