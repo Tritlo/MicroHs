@@ -594,6 +594,20 @@ impl Program {
         }
     }
 
+    fn step_app_result(
+        &mut self,
+        profile_head: &Option<String>,
+        used: usize,
+        args: &[NodeId],
+        apps: &[NodeId],
+        fun: NodeId,
+        arg: NodeId,
+        reductions: usize,
+    ) -> StepResult {
+        let (node, in_place) = self.apply_reduction_app(used, args, apps, fun, arg);
+        self.step_result(profile_head, node, in_place, reductions)
+    }
+
     #[cold]
     fn profile_head_key(&self, head: NodeId) -> String {
         match &self.nodes[head.0] {
@@ -911,8 +925,15 @@ impl Program {
             }
             "B" if args.len() >= 3 => {
                 let yz = self.app(args[1], args[2]);
-                let n = self.app(args[0], yz);
-                Some((3, n))
+                return Ok(Some(self.step_app_result(
+                    &profile_head,
+                    3,
+                    args,
+                    apps,
+                    args[0],
+                    yz,
+                    1,
+                )));
             }
             "B'" if args.len() >= 4 => {
                 let zw = self.app(args[2], args[3]);
@@ -948,19 +969,40 @@ impl Program {
             "KA" if args.len() >= 3 => Some((3, args[2])),
             "C" if args.len() >= 3 => {
                 let xz = self.app(args[0], args[2]);
-                let n = self.app(xz, args[1]);
-                Some((3, n))
+                return Ok(Some(self.step_app_result(
+                    &profile_head,
+                    3,
+                    args,
+                    apps,
+                    xz,
+                    args[1],
+                    1,
+                )));
             }
             "C'" if args.len() >= 4 => {
                 let yw = self.app(args[1], args[3]);
                 let xyw = self.app(args[0], yw);
-                let n = self.app(xyw, args[2]);
-                Some((4, n))
+                return Ok(Some(self.step_app_result(
+                    &profile_head,
+                    4,
+                    args,
+                    apps,
+                    xyw,
+                    args[2],
+                    1,
+                )));
             }
             "P" if args.len() >= 3 => {
                 let zx = self.app(args[2], args[0]);
-                let n = self.app(zx, args[1]);
-                Some((3, n))
+                return Ok(Some(self.step_app_result(
+                    &profile_head,
+                    3,
+                    args,
+                    apps,
+                    zx,
+                    args[1],
+                    1,
+                )));
             }
             "R" if args.len() >= 3 => {
                 let yz = self.app(args[1], args[2]);
@@ -999,8 +1041,15 @@ impl Program {
             "C'B" if args.len() >= 4 => {
                 let yw = self.app(args[1], args[3]);
                 let xz = self.app(args[0], args[2]);
-                let n = self.app(xz, yw);
-                Some((4, n))
+                return Ok(Some(self.step_app_result(
+                    &profile_head,
+                    4,
+                    args,
+                    apps,
+                    xz,
+                    yw,
+                    1,
+                )));
             }
             "C'B" if args.len() >= 3 => {
                 let xz = self.app(args[0], args[2]);
@@ -1353,6 +1402,31 @@ impl Program {
             in_place = true;
         }
         in_place
+    }
+
+    fn apply_reduction_app(
+        &mut self,
+        used: usize,
+        args: &[NodeId],
+        apps: &[NodeId],
+        fun: NodeId,
+        arg: NodeId,
+    ) -> (NodeId, bool) {
+        debug_assert!(used <= args.len());
+        debug_assert!(args.len() <= apps.len());
+        if used == 0 {
+            let mut node = self.app(fun, arg);
+            let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
+            return (node, in_place);
+        }
+
+        let mut node = apps[used - 1];
+        self.nodes[node.0] = Node::App(fun, arg);
+        for (arg, app) in args[used..].iter().zip(&apps[used..]) {
+            self.nodes[app.0] = Node::App(node, *arg);
+            node = *app;
+        }
+        (node, true)
     }
 
     fn is_identity_alias_node(&self, id: NodeId) -> Result<bool, EvalError> {
