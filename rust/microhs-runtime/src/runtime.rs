@@ -10504,7 +10504,10 @@ fn nibble(n: u8) -> char {
 
 #[cfg(test)]
 mod tests {
-    use super::{IGNORED_IO_SHORTCUT_RECURSION_LIMIT, lz77_decompress, serialize_bytes_quoted};
+    use super::{
+        IGNORED_IO_SHORTCUT_RECURSION_LIMIT, bwt_decode, bwt_encode, lz77_compress,
+        lz77_decompress, lzma_compress_payload, lzma_decompress_payload, serialize_bytes_quoted,
+    };
     use crate::{EvalError, Node, NodeId, ParseError, Program, parse_program};
     use std::collections::HashMap;
 
@@ -11073,6 +11076,48 @@ mod tests {
             .read_pointer_bytes(compressed_ptr, compressed_len)
             .unwrap();
         assert_eq!(lz77_decompress(&compressed).unwrap(), input);
+    }
+
+    #[test]
+    fn decodes_c_runtime_compression_fixtures() {
+        const INPUT: &[u8] = b"AAAAAAAAAAAAAAAABABABABABABA\xff\0end";
+        const C_LZ77: &[u8] = &[
+            76, 90, 49, 16, 0, 0, 0, 0, 65, 224, 0, 6, 0, 66, 224, 1, 2, 4, 255, 0, 101, 110, 100,
+        ];
+        const C_BWT: &[u8] = &[
+            66, 87, 49, 33, 0, 0, 0, 1, 0, 0, 0, 255, 100, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65,
+            65, 65, 65, 65, 65, 66, 66, 66, 66, 66, 66, 65, 65, 65, 65, 65, 65, 110, 0, 101, 65,
+        ];
+        const C_LZMA: &[u8] = &[
+            76, 90, 50, 28, 0, 0, 0, 93, 0, 0, 0, 1, 33, 0, 0, 0, 0, 0, 0, 0, 0, 32, 237, 68, 84,
+            65, 127, 132, 12, 164, 143, 145, 248, 248, 0,
+        ];
+
+        assert_eq!(&C_LZ77[..3], b"LZ1");
+        let lz77_len = u32::from_le_bytes(C_LZ77[3..7].try_into().unwrap()) as usize;
+        assert_eq!(lz77_len, C_LZ77.len() - 7);
+        assert_eq!(lz77_decompress(&C_LZ77[7..]).unwrap(), INPUT);
+        assert_eq!(
+            lz77_decompress(&lz77_compress(INPUT).unwrap()).unwrap(),
+            INPUT
+        );
+
+        assert_eq!(&C_BWT[..3], b"BW1");
+        let bwt_len = u32::from_le_bytes(C_BWT[3..7].try_into().unwrap()) as usize;
+        let bwt_zero = u32::from_le_bytes(C_BWT[7..11].try_into().unwrap()) as usize;
+        assert_eq!(bwt_len, C_BWT.len() - 11);
+        assert_eq!(bwt_decode(&C_BWT[11..], bwt_zero).unwrap(), INPUT);
+        let (rust_bwt_zero, rust_bwt_last) = bwt_encode(INPUT).unwrap();
+        assert_eq!(bwt_decode(&rust_bwt_last, rust_bwt_zero).unwrap(), INPUT);
+
+        assert_eq!(&C_LZMA[..3], b"LZ2");
+        let lzma_len = u32::from_le_bytes(C_LZMA[3..7].try_into().unwrap()) as usize;
+        assert_eq!(lzma_len, C_LZMA.len() - 7);
+        assert_eq!(lzma_decompress_payload(&C_LZMA[7..]).unwrap(), INPUT);
+        assert_eq!(
+            lzma_decompress_payload(&lzma_compress_payload(INPUT).unwrap()).unwrap(),
+            INPUT
+        );
     }
 
     #[test]
