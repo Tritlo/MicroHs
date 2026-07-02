@@ -1564,6 +1564,19 @@ impl Program {
                 let len = self.read_c_string(ptr)?.len();
                 Node::Int(i64::try_from(len).map_err(|_| EvalError::Overflow)?)
             }
+            "getenv" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let name = self.read_c_string(ptr)?;
+                let ptr = if let Some(mut bytes) = getenv_bytes(&name) {
+                    bytes.push(0);
+                    let ptr = self.alloc_memory(bytes.len())?;
+                    self.write_pointer_bytes(ptr, &bytes)?;
+                    ptr
+                } else {
+                    0
+                };
+                Node::Ptr(ptr)
+            }
             "openb_wr_mem" => Node::Ptr(self.alloc_bfile(BFile {
                 bytes: Vec::new(),
                 pos: 0,
@@ -3657,14 +3670,34 @@ fn current_time_micro() -> i64 {
     }
 }
 
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    std::env::var_os(OsStr::from_bytes(name)).map(|value| value.into_vec())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
+    let _ = name;
+    None
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
+    let name = std::str::from_utf8(name).ok()?;
+    std::env::var_os(name).map(|value| value.to_string_lossy().into_owned().into_bytes())
+}
+
 fn ffi_arity(name: &str) -> Option<usize> {
     Some(match name {
         "GETRAW" | "GETTIMEMICRO" | "islinux" | "ismacos" | "iswindows" | "sizeof_char"
         | "sizeof_short" | "sizeof_int" | "sizeof_long" | "sizeof_llong" | "sizeof_size_t"
         | "want_gmp" | "want_imath" | "&closeb" | "&free" | "openb_wr_mem" => 0,
-        "malloc" | "free" | "strlen" | "closeb" | "flushb" | "getb" | "peekPtr" | "peekWord"
-        | "peek_uint8" | "peek_uint16" | "peek_uint32" | "peek_uint64" | "peek_int8"
-        | "peek_int16" | "peek_int32" | "peek_int64" | "peek_char" | "peek_schar"
+        "malloc" | "free" | "strlen" | "getenv" | "closeb" | "flushb" | "getb" | "peekPtr"
+        | "peekWord" | "peek_uint8" | "peek_uint16" | "peek_uint32" | "peek_uint64"
+        | "peek_int8" | "peek_int16" | "peek_int32" | "peek_int64" | "peek_char" | "peek_schar"
         | "peek_uchar" | "peek_short" | "peek_ushort" | "peek_int" | "peek_uint" | "peek_long"
         | "peek_ulong" | "peek_llong" | "peek_ullong" | "peek_size_t" | "peek_flt32"
         | "peek_flt64" | "acos" | "asin" | "atan" | "cos" | "exp" | "log" | "sin" | "sqrt"
