@@ -255,6 +255,19 @@ enum JsArg {
     String(Vec<u8>),
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum JsValue {
+    Unit,
+    Int(i32),
+    UInt(u32),
+    Double(f64),
+    Float(f32),
+    Bool(bool),
+    Pointer(u32),
+    Object(u32),
+    Bytes(Vec<u8>),
+}
+
 #[derive(Clone, Debug)]
 pub struct Program {
     nodes: Vec<Node>,
@@ -372,6 +385,30 @@ impl Program {
         let root = self.app(perform_io, action);
         let root = self.reduce_node_whnf(root, limit)?;
         self.eval_pointer_value(root)
+    }
+
+    pub fn apply_js_wrapper(
+        &mut self,
+        tags: &str,
+        stable_ptr: usize,
+        args: &[JsValue],
+        limit: usize,
+    ) -> Result<JsValue, EvalError> {
+        let tags = tags.as_bytes();
+        validate_js_tags(tags)?;
+        if args.len() != tags.len() - 1 {
+            return Err(EvalError::InvalidArray);
+        }
+
+        let mut root = self.deref_stable_ptr(stable_ptr)?;
+        for (tag, arg) in tags[1..].iter().copied().zip(args) {
+            let arg = self.js_value_node(tag, arg)?;
+            root = self.app(root, arg);
+        }
+        let perform_io = self.prim("IO.performIO");
+        let root = self.app(perform_io, root);
+        let root = self.reduce_node_whnf(root, limit)?;
+        self.js_value_from_node(tags[0], root)
     }
 
     fn step(&mut self, root: NodeId, budget: usize) -> Result<Option<StepResult>, EvalError> {
@@ -2694,6 +2731,43 @@ impl Program {
         };
         let result = self.push_node(self.js_object_node(object));
         Ok(Some((2, self.pair(result, args[1]))))
+    }
+
+    fn js_value_node(&mut self, tag: u8, value: &JsValue) -> Result<NodeId, EvalError> {
+        let node = match (tag, value) {
+            (b'I', JsValue::Int(value)) => Node::Int(i64::from(*value)),
+            (b'U', JsValue::UInt(value)) => Node::Int(i64::from(*value)),
+            (b'D', JsValue::Double(value)) => Node::Float64(*value),
+            (b'F', JsValue::Float(value)) => Node::Float32(*value),
+            (b'B', JsValue::Bool(value)) => return Ok(self.prim(if *value { "A" } else { "K" })),
+            (b'P', JsValue::Pointer(value)) => Node::Ptr(i64::from(*value)),
+            (b'J', JsValue::Object(value)) => self.js_object_node(*value),
+            (b'S', JsValue::Bytes(value)) => Node::Bytes(value.clone()),
+            _ => return Err(EvalError::InvalidByteString),
+        };
+        Ok(self.push_node(node))
+    }
+
+    fn js_value_from_node(&mut self, tag: u8, id: NodeId) -> Result<JsValue, EvalError> {
+        match tag {
+            b'V' => {
+                let _ = self.reduce_node_whnf(id, 10_000)?;
+                Ok(JsValue::Unit)
+            }
+            b'I' => Ok(JsValue::Int(int_to_i32(self.eval_int(id)?)?)),
+            b'U' => Ok(JsValue::UInt(
+                u32::try_from(self.eval_int(id)?).map_err(|_| EvalError::Overflow)?,
+            )),
+            b'D' => Ok(JsValue::Double(self.eval_float64(id)?)),
+            b'F' => Ok(JsValue::Float(self.eval_float32(id)?)),
+            b'B' => Ok(JsValue::Bool(self.eval_bool(id)?)),
+            b'P' => Ok(JsValue::Pointer(
+                u32::try_from(self.eval_pointer_value(id)?).map_err(|_| EvalError::Overflow)?,
+            )),
+            b'J' => Ok(JsValue::Object(self.eval_js_object_handle(id)?)),
+            b'S' => Ok(JsValue::Bytes(self.eval_bytes(id)?)),
+            _ => Err(EvalError::InvalidByteString),
+        }
     }
 
     fn eval_ffi_name(&mut self, id: NodeId) -> Result<String, EvalError> {
