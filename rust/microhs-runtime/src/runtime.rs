@@ -111,6 +111,13 @@ enum BFileKind {
         pos: usize,
         numflush: usize,
     },
+    Bwt {
+        inner: i64,
+        read: bool,
+        buffer: Vec<u8>,
+        pos: usize,
+        numflush: usize,
+    },
     Buf {
         inner: i64,
         unget: Option<i64>,
@@ -1699,6 +1706,14 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 Node::Ptr(self.add_lz77_bfile(ptr, false)?)
             }
+            "add_bwt_decompressor" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Ptr(self.add_bwt_bfile(ptr, true)?)
+            }
+            "add_bwt_compressor" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Ptr(self.add_bwt_bfile(ptr, false)?)
+            }
             "add_buf" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let size = self.eval_int(args[1])?;
@@ -2453,6 +2468,52 @@ impl Program {
         usize::try_from(u32::from_le_bytes(bytes)).map_err(|_| EvalError::Overflow)
     }
 
+    fn add_bwt_bfile(&mut self, ptr: i64, read: bool) -> Result<i64, EvalError> {
+        let (inner_readable, inner_writable) = self.bfile_permissions(ptr)?;
+        if read {
+            if !inner_readable {
+                return Err(EvalError::InvalidHandle);
+            }
+            let magic = self.read_bfile_bytes(ptr, 3)?;
+            if magic != b"BW1" {
+                return Err(EvalError::InvalidByteString);
+            }
+            let len = self.read_bfile_u32_le(ptr)?;
+            let zero = self.read_bfile_u32_le(ptr)?;
+            let last = self.read_bfile_bytes(ptr, len)?;
+            if last.len() != len {
+                return Err(EvalError::InvalidByteString);
+            }
+            let buffer = bwt_decode(&last, zero)?;
+            self.alloc_bfile(BFile {
+                kind: BFileKind::Bwt {
+                    inner: ptr,
+                    read: true,
+                    buffer,
+                    pos: 0,
+                    numflush: 0,
+                },
+                readable: true,
+                writable: false,
+            })
+        } else {
+            if !inner_writable {
+                return Err(EvalError::InvalidHandle);
+            }
+            self.alloc_bfile(BFile {
+                kind: BFileKind::Bwt {
+                    inner: ptr,
+                    read: false,
+                    buffer: Vec::with_capacity(25_000),
+                    pos: 0,
+                    numflush: 0,
+                },
+                readable: false,
+                writable: true,
+            })
+        }
+    }
+
     fn add_buf_bfile(&mut self, ptr: i64, bufsize: i64) -> Result<i64, EvalError> {
         let (readable, writable) = self.bfile_permissions(ptr)?;
         let linebuf = bufsize < 0;
@@ -2739,6 +2800,7 @@ impl Program {
                     | BFileKind::Rle { read: false, .. }
                     | BFileKind::Base64 { read: false, .. }
                     | BFileKind::Lz77 { read: false, .. }
+                    | BFileKind::Bwt { read: false, .. }
             )
         };
         if flush_self {
@@ -2782,6 +2844,7 @@ impl Program {
                 | BFileKind::Rle { inner, .. }
                 | BFileKind::Base64 { inner, .. }
                 | BFileKind::Lz77 { inner, .. }
+                | BFileKind::Bwt { inner, .. }
                 | BFileKind::Buf { inner, .. } => Some(*inner),
                 _ => None,
             }
@@ -2865,6 +2928,31 @@ impl Program {
                         bytes.extend_from_slice(b"LZ1");
                         bytes.extend_from_slice(&u32_le_bytes(compressed.len())?);
                         bytes.extend_from_slice(&compressed);
+                        buffer.clear();
+                        *pos = 0;
+                        Some((*inner, bytes))
+                    }
+                }
+                BFileKind::Bwt {
+                    inner,
+                    read,
+                    buffer,
+                    pos,
+                    numflush,
+                } => {
+                    if *read {
+                        None
+                    } else if *numflush > 0 && *pos == 0 {
+                        *numflush = numflush.checked_add(1).ok_or(EvalError::Overflow)?;
+                        None
+                    } else {
+                        *numflush = numflush.checked_add(1).ok_or(EvalError::Overflow)?;
+                        let (zero, last) = bwt_encode(&buffer[..*pos])?;
+                        let mut bytes = Vec::with_capacity(11 + last.len());
+                        bytes.extend_from_slice(b"BW1");
+                        bytes.extend_from_slice(&u32_le_bytes(*pos)?);
+                        bytes.extend_from_slice(&u32_le_bytes(zero)?);
+                        bytes.extend_from_slice(&last);
                         buffer.clear();
                         *pos = 0;
                         Some((*inner, bytes))
@@ -2979,6 +3067,19 @@ impl Program {
             BFileKind::Rle { .. } => unreachable!("handled above"),
             BFileKind::Base64 { .. } => unreachable!("handled above"),
             BFileKind::Lz77 {
+                read, buffer, pos, ..
+            } => {
+                if !*read {
+                    return Err(EvalError::InvalidHandle);
+                }
+                if *pos >= buffer.len() {
+                    return Ok(-1);
+                }
+                let byte = buffer[*pos];
+                *pos += 1;
+                Ok(i64::from(byte))
+            }
+            BFileKind::Bwt {
                 read, buffer, pos, ..
             } => {
                 if !*read {
@@ -3320,6 +3421,13 @@ impl Program {
                 *pos -= 1;
                 Ok(())
             }
+            BFileKind::Bwt { read, pos, .. } => {
+                if !*read || *pos == 0 {
+                    return Err(EvalError::InvalidHandle);
+                }
+                *pos -= 1;
+                Ok(())
+            }
             BFileKind::Buf { unget, .. } => {
                 if unget.is_some() {
                     return Err(EvalError::InvalidHandle);
@@ -3389,6 +3497,22 @@ impl Program {
             BFileKind::Rle { .. } => unreachable!("handled above"),
             BFileKind::Base64 { .. } => unreachable!("handled above"),
             BFileKind::Lz77 {
+                read, buffer, pos, ..
+            } => {
+                if *read {
+                    return Err(EvalError::InvalidHandle);
+                }
+                if *pos == buffer.len() {
+                    buffer.push(byte as u8);
+                } else if *pos < buffer.len() {
+                    buffer[*pos] = byte as u8;
+                } else {
+                    return Err(EvalError::InvalidHandle);
+                }
+                *pos += 1;
+                Ok(())
+            }
+            BFileKind::Bwt {
                 read, buffer, pos, ..
             } => {
                 if *read {
@@ -3667,8 +3791,23 @@ impl Program {
             | BFileKind::Rle { .. }
             | BFileKind::Base64 { .. }
             | BFileKind::Lz77 { read: false, .. }
+            | BFileKind::Bwt { read: false, .. }
             | BFileKind::Buf { .. } => unreachable!("handled above"),
             BFileKind::Lz77 {
+                read, buffer, pos, ..
+            } => {
+                if !*read {
+                    return Err(EvalError::InvalidHandle);
+                }
+                let end = pos
+                    .checked_add(len)
+                    .map(|end| end.min(buffer.len()))
+                    .ok_or(EvalError::Overflow)?;
+                let out = buffer[*pos..end].to_vec();
+                *pos = end;
+                Ok(out)
+            }
+            BFileKind::Bwt {
                 read, buffer, pos, ..
             } => {
                 if !*read {
@@ -3738,8 +3877,22 @@ impl Program {
             | BFileKind::Rle { .. }
             | BFileKind::Base64 { .. }
             | BFileKind::Lz77 { read: true, .. }
+            | BFileKind::Bwt { read: true, .. }
             | BFileKind::Buf { .. } => unreachable!("handled above"),
             BFileKind::Lz77 {
+                read, buffer, pos, ..
+            } => {
+                if *read {
+                    return Err(EvalError::InvalidHandle);
+                }
+                let end = pos.checked_add(bytes.len()).ok_or(EvalError::Overflow)?;
+                if end > buffer.len() {
+                    buffer.resize(end, 0);
+                }
+                buffer[*pos..end].copy_from_slice(bytes);
+                *pos = end;
+            }
+            BFileKind::Bwt {
                 read, buffer, pos, ..
             } => {
                 if *read {
@@ -3770,6 +3923,7 @@ impl Program {
             BFileKind::Rle { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Base64 { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Lz77 { .. } => Err(EvalError::InvalidHandle),
+            BFileKind::Bwt { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Buf { .. } => Err(EvalError::InvalidHandle),
         }
     }
@@ -5186,6 +5340,76 @@ fn u32_le_bytes(n: usize) -> Result<[u8; 4], EvalError> {
     Ok(n.to_le_bytes())
 }
 
+fn bwt_encode(data: &[u8]) -> Result<(usize, Vec<u8>), EvalError> {
+    if data.is_empty() {
+        return Ok((0, Vec::new()));
+    }
+    let mut rotations: Vec<usize> = (0..data.len()).collect();
+    rotations.sort_by(|a, b| bwt_compare_rotation(data, *a, *b));
+    let mut zero = 0;
+    let mut last = Vec::with_capacity(data.len());
+    for (idx, offset) in rotations.into_iter().enumerate() {
+        last.push(data[(offset + data.len() - 1) % data.len()]);
+        if offset == 0 {
+            zero = idx;
+        }
+    }
+    Ok((zero, last))
+}
+
+fn bwt_compare_rotation(data: &[u8], a: usize, b: usize) -> Ordering {
+    if a == b {
+        return Ordering::Equal;
+    }
+    for offset in 0..data.len() {
+        let left = data[(a + offset) % data.len()];
+        let right = data[(b + offset) % data.len()];
+        match left.cmp(&right) {
+            Ordering::Equal => {}
+            ordering => return ordering,
+        }
+    }
+    Ordering::Equal
+}
+
+fn bwt_decode(data: &[u8], zero: usize) -> Result<Vec<u8>, EvalError> {
+    if data.is_empty() {
+        if zero == 0 {
+            return Ok(Vec::new());
+        }
+        return Err(EvalError::InvalidByteString);
+    }
+    if zero >= data.len() {
+        return Err(EvalError::InvalidByteString);
+    }
+    let mut count = [0usize; 256];
+    let mut pred = Vec::with_capacity(data.len());
+    for byte in data {
+        let index = usize::from(*byte);
+        pred.push(count[index]);
+        count[index] = count[index].checked_add(1).ok_or(EvalError::Overflow)?;
+    }
+    let mut sum = 0usize;
+    for item in &mut count {
+        let previous = *item;
+        *item = sum;
+        sum = sum.checked_add(previous).ok_or(EvalError::Overflow)?;
+    }
+    let mut out = vec![0; data.len()];
+    let mut index = zero;
+    for pos in (0..data.len()).rev() {
+        let byte = data[index];
+        out[pos] = byte;
+        index = pred[index]
+            .checked_add(count[usize::from(byte)])
+            .ok_or(EvalError::Overflow)?;
+        if pos != 0 && index >= data.len() {
+            return Err(EvalError::InvalidByteString);
+        }
+    }
+    Ok(out)
+}
+
 fn int_to_i32(n: i64) -> Result<i32, EvalError> {
     i32::try_from(n).map_err(|_| EvalError::Overflow)
 }
@@ -5392,6 +5616,8 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "add_base64_decoder"
         | "add_lz77_compressor"
         | "add_lz77_decompressor"
+        | "add_bwt_compressor"
+        | "add_bwt_decompressor"
         | "closeb"
         | "flushb"
         | "getb"

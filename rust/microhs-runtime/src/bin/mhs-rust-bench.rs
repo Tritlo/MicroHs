@@ -46,7 +46,7 @@ impl CBenchMode {
 
 fn usage() {
     eprintln!(
-        "usage: mhs-rust-bench [--iters N] [--input FILE | --scenario identity-chain:N|arith-chain:N|int64-chain:N|float64-chain:N|float32-chain:N|bytes-chain:N|foreignptr-slice:N|cstring-pack:N|unpack-chain:N|fromutf8-chain:N|array-chain:N|io-chain:N|io-array-chain:N|io-bytes-chain:N|io-control-chain:N|argref-chain:N|stdio-chain:N|ffi-chain:N|ffi-math-chain:N|ffi-const-chain:N|ffi-mem-chain:N|ffi-wide-mem-chain:N|ffi-word-mem-chain:N|ffi-ptr-mem-chain:N|ffi-strcpy-chain:N|getenv-chain:N|remove-missing-chain:N|file-read-close-chain:N|utf8-bfile-read-chain:N|crlf-bfile-read-chain:N|base64-bfile-read-chain:N|lz77-bfile-read-chain:N|rle-bfile-read-chain:N|buf-bfile-read-chain:N|bfile-read-chain:N|mvar-chain:N|ptr-chain:N|rnf-chain:N|stableptr-chain:N|weak-chain:N|zoo-chain:N|data-chain:N]\n\
+        "usage: mhs-rust-bench [--iters N] [--input FILE | --scenario identity-chain:N|arith-chain:N|int64-chain:N|float64-chain:N|float32-chain:N|bytes-chain:N|foreignptr-slice:N|cstring-pack:N|unpack-chain:N|fromutf8-chain:N|array-chain:N|io-chain:N|io-array-chain:N|io-bytes-chain:N|io-control-chain:N|argref-chain:N|stdio-chain:N|ffi-chain:N|ffi-math-chain:N|ffi-const-chain:N|ffi-mem-chain:N|ffi-wide-mem-chain:N|ffi-word-mem-chain:N|ffi-ptr-mem-chain:N|ffi-strcpy-chain:N|getenv-chain:N|remove-missing-chain:N|file-read-close-chain:N|utf8-bfile-read-chain:N|crlf-bfile-read-chain:N|base64-bfile-read-chain:N|lz77-bfile-read-chain:N|bwt-bfile-read-chain:N|rle-bfile-read-chain:N|buf-bfile-read-chain:N|bfile-read-chain:N|mvar-chain:N|ptr-chain:N|rnf-chain:N|stableptr-chain:N|weak-chain:N|zoo-chain:N|data-chain:N]\n\
                                   [--warmup-iters N]\n\
                                   [--c-mhseval PATH] [--c-mhsbench PATH] [--c-mhsbench-mode whnf|main]\n\
          default: --scenario {DEFAULT_SCENARIO} --iters {DEFAULT_ITERS}"
@@ -559,6 +559,29 @@ fn make_scenario(scenario: &str) -> Result<Vec<u8>, String> {
         open.extend_from_slice(b"LZ1");
         open.extend_from_slice(&[2, 0, 0, 0, 0, b'A']);
         open.extend_from_slice(b" @ @ @ #9 @ @ ^add_lz77_decompressor @");
+        let mut action = b"IO.lazyBind ".to_vec();
+        action.extend_from_slice(&open);
+        action.extend_from_slice(b" @ ^getb @");
+        let mut expr = action.clone();
+        for _ in 1..size {
+            let mut next = b"IO.>> ".to_vec();
+            next.extend_from_slice(&expr);
+            next.extend_from_slice(b" @ ");
+            next.extend_from_slice(&action);
+            next.extend_from_slice(b" @");
+            expr = next;
+        }
+        let mut out = b"v8.4\n0\nIO.performIO ".to_vec();
+        out.extend_from_slice(&expr);
+        out.extend_from_slice(b" @ }\n");
+        return Ok(out);
+    }
+    if let Some(size) = scenario.strip_prefix("bwt-bfile-read-chain:") {
+        let size = parse_scenario_size("bwt-bfile-read-chain", size)?;
+        let mut open = b"IO.lazyBind ^openb_rd_mem fp2p bs2fp $12 ".to_vec();
+        open.extend_from_slice(b"BW1");
+        open.extend_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0, b'A']);
+        open.extend_from_slice(b" @ @ @ #12 @ @ ^add_bwt_decompressor @");
         let mut action = b"IO.lazyBind ".to_vec();
         action.extend_from_slice(&open);
         action.extend_from_slice(b" @ ^getb @");
