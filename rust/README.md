@@ -53,6 +53,7 @@ cargo run --release --bin mhs-rust-bench -- --scenario ffi-strcpy-chain:200 --it
 cargo run --release --bin mhs-rust-bench -- --scenario md5-string-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario getenv-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario env-set-chain:200 --iters 1000
+cargo run --release --bin mhs-rust-bench -- --scenario errno-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario getcwd-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario dir-read-chain:200 --iters 1000
 cargo run --release --bin mhs-rust-bench -- --scenario remove-missing-chain:200 --iters 1000

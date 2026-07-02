@@ -157,6 +157,30 @@ struct NativeFileMode {
     create: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct HostIntResult {
+    value: i64,
+    errno: Option<i32>,
+}
+
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+impl HostIntResult {
+    fn ok(value: i64) -> Self {
+        Self { value, errno: None }
+    }
+
+    fn err(errno: i32) -> Self {
+        Self {
+            value: -1,
+            errno: Some(errno),
+        }
+    }
+
+    fn os_err(errno: Option<i32>) -> Self {
+        Self::err(errno.unwrap_or_else(|| errno_i32("EINVAL")))
+    }
+}
+
 #[derive(Debug)]
 pub enum EvalError {
     StepLimit { limit: usize },
@@ -229,6 +253,8 @@ pub struct Program {
     allocations: Vec<Option<Vec<u8>>>,
     bfiles: Vec<Option<BFile>>,
     dirs: Vec<Option<DirHandle>>,
+    errno_value: i32,
+    errno_ptr: Option<i64>,
     masking_state: i64,
     reductions: usize,
 }
@@ -255,6 +281,8 @@ impl Program {
             allocations: Vec::new(),
             bfiles: Vec::new(),
             dirs: Vec::new(),
+            errno_value: 0,
+            errno_ptr: None,
             masking_state: 0,
             reductions: 0,
         }
@@ -1600,6 +1628,9 @@ impl Program {
         }
 
         let result = match name {
+            name if errno_constant(name).is_some() => {
+                Node::Int(errno_constant(name).expect("checked errno constant"))
+            }
             "GETRAW" => Node::Int(-1),
             "GETTIMEMICRO" => Node::Int(current_time_micro()),
             "islinux" => Node::Int(i64::from(cfg!(target_os = "linux"))),
@@ -1615,6 +1646,7 @@ impl Program {
             "want_imath" => Node::Int(1),
             "&closeb" => Node::FunPtr("closeb".to_owned()),
             "&free" => Node::FunPtr("free".to_owned()),
+            "&errno" => Node::Ptr(self.errno_ptr()?),
             "malloc" => {
                 let size = int_to_usize(self.eval_int(args[0])?)?;
                 Node::Ptr(self.alloc_memory(size)?)
@@ -1703,18 +1735,24 @@ impl Program {
                 let overwrite = self.eval_int(args[2])?;
                 let name = self.read_c_string(name_ptr)?;
                 let value = self.read_c_string(value_ptr)?;
-                Node::Int(setenv_bytes(&name, &value, overwrite))
+                self.host_int_node(setenv_bytes(&name, &value, overwrite))?
             }
             "unsetenv" => {
                 let name_ptr = self.eval_pointer_value(args[0])?;
                 let name = self.read_c_string(name_ptr)?;
-                Node::Int(unsetenv_bytes(&name))
+                self.host_int_node(unsetenv_bytes(&name))?
             }
             "environ" => Node::Ptr(self.alloc_environ()?),
+            "strerror_r" => {
+                let errno = int_to_i32(self.eval_int(args[0])?)?;
+                let ptr = self.eval_pointer_value(args[1])?;
+                let size = int_to_usize(self.eval_int(args[2])?)?;
+                Node::Int(self.write_strerror(errno, ptr, size)?)
+            }
             "remove" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let path = self.read_c_string(ptr)?;
-                Node::Int(remove_path_bytes(&path))
+                self.host_int_node(remove_path_bytes(&path))?
             }
             "system" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -1728,58 +1766,69 @@ impl Program {
             "chdir" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let path = self.read_c_string(ptr)?;
-                Node::Int(chdir_path_bytes(&path))
+                self.host_int_node(chdir_path_bytes(&path))?
             }
             "mkdir" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let path = self.read_c_string(ptr)?;
                 let mode = self.eval_int(args[1])?;
-                Node::Int(mkdir_path_bytes(&path, mode))
+                self.host_int_node(mkdir_path_bytes(&path, mode))?
             }
             "getcwd" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let size = int_to_usize(self.eval_int(args[1])?)?;
-                if let Some(mut bytes) = current_dir_bytes() {
-                    bytes.push(0);
-                    if bytes.len() <= size {
-                        self.write_pointer_bytes(ptr, &bytes)?;
-                        Node::Ptr(ptr)
-                    } else {
+                match current_dir_bytes() {
+                    Ok(mut bytes) => {
+                        bytes.push(0);
+                        if bytes.len() <= size {
+                            self.write_pointer_bytes(ptr, &bytes)?;
+                            Node::Ptr(ptr)
+                        } else {
+                            self.set_errno_value(errno_i32("ERANGE"))?;
+                            Node::Ptr(0)
+                        }
+                    }
+                    Err(errno) => {
+                        self.set_errno_value(errno)?;
                         Node::Ptr(0)
                     }
-                } else {
-                    Node::Ptr(0)
                 }
             }
             "get_permissions" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let path = self.read_c_string(ptr)?;
-                Node::Int(get_permissions_path_bytes(&path))
+                self.host_int_node(get_permissions_path_bytes(&path))?
             }
             "set_permissions" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let path = self.read_c_string(ptr)?;
                 let permissions = self.eval_int(args[1])?;
-                Node::Int(set_permissions_path_bytes(&path, permissions))
+                self.host_int_node(set_permissions_path_bytes(&path, permissions))?
             }
             "get_executable_path" => {
-                let ptr = if let Some(mut bytes) = executable_path_bytes() {
-                    bytes.push(0);
-                    let ptr = self.alloc_memory(bytes.len())?;
-                    self.write_pointer_bytes(ptr, &bytes)?;
-                    ptr
-                } else {
-                    0
+                let ptr = match executable_path_bytes() {
+                    Ok(mut bytes) => {
+                        bytes.push(0);
+                        let ptr = self.alloc_memory(bytes.len())?;
+                        self.write_pointer_bytes(ptr, &bytes)?;
+                        ptr
+                    }
+                    Err(errno) => {
+                        self.set_errno_value(errno)?;
+                        0
+                    }
                 };
                 Node::Ptr(ptr)
             }
             "opendir" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let path = self.read_c_string(ptr)?;
-                if let Some(entries) = dir_entries_path_bytes(&path) {
-                    Node::Ptr(self.alloc_dir(entries)?)
-                } else {
-                    Node::Ptr(0)
+                match dir_entries_path_bytes(&path) {
+                    Ok(entries) => Node::Ptr(self.alloc_dir(entries)?),
+                    Err(errno) => {
+                        self.set_errno_value(errno)?;
+                        Node::Ptr(0)
+                    }
                 }
             }
             "readdir" => {
@@ -1788,7 +1837,12 @@ impl Program {
             }
             "closedir" => {
                 let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(if self.close_dir(ptr).is_ok() { 0 } else { -1 })
+                if self.close_dir(ptr).is_ok() {
+                    Node::Int(0)
+                } else {
+                    self.set_errno_value(errno_i32("EBADF"))?;
+                    Node::Int(-1)
+                }
             }
             "c_d_name" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -1799,10 +1853,12 @@ impl Program {
                 let mode_ptr = self.eval_pointer_value(args[1])?;
                 let path = self.read_c_string(path_ptr)?;
                 let mode = self.read_c_string(mode_ptr)?;
-                if let Some(bfile) = native_fopen_bfile(&path, &mode) {
-                    Node::Ptr(self.alloc_bfile(bfile)?)
-                } else {
-                    Node::Ptr(0)
+                match native_fopen_bfile(&path, &mode) {
+                    Ok(bfile) => Node::Ptr(self.alloc_bfile(bfile)?),
+                    Err(errno) => {
+                        self.set_errno_value(errno)?;
+                        Node::Ptr(0)
+                    }
                 }
             }
             "add_FILE" => {
@@ -2442,6 +2498,58 @@ impl Program {
             self.allocations.len() - 1
         };
         self.pointer_for_allocation(slot, 0)
+    }
+
+    fn errno_ptr(&mut self) -> Result<i64, EvalError> {
+        if let Some(ptr) = self.errno_ptr {
+            return Ok(ptr);
+        }
+        let ptr = self.alloc_memory(size_of::<std::os::raw::c_int>())?;
+        self.errno_ptr = Some(ptr);
+        self.write_errno_cell(ptr)?;
+        Ok(ptr)
+    }
+
+    fn set_errno_value(&mut self, value: i32) -> Result<(), EvalError> {
+        self.errno_value = value;
+        if let Some(ptr) = self.errno_ptr {
+            self.write_errno_cell(ptr)?;
+        }
+        Ok(())
+    }
+
+    fn write_errno_cell(&mut self, ptr: i64) -> Result<(), EvalError> {
+        let value = self.errno_value as std::os::raw::c_int;
+        self.write_pointer_bytes(ptr, &value.to_ne_bytes())
+    }
+
+    fn host_int_node(&mut self, result: HostIntResult) -> Result<Node, EvalError> {
+        if let Some(errno) = result.errno {
+            self.set_errno_value(errno)?;
+        }
+        Ok(Node::Int(result.value))
+    }
+
+    fn write_strerror(&mut self, errno: i32, ptr: i64, size: usize) -> Result<i64, EvalError> {
+        if size == 0 {
+            let erange = errno_i32("ERANGE");
+            self.set_errno_value(erange)?;
+            return Ok(i64::from(erange));
+        }
+        let bytes = strerror_bytes(errno);
+        let truncated = bytes.len() + 1 > size;
+        let copy_len = if truncated { size - 1 } else { bytes.len() };
+        let mut out = Vec::with_capacity(copy_len + 1);
+        out.extend_from_slice(&bytes[..copy_len]);
+        out.push(0);
+        self.write_pointer_bytes(ptr, &out)?;
+        if truncated {
+            let erange = errno_i32("ERANGE");
+            self.set_errno_value(erange)?;
+            Ok(i64::from(erange))
+        } else {
+            Ok(0)
+        }
     }
 
     fn calloc_memory(&mut self, count: usize, size: usize) -> Result<i64, EvalError> {
@@ -5955,6 +6063,239 @@ fn current_time_micro() -> i64 {
     }
 }
 
+fn errno_i32(name: &str) -> i32 {
+    errno_constant(name).unwrap_or(-1) as i32
+}
+
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn io_error_errno(error: &std::io::Error) -> Option<i32> {
+    error.raw_os_error()
+}
+
+fn strerror_bytes(errno: i32) -> Vec<u8> {
+    std::io::Error::from_raw_os_error(errno)
+        .to_string()
+        .into_bytes()
+}
+
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    not(target_arch = "wasm32")
+))]
+fn errno_constant(name: &str) -> Option<i64> {
+    Some(i64::from(match name {
+        "E2BIG" => libc::E2BIG,
+        "EACCES" => libc::EACCES,
+        "EADDRINUSE" => libc::EADDRINUSE,
+        "EADDRNOTAVAIL" => libc::EADDRNOTAVAIL,
+        "EADV" => libc::EADV,
+        "EAFNOSUPPORT" => libc::EAFNOSUPPORT,
+        "EAGAIN" => libc::EAGAIN,
+        "EALREADY" => libc::EALREADY,
+        "EBADF" => libc::EBADF,
+        "EBADMSG" => libc::EBADMSG,
+        "EBADRPC" => -1,
+        "EBUSY" => libc::EBUSY,
+        "ECHILD" => libc::ECHILD,
+        "ECOMM" => libc::ECOMM,
+        "ECONNABORTED" => libc::ECONNABORTED,
+        "ECONNREFUSED" => libc::ECONNREFUSED,
+        "ECONNRESET" => libc::ECONNRESET,
+        "EDEADLK" => libc::EDEADLK,
+        "EDESTADDRREQ" => libc::EDESTADDRREQ,
+        "EDIRTY" => -1,
+        "EDOM" => libc::EDOM,
+        "EDQUOT" => libc::EDQUOT,
+        "EEXIST" => libc::EEXIST,
+        "EFAULT" => libc::EFAULT,
+        "EFBIG" => libc::EFBIG,
+        "EFTYPE" => -1,
+        "EHOSTDOWN" => libc::EHOSTDOWN,
+        "EHOSTUNREACH" => libc::EHOSTUNREACH,
+        "EIDRM" => libc::EIDRM,
+        "EILSEQ" => libc::EILSEQ,
+        "EINPROGRESS" => libc::EINPROGRESS,
+        "EINTR" => libc::EINTR,
+        "EINVAL" => libc::EINVAL,
+        "EIO" => libc::EIO,
+        "EISCONN" => libc::EISCONN,
+        "EISDIR" => libc::EISDIR,
+        "ELOOP" => libc::ELOOP,
+        "EMFILE" => libc::EMFILE,
+        "EMLINK" => libc::EMLINK,
+        "EMSGSIZE" => libc::EMSGSIZE,
+        "EMULTIHOP" => libc::EMULTIHOP,
+        "ENAMETOOLONG" => libc::ENAMETOOLONG,
+        "ENETDOWN" => libc::ENETDOWN,
+        "ENETRESET" => libc::ENETRESET,
+        "ENETUNREACH" => libc::ENETUNREACH,
+        "ENFILE" => libc::ENFILE,
+        "ENOBUFS" => libc::ENOBUFS,
+        "ENODATA" => libc::ENODATA,
+        "ENODEV" => libc::ENODEV,
+        "ENOENT" => libc::ENOENT,
+        "ENOEXEC" => libc::ENOEXEC,
+        "ENOLCK" => libc::ENOLCK,
+        "ENOLINK" => libc::ENOLINK,
+        "ENOMEM" => libc::ENOMEM,
+        "ENOMSG" => libc::ENOMSG,
+        "ENONET" => libc::ENONET,
+        "ENOPROTOOPT" => libc::ENOPROTOOPT,
+        "ENOSPC" => libc::ENOSPC,
+        "ENOSR" => libc::ENOSR,
+        "ENOSTR" => libc::ENOSTR,
+        "ENOSYS" => libc::ENOSYS,
+        "ENOTBLK" => libc::ENOTBLK,
+        "ENOTCONN" => libc::ENOTCONN,
+        "ENOTDIR" => libc::ENOTDIR,
+        "ENOTEMPTY" => libc::ENOTEMPTY,
+        "ENOTSOCK" => libc::ENOTSOCK,
+        "ENOTSUP" => libc::ENOTSUP,
+        "ENOTTY" => libc::ENOTTY,
+        "ENXIO" => libc::ENXIO,
+        "EOPNOTSUPP" => libc::EOPNOTSUPP,
+        "EPERM" => libc::EPERM,
+        "EPFNOSUPPORT" => libc::EPFNOSUPPORT,
+        "EPIPE" => libc::EPIPE,
+        "EPROCLIM" => -1,
+        "EPROCUNAVAIL" => -1,
+        "EPROGMISMATCH" => -1,
+        "EPROGUNAVAIL" => -1,
+        "EPROTO" => libc::EPROTO,
+        "EPROTONOSUPPORT" => libc::EPROTONOSUPPORT,
+        "EPROTOTYPE" => libc::EPROTOTYPE,
+        "ERANGE" => libc::ERANGE,
+        "EREMCHG" => libc::EREMCHG,
+        "EREMOTE" => libc::EREMOTE,
+        "EROFS" => libc::EROFS,
+        "ERPCMISMATCH" => -1,
+        "ERREMOTE" => -1,
+        "ESHUTDOWN" => libc::ESHUTDOWN,
+        "ESOCKTNOSUPPORT" => libc::ESOCKTNOSUPPORT,
+        "ESPIPE" => libc::ESPIPE,
+        "ESRCH" => libc::ESRCH,
+        "ESRMNT" => libc::ESRMNT,
+        "ESTALE" => libc::ESTALE,
+        "ETIME" => libc::ETIME,
+        "ETIMEDOUT" => libc::ETIMEDOUT,
+        "ETOOMANYREFS" => libc::ETOOMANYREFS,
+        "ETXTBSY" => libc::ETXTBSY,
+        "EUSERS" => libc::EUSERS,
+        "EWOULDBLOCK" => libc::EWOULDBLOCK,
+        "EXDEV" => libc::EXDEV,
+        _ => return None,
+    }))
+}
+
+#[cfg(any(
+    target_arch = "wasm32",
+    not(any(target_os = "linux", target_os = "android"))
+))]
+fn errno_constant(name: &str) -> Option<i64> {
+    const ERRNO_NAMES: &[&str] = &[
+        "E2BIG",
+        "EACCES",
+        "EADDRINUSE",
+        "EADDRNOTAVAIL",
+        "EADV",
+        "EAFNOSUPPORT",
+        "EAGAIN",
+        "EALREADY",
+        "EBADF",
+        "EBADMSG",
+        "EBADRPC",
+        "EBUSY",
+        "ECHILD",
+        "ECOMM",
+        "ECONNABORTED",
+        "ECONNREFUSED",
+        "ECONNRESET",
+        "EDEADLK",
+        "EDESTADDRREQ",
+        "EDIRTY",
+        "EDOM",
+        "EDQUOT",
+        "EEXIST",
+        "EFAULT",
+        "EFBIG",
+        "EFTYPE",
+        "EHOSTDOWN",
+        "EHOSTUNREACH",
+        "EIDRM",
+        "EILSEQ",
+        "EINPROGRESS",
+        "EINTR",
+        "EINVAL",
+        "EIO",
+        "EISCONN",
+        "EISDIR",
+        "ELOOP",
+        "EMFILE",
+        "EMLINK",
+        "EMSGSIZE",
+        "EMULTIHOP",
+        "ENAMETOOLONG",
+        "ENETDOWN",
+        "ENETRESET",
+        "ENETUNREACH",
+        "ENFILE",
+        "ENOBUFS",
+        "ENODATA",
+        "ENODEV",
+        "ENOENT",
+        "ENOEXEC",
+        "ENOLCK",
+        "ENOLINK",
+        "ENOMEM",
+        "ENOMSG",
+        "ENONET",
+        "ENOPROTOOPT",
+        "ENOSPC",
+        "ENOSR",
+        "ENOSTR",
+        "ENOSYS",
+        "ENOTBLK",
+        "ENOTCONN",
+        "ENOTDIR",
+        "ENOTEMPTY",
+        "ENOTSOCK",
+        "ENOTSUP",
+        "ENOTTY",
+        "ENXIO",
+        "EOPNOTSUPP",
+        "EPERM",
+        "EPFNOSUPPORT",
+        "EPIPE",
+        "EPROCLIM",
+        "EPROCUNAVAIL",
+        "EPROGMISMATCH",
+        "EPROGUNAVAIL",
+        "EPROTO",
+        "EPROTONOSUPPORT",
+        "EPROTOTYPE",
+        "ERANGE",
+        "EREMCHG",
+        "EREMOTE",
+        "EROFS",
+        "ERPCMISMATCH",
+        "ERREMOTE",
+        "ESHUTDOWN",
+        "ESOCKTNOSUPPORT",
+        "ESPIPE",
+        "ESRCH",
+        "ESRMNT",
+        "ESTALE",
+        "ETIME",
+        "ETIMEDOUT",
+        "ETOOMANYREFS",
+        "ETXTBSY",
+        "EUSERS",
+        "EWOULDBLOCK",
+        "EXDEV",
+    ];
+    ERRNO_NAMES.contains(&name).then_some(-1)
+}
+
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
     use std::ffi::OsStr;
@@ -5976,83 +6317,83 @@ fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> i64 {
+fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
     if name.is_empty() || name.contains(&b'=') {
-        return -1;
+        return HostIntResult::err(errno_i32("EINVAL"));
     }
     let name = OsStr::from_bytes(name);
     if overwrite == 0 && std::env::var_os(name).is_some() {
-        return 0;
+        return HostIntResult::ok(0);
     }
     // SAFETY: MicroHs executes user code on one runtime thread today; this mirrors C's process-global env.
     unsafe {
         std::env::set_var(name, OsStr::from_bytes(value));
     }
-    0
+    HostIntResult::ok(0)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> i64 {
+fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
     let _ = (name, value, overwrite);
-    -1
+    HostIntResult::err(errno_i32("ENOSYS"))
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
-fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> i64 {
+fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
     if name.is_empty() || name.contains(&b'=') {
-        return -1;
+        return HostIntResult::err(errno_i32("EINVAL"));
     }
     let Ok(name) = std::str::from_utf8(name) else {
-        return -1;
+        return HostIntResult::err(errno_i32("EINVAL"));
     };
     if overwrite == 0 && std::env::var_os(name).is_some() {
-        return 0;
+        return HostIntResult::ok(0);
     }
     let value = String::from_utf8_lossy(value);
     // SAFETY: MicroHs executes user code on one runtime thread today; this mirrors C's process-global env.
     unsafe {
         std::env::set_var(name, value.as_ref());
     }
-    0
+    HostIntResult::ok(0)
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn unsetenv_bytes(name: &[u8]) -> i64 {
+fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
     if name.is_empty() || name.contains(&b'=') {
-        return -1;
+        return HostIntResult::err(errno_i32("EINVAL"));
     }
     // SAFETY: MicroHs executes user code on one runtime thread today; this mirrors C's process-global env.
     unsafe {
         std::env::remove_var(OsStr::from_bytes(name));
     }
-    0
+    HostIntResult::ok(0)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn unsetenv_bytes(name: &[u8]) -> i64 {
+fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
     let _ = name;
-    -1
+    HostIntResult::err(errno_i32("ENOSYS"))
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
-fn unsetenv_bytes(name: &[u8]) -> i64 {
+fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
     if name.is_empty() || name.contains(&b'=') {
-        return -1;
+        return HostIntResult::err(errno_i32("EINVAL"));
     }
     let Ok(name) = std::str::from_utf8(name) else {
-        return -1;
+        return HostIntResult::err(errno_i32("EINVAL"));
     };
     // SAFETY: MicroHs executes user code on one runtime thread today; this mirrors C's process-global env.
     unsafe {
         std::env::remove_var(name);
     }
-    0
+    HostIntResult::ok(0)
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
@@ -6087,39 +6428,41 @@ fn environ_bytes() -> Vec<Vec<u8>> {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn remove_path_bytes(path: &[u8]) -> i64 {
+fn remove_path_bytes(path: &[u8]) -> HostIntResult {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
     let path = std::path::Path::new(OsStr::from_bytes(path));
-    if std::fs::remove_file(path)
-        .or_else(|_| std::fs::remove_dir(path))
-        .is_ok()
-    {
-        0
-    } else {
-        -1
+    match std::fs::remove_file(path) {
+        Ok(()) => HostIntResult::ok(0),
+        Err(file_err) => match std::fs::remove_dir(path) {
+            Ok(()) => HostIntResult::ok(0),
+            Err(dir_err) => HostIntResult::os_err(
+                io_error_errno(&dir_err).or_else(|| io_error_errno(&file_err)),
+            ),
+        },
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn remove_path_bytes(path: &[u8]) -> i64 {
+fn remove_path_bytes(path: &[u8]) -> HostIntResult {
     let _ = path;
-    -1
+    HostIntResult::err(errno_i32("ENOSYS"))
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
-fn remove_path_bytes(path: &[u8]) -> i64 {
+fn remove_path_bytes(path: &[u8]) -> HostIntResult {
     let Ok(path) = std::str::from_utf8(path) else {
-        return -1;
+        return HostIntResult::err(errno_i32("EINVAL"));
     };
-    if std::fs::remove_file(path)
-        .or_else(|_| std::fs::remove_dir(path))
-        .is_ok()
-    {
-        0
-    } else {
-        -1
+    match std::fs::remove_file(path) {
+        Ok(()) => HostIntResult::ok(0),
+        Err(file_err) => match std::fs::remove_dir(path) {
+            Ok(()) => HostIntResult::ok(0),
+            Err(dir_err) => HostIntResult::os_err(
+                io_error_errno(&dir_err).or_else(|| io_error_errno(&file_err)),
+            ),
+        },
     }
 }
 
@@ -6167,127 +6510,120 @@ fn system_command_bytes(command: Option<&[u8]>) -> i64 {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn chdir_path_bytes(path: &[u8]) -> i64 {
+fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
     let path = std::path::Path::new(OsStr::from_bytes(path));
-    if std::env::set_current_dir(path).is_ok() {
-        0
-    } else {
-        -1
+    match std::env::set_current_dir(path) {
+        Ok(()) => HostIntResult::ok(0),
+        Err(err) => HostIntResult::os_err(io_error_errno(&err)),
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn chdir_path_bytes(path: &[u8]) -> i64 {
+fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
     let _ = path;
-    -1
+    HostIntResult::err(errno_i32("ENOSYS"))
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
-fn chdir_path_bytes(path: &[u8]) -> i64 {
+fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
     let Ok(path) = std::str::from_utf8(path) else {
-        return -1;
+        return HostIntResult::err(errno_i32("EINVAL"));
     };
-    if std::env::set_current_dir(path).is_ok() {
-        0
-    } else {
-        -1
+    match std::env::set_current_dir(path) {
+        Ok(()) => HostIntResult::ok(0),
+        Err(err) => HostIntResult::os_err(io_error_errno(&err)),
     }
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn mkdir_path_bytes(path: &[u8], mode: i64) -> i64 {
+fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntResult {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::DirBuilderExt;
 
     let Ok(mode) = u32::try_from(mode) else {
-        return -1;
+        return HostIntResult::err(errno_i32("EINVAL"));
     };
     let path = std::path::Path::new(OsStr::from_bytes(path));
-    if std::fs::DirBuilder::new().mode(mode).create(path).is_ok() {
-        0
-    } else {
-        -1
+    match std::fs::DirBuilder::new().mode(mode).create(path) {
+        Ok(()) => HostIntResult::ok(0),
+        Err(err) => HostIntResult::os_err(io_error_errno(&err)),
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn mkdir_path_bytes(path: &[u8], mode: i64) -> i64 {
+fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntResult {
     let _ = (path, mode);
-    -1
+    HostIntResult::err(errno_i32("ENOSYS"))
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
-fn mkdir_path_bytes(path: &[u8], mode: i64) -> i64 {
+fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntResult {
     let _ = mode;
     let Ok(path) = std::str::from_utf8(path) else {
-        return -1;
+        return HostIntResult::err(errno_i32("EINVAL"));
     };
-    if std::fs::create_dir(path).is_ok() {
-        0
-    } else {
-        -1
+    match std::fs::create_dir(path) {
+        Ok(()) => HostIntResult::ok(0),
+        Err(err) => HostIntResult::os_err(io_error_errno(&err)),
     }
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn current_dir_bytes() -> Option<Vec<u8>> {
+fn current_dir_bytes() -> Result<Vec<u8>, i32> {
     use std::os::unix::ffi::OsStringExt;
 
-    Some(std::env::current_dir().ok()?.into_os_string().into_vec())
+    std::env::current_dir()
+        .map(|path| path.into_os_string().into_vec())
+        .map_err(|err| io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT")))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn current_dir_bytes() -> Option<Vec<u8>> {
-    None
+fn current_dir_bytes() -> Result<Vec<u8>, i32> {
+    Err(errno_i32("ENOSYS"))
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
-fn current_dir_bytes() -> Option<Vec<u8>> {
-    Some(
-        std::env::current_dir()
-            .ok()?
-            .to_string_lossy()
-            .into_owned()
-            .into_bytes(),
-    )
+fn current_dir_bytes() -> Result<Vec<u8>, i32> {
+    std::env::current_dir()
+        .map(|path| path.to_string_lossy().into_owned().into_bytes())
+        .map_err(|err| io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT")))
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn executable_path_bytes() -> Option<Vec<u8>> {
+fn executable_path_bytes() -> Result<Vec<u8>, i32> {
     use std::os::unix::ffi::OsStringExt;
 
-    Some(std::env::current_exe().ok()?.into_os_string().into_vec())
+    std::env::current_exe()
+        .map(|path| path.into_os_string().into_vec())
+        .map_err(|err| io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT")))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn executable_path_bytes() -> Option<Vec<u8>> {
-    None
+fn executable_path_bytes() -> Result<Vec<u8>, i32> {
+    Err(errno_i32("ENOSYS"))
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
-fn executable_path_bytes() -> Option<Vec<u8>> {
-    Some(
-        std::env::current_exe()
-            .ok()?
-            .to_string_lossy()
-            .into_owned()
-            .into_bytes(),
-    )
+fn executable_path_bytes() -> Result<Vec<u8>, i32> {
+    std::env::current_exe()
+        .map(|path| path.to_string_lossy().into_owned().into_bytes())
+        .map_err(|err| io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT")))
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn get_permissions_path_bytes(path: &[u8]) -> i64 {
+fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::PermissionsExt;
 
     let path = std::path::Path::new(OsStr::from_bytes(path));
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return -1;
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) => return HostIntResult::os_err(io_error_errno(&err)),
     };
     let mode = metadata.permissions().mode();
     let mut permissions = 0;
@@ -6300,22 +6636,23 @@ fn get_permissions_path_bytes(path: &[u8]) -> i64 {
     if mode & 0o100 != 0 {
         permissions |= if metadata.is_dir() { 8 } else { 1 };
     }
-    permissions
+    HostIntResult::ok(permissions)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn get_permissions_path_bytes(path: &[u8]) -> i64 {
+fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
     let _ = path;
-    -1
+    HostIntResult::err(errno_i32("ENOSYS"))
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
-fn get_permissions_path_bytes(path: &[u8]) -> i64 {
+fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
     let Ok(path) = std::str::from_utf8(path) else {
-        return -1;
+        return HostIntResult::err(errno_i32("EINVAL"));
     };
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return -1;
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) => return HostIntResult::os_err(io_error_errno(&err)),
     };
     let mut permissions = 4;
     if !metadata.permissions().readonly() {
@@ -6324,11 +6661,11 @@ fn get_permissions_path_bytes(path: &[u8]) -> i64 {
     if metadata.is_dir() {
         permissions |= 8;
     }
-    permissions
+    HostIntResult::ok(permissions)
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> i64 {
+fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> HostIntResult {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::PermissionsExt;
@@ -6338,14 +6675,16 @@ fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> i64 {
     }
 
     let Ok(permissions) = u32::try_from(permissions) else {
-        return -1;
+        return HostIntResult::err(errno_i32("EINVAL"));
     };
     let path = std::path::Path::new(OsStr::from_bytes(path));
-    let Ok(file) = std::fs::File::open(path) else {
-        return -1;
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) => return HostIntResult::os_err(io_error_errno(&err)),
     };
-    let Ok(metadata) = file.metadata() else {
-        return -1;
+    let metadata = match file.metadata() {
+        Ok(metadata) => metadata,
+        Err(err) => return HostIntResult::os_err(io_error_errno(&err)),
     };
     let mut user_mode = 0;
     if permissions & 4 != 0 {
@@ -6366,66 +6705,68 @@ fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> i64 {
     }
     mode &= !mask;
     mode |= metadata.permissions().mode() & !0o777;
-    if file
-        .set_permissions(std::fs::Permissions::from_mode(mode))
-        .is_ok()
-    {
-        0
-    } else {
-        -1
+    match file.set_permissions(std::fs::Permissions::from_mode(mode)) {
+        Ok(()) => HostIntResult::ok(0),
+        Err(err) => HostIntResult::os_err(io_error_errno(&err)),
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> i64 {
+fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> HostIntResult {
     let _ = (path, permissions);
-    -1
+    HostIntResult::err(errno_i32("ENOSYS"))
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
-fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> i64 {
+fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> HostIntResult {
     let _ = permissions;
     let Ok(path) = std::str::from_utf8(path) else {
-        return -1;
+        return HostIntResult::err(errno_i32("EINVAL"));
     };
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return -1;
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) => return HostIntResult::os_err(io_error_errno(&err)),
     };
     let mut permissions = metadata.permissions();
     permissions.set_readonly(false);
-    if std::fs::set_permissions(path, permissions).is_ok() {
-        0
-    } else {
-        -1
+    match std::fs::set_permissions(path, permissions) {
+        Ok(()) => HostIntResult::ok(0),
+        Err(err) => HostIntResult::os_err(io_error_errno(&err)),
     }
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn dir_entries_path_bytes(path: &[u8]) -> Option<Vec<Vec<u8>>> {
+fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
     use std::ffi::OsStr;
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
     let path = std::path::Path::new(OsStr::from_bytes(path));
     let mut entries = vec![b".".to_vec(), b"..".to_vec()];
-    for entry in std::fs::read_dir(path).ok()? {
-        let entry = entry.ok()?;
+    for entry in std::fs::read_dir(path)
+        .map_err(|err| io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT")))?
+    {
+        let entry =
+            entry.map_err(|err| io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT")))?;
         entries.push(entry.file_name().into_vec());
     }
-    Some(entries)
+    Ok(entries)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn dir_entries_path_bytes(path: &[u8]) -> Option<Vec<Vec<u8>>> {
+fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
     let _ = path;
-    None
+    Err(errno_i32("ENOSYS"))
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
-fn dir_entries_path_bytes(path: &[u8]) -> Option<Vec<Vec<u8>>> {
-    let path = std::str::from_utf8(path).ok()?;
+fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
+    let path = std::str::from_utf8(path).map_err(|_| errno_i32("EINVAL"))?;
     let mut entries = vec![b".".to_vec(), b"..".to_vec()];
-    for entry in std::fs::read_dir(path).ok()? {
-        let entry = entry.ok()?;
+    for entry in std::fs::read_dir(path)
+        .map_err(|err| io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT")))?
+    {
+        let entry =
+            entry.map_err(|err| io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT")))?;
         entries.push(
             entry
                 .file_name()
@@ -6434,17 +6775,17 @@ fn dir_entries_path_bytes(path: &[u8]) -> Option<Vec<Vec<u8>>> {
                 .into_bytes(),
         );
     }
-    Some(entries)
+    Ok(entries)
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Option<BFile> {
+fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
-    let mode = parse_native_file_mode(mode)?;
+    let mode = parse_native_file_mode(mode).ok_or_else(|| errno_i32("EINVAL"))?;
     let file = open_native_file(std::path::Path::new(OsStr::from_bytes(path)), mode)?;
-    Some(BFile {
+    Ok(BFile {
         kind: BFileKind::NativeFile {
             file: std::rc::Rc::new(std::cell::RefCell::new(file)),
             ungot: Vec::new(),
@@ -6455,17 +6796,17 @@ fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Option<BFile> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Option<BFile> {
+fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
     let _ = (path, mode);
-    None
+    Err(errno_i32("ENOSYS"))
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
-fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Option<BFile> {
-    let path = std::str::from_utf8(path).ok()?;
-    let mode = parse_native_file_mode(mode)?;
+fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
+    let path = std::str::from_utf8(path).map_err(|_| errno_i32("EINVAL"))?;
+    let mode = parse_native_file_mode(mode).ok_or_else(|| errno_i32("EINVAL"))?;
     let file = open_native_file(std::path::Path::new(path), mode)?;
-    Some(BFile {
+    Ok(BFile {
         kind: BFileKind::NativeFile {
             file: std::rc::Rc::new(std::cell::RefCell::new(file)),
             ungot: Vec::new(),
@@ -6532,7 +6873,7 @@ fn parse_native_file_mode(mode: &[u8]) -> Option<NativeFileMode> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn open_native_file(path: &std::path::Path, mode: NativeFileMode) -> Option<std::fs::File> {
+fn open_native_file(path: &std::path::Path, mode: NativeFileMode) -> Result<std::fs::File, i32> {
     std::fs::OpenOptions::new()
         .read(mode.readable)
         .write(mode.writable && !mode.append)
@@ -6540,10 +6881,13 @@ fn open_native_file(path: &std::path::Path, mode: NativeFileMode) -> Option<std:
         .truncate(mode.truncate)
         .create(mode.create)
         .open(path)
-        .ok()
+        .map_err(|err| io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT")))
 }
 
 fn ffi_arity(name: &str) -> Option<usize> {
+    if errno_constant(name).is_some() {
+        return Some(0);
+    }
     Some(match name {
         "GETRAW"
         | "GETTIMEMICRO"
@@ -6560,6 +6904,7 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "want_imath"
         | "&closeb"
         | "&free"
+        | "&errno"
         | "environ"
         | "get_executable_path"
         | "openb_wr_mem" => 0,
@@ -6643,6 +6988,7 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "openb_rd_mem" | "putb" | "ungetb" | "atan2" | "pow" | "scalbn" | "atan2f" | "powf"
         | "scalbnf" => 2,
         "memcpy" | "memmove" | "setenv" | "md5Array" | "get_mem" | "readb" | "writeb" => 3,
+        "strerror_r" => 3,
         _ => return None,
     })
 }
