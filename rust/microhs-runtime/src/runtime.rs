@@ -2723,7 +2723,8 @@ impl Program {
                 .to_owned(),
             ),
             b'S' => Node::Bytes(host_js_call_string(body, arity, &js_args)?),
-            b'I' | b'U' => Node::Int(i64::from(host_js_call_int(body, arity, &js_args)?)),
+            b'I' => Node::Int(i64::from(host_js_call_int(body, arity, &js_args)?)),
+            b'U' => Node::Int(i64::from(host_js_call_uint(body, arity, &js_args)?)),
             b'J' => self.js_object_node(host_js_call_object(body, arity, &js_args)?),
             _ => return Err(EvalError::InvalidByteString),
         };
@@ -6953,6 +6954,21 @@ fn host_js_call_int(body: &[u8], arity: usize, args: &[JsArg]) -> Result<i32, Ev
     }
 }
 
+fn host_js_call_uint(body: &[u8], arity: usize, args: &[JsArg]) -> Result<u32, EvalError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let idx = host_js_prepare_call(body, arity, args)?;
+        let result = unsafe { mhs_js_call_uint(idx) };
+        host_js_check_error()?;
+        Ok(result)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (body, arity, args);
+        Err(EvalError::UnsupportedJsFfi)
+    }
+}
+
 fn host_js_call_double(body: &[u8], arity: usize, args: &[JsArg]) -> Result<f64, EvalError> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -7135,6 +7151,7 @@ unsafe extern "C" {
     fn mhs_js_push_obj(handle: u32);
     fn mhs_js_push_str(ptr: *const u8, len: i32);
     fn mhs_js_call_int(idx: i32) -> i32;
+    fn mhs_js_call_uint(idx: i32) -> u32;
     fn mhs_js_call_dbl(idx: i32) -> f64;
     fn mhs_js_call_ptr(idx: i32) -> u32;
     fn mhs_js_call_obj(idx: i32) -> u32;

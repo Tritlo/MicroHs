@@ -174,6 +174,9 @@ function makeImports(state) {
     mhs_js_call_int(idx) {
       return callJs(state, idx, 0, (value) => value | 0);
     },
+    mhs_js_call_uint(idx) {
+      return callJs(state, idx, 0, (value) => value >>> 0);
+    },
     mhs_js_call_dbl(idx) {
       return callJs(state, idx, 0, (value) => +value);
     },
@@ -219,6 +222,13 @@ function makeImports(state) {
     mhs_js_arg_int(index) {
       try {
         return state.wargs[state.wargs.length - 1][index] | 0;
+      } catch {
+        return 0;
+      }
+    },
+    mhs_js_arg_uint(index) {
+      try {
+        return state.wargs[state.wargs.length - 1][index] >>> 0;
       } catch {
         return 0;
       }
