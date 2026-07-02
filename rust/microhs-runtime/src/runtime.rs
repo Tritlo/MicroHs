@@ -206,6 +206,7 @@ pub enum EvalError {
     InvalidMVar,
     InvalidHandle,
     UnknownFfi(String),
+    UnsupportedJsFfi,
     UnsupportedSerialization(NodeId),
 }
 
@@ -235,6 +236,7 @@ impl fmt::Display for EvalError {
             Self::InvalidMVar => write!(f, "invalid MVar operation"),
             Self::InvalidHandle => write!(f, "invalid IO handle operation"),
             Self::UnknownFfi(name) => write!(f, "unknown FFI symbol {name}"),
+            Self::UnsupportedJsFfi => write!(f, "JavaScript FFI is not supported in this runtime"),
             Self::UnsupportedSerialization(id) => {
                 write!(f, "cannot serialize node {id:?}")
             }
@@ -243,6 +245,15 @@ impl fmt::Display for EvalError {
 }
 
 impl std::error::Error for EvalError {}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+enum JsArg {
+    Int(i32),
+    UInt(u32),
+    Double(f64),
+    Object(i32),
+    String(Vec<u8>),
+}
 
 #[derive(Clone, Debug)]
 pub struct Program {
@@ -340,6 +351,28 @@ impl Program {
         let Spine { head, args, apps } = self.spine(root)?;
         if let Node::Ffi(name) = self.nodes[head.0].clone() {
             let Some((used, mut node)) = self.ffi_call(&name, &args)? else {
+                return Ok(None);
+            };
+            let in_place = self.apply_remaining_spine(&mut node, &args[used..], &apps[used..]);
+            return Ok(Some(StepResult {
+                node,
+                in_place,
+                reductions: 1,
+            }));
+        }
+        if let Node::JsCall { tags, body } = self.nodes[head.0].clone() {
+            let Some((used, mut node)) = self.js_call(&tags, &body, &args)? else {
+                return Ok(None);
+            };
+            let in_place = self.apply_remaining_spine(&mut node, &args[used..], &apps[used..]);
+            return Ok(Some(StepResult {
+                node,
+                in_place,
+                reductions: 1,
+            }));
+        }
+        if let Node::JsWrap { tags } = self.nodes[head.0].clone() {
+            let Some((used, mut node)) = self.js_wrap(&tags, &args)? else {
                 return Ok(None);
             };
             let in_place = self.apply_remaining_spine(&mut node, &args[used..], &apps[used..]);
@@ -1647,6 +1680,156 @@ impl Program {
             "sizeof_size_t" => Node::Int(size_of_i64::<usize>()),
             "want_gmp" => Node::Int(0),
             "want_imath" => Node::Int(1),
+            "js_debug" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let bytes = self.read_c_string(ptr)?;
+                host_js_debug(&bytes)?;
+                Node::Prim("I".to_owned())
+            }
+            "js_eval_run" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let bytes = self.read_c_string(ptr)?;
+                host_js_eval_run(&bytes)?;
+                Node::Prim("I".to_owned())
+            }
+            "js_eval_call" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let bytes = self.read_c_string(ptr)?;
+                let result = host_js_eval_call(&bytes)?;
+                Node::Ptr(self.alloc_c_string_bytes(&result)?)
+            }
+            "js_set_haskellCallback" => {
+                let callback = self.eval_int(args[0])?;
+                host_js_set_haskell_callback(callback as i32)?;
+                Node::Prim("I".to_owned())
+            }
+            "new_mpz" => self.new_mpz_node()?,
+            "mpz_init_set_si" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let value = self.eval_int(args[1])?;
+                self.write_mpz_value(ptr, MpzValue::from_i64(value))?;
+                Node::Prim("I".to_owned())
+            }
+            "mpz_init_set_ui" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let value = self.eval_int(args[1])? as u64;
+                self.write_mpz_value(ptr, MpzValue::from_u64(value))?;
+                Node::Prim("I".to_owned())
+            }
+            "mpz_init_set_si64" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let value = self.eval_int64(args[1])?;
+                self.write_mpz_value(ptr, MpzValue::from_i64(value))?;
+                Node::Prim("I".to_owned())
+            }
+            "mpz_init_set_ui64" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let value = self.eval_int64(args[1])? as u64;
+                self.write_mpz_value(ptr, MpzValue::from_u64(value))?;
+                Node::Prim("I".to_owned())
+            }
+            "mpz_get_si" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Int(self.mpz_value(ptr)?.to_i64_wrapping())
+            }
+            "mpz_get_si64" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Int64(self.mpz_value(ptr)?.to_i64_wrapping())
+            }
+            "mpz_get_f" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Float32(self.mpz_value(ptr)?.to_f64() as f32)
+            }
+            "mpz_get_d" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Float64(self.mpz_value(ptr)?.to_f64())
+            }
+            "mpz_abs" => {
+                let dst = self.eval_pointer_value(args[0])?;
+                let src = self.eval_pointer_value(args[1])?;
+                let mut value = self.mpz_value(src)?;
+                value.negative = false;
+                self.write_mpz_value(dst, value)?;
+                Node::Prim("I".to_owned())
+            }
+            "mpz_neg" => {
+                let dst = self.eval_pointer_value(args[0])?;
+                let src = self.eval_pointer_value(args[1])?;
+                let mut value = self.mpz_value(src)?;
+                if !value.is_zero() {
+                    value.negative = !value.negative;
+                }
+                self.write_mpz_value(dst, value)?;
+                Node::Prim("I".to_owned())
+            }
+            "mpz_add" | "mpz_sub" | "mpz_mul" | "mpz_and" | "mpz_ior" | "mpz_xor" => {
+                let dst = self.eval_pointer_value(args[0])?;
+                let left_ptr = self.eval_pointer_value(args[1])?;
+                let right_ptr = self.eval_pointer_value(args[2])?;
+                let left = self.mpz_value(left_ptr)?;
+                let right = self.mpz_value(right_ptr)?;
+                let value = match name {
+                    "mpz_add" => left.add(&right),
+                    "mpz_sub" => left.sub(&right),
+                    "mpz_mul" => left.mul(&right),
+                    "mpz_and" => left.bitand(&right),
+                    "mpz_ior" => left.bitor(&right),
+                    "mpz_xor" => left.bitxor(&right),
+                    _ => unreachable!("checked mpz binary op"),
+                };
+                self.write_mpz_value(dst, value)?;
+                Node::Prim("I".to_owned())
+            }
+            "mpz_cmp" => {
+                let left_ptr = self.eval_pointer_value(args[0])?;
+                let right_ptr = self.eval_pointer_value(args[1])?;
+                let left = self.mpz_value(left_ptr)?;
+                let right = self.mpz_value(right_ptr)?;
+                Node::Int(match left.cmp(&right) {
+                    Ordering::Less => -1,
+                    Ordering::Equal => 0,
+                    Ordering::Greater => 1,
+                })
+            }
+            "mpz_mul_2exp" => {
+                let dst = self.eval_pointer_value(args[0])?;
+                let src = self.eval_pointer_value(args[1])?;
+                let shift = int_to_usize(self.eval_int(args[2])?)?;
+                self.write_mpz_value(dst, self.mpz_value(src)?.shl_bits(shift))?;
+                Node::Prim("I".to_owned())
+            }
+            "mpz_fdiv_q_2exp" => {
+                let dst = self.eval_pointer_value(args[0])?;
+                let src = self.eval_pointer_value(args[1])?;
+                let shift = int_to_usize(self.eval_int(args[2])?)?;
+                self.write_mpz_value(dst, self.mpz_value(src)?.fdiv_q_2exp(shift))?;
+                Node::Prim("I".to_owned())
+            }
+            "mpz_tdiv_qr" => {
+                let q_ptr = self.eval_pointer_value(args[0])?;
+                let r_ptr = self.eval_pointer_value(args[1])?;
+                let left_ptr = self.eval_pointer_value(args[2])?;
+                let right_ptr = self.eval_pointer_value(args[3])?;
+                let left = self.mpz_value(left_ptr)?;
+                let right = self.mpz_value(right_ptr)?;
+                let (quot, rem) = left.tdiv_qr(&right)?;
+                self.write_mpz_value(q_ptr, quot)?;
+                self.write_mpz_value(r_ptr, rem)?;
+                Node::Prim("I".to_owned())
+            }
+            "mpz_popcount" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Int(self.mpz_value(ptr)?.signed_popcount()?)
+            }
+            "mpz_tstbit" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let bit = int_to_usize(self.eval_int(args[1])?)?;
+                Node::Int(i64::from(self.mpz_value(ptr)?.test_bit_signed(bit)))
+            }
+            "mpz_log2" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                Node::Int(self.mpz_value(ptr)?.log2()?)
+            }
             "&closeb" => Node::FunPtr("closeb".to_owned()),
             "&free" => Node::FunPtr("free".to_owned()),
             "&errno" | "errno" => Node::Ptr(self.errno_ptr()?),
@@ -2412,6 +2595,73 @@ impl Program {
         Ok(Some((arity + 1, self.pair(result, args[arity]))))
     }
 
+    fn js_call(
+        &mut self,
+        tags: &str,
+        body: &[u8],
+        args: &[NodeId],
+    ) -> Result<Option<(usize, NodeId)>, EvalError> {
+        let tags = tags.as_bytes();
+        validate_js_tags(tags)?;
+        let arity = tags.len() - 1;
+        if args.len() < arity + 1 {
+            return Ok(None);
+        }
+        let mut js_args = Vec::with_capacity(arity);
+        for (idx, tag) in tags[1..].iter().copied().enumerate() {
+            let arg = match tag {
+                b'D' => JsArg::Double(self.eval_float64(args[idx])?),
+                b'F' => JsArg::Double(f64::from(self.eval_float32(args[idx])?)),
+                b'B' => JsArg::Int(i32::from(self.eval_bool(args[idx])?)),
+                b'P' => JsArg::UInt(self.eval_pointer_value(args[idx])? as u32),
+                b'J' => {
+                    let foreign_ptr = self.eval_foreign_ptr_id(args[idx])?;
+                    JsArg::Object(self.foreign_ptr_value(foreign_ptr)? as i32)
+                }
+                b'S' => JsArg::String(self.eval_bytes(args[idx])?),
+                b'U' => JsArg::UInt(self.eval_int(args[idx])? as u32),
+                b'I' => JsArg::Int(self.eval_int(args[idx])? as i32),
+                _ => return Err(EvalError::InvalidByteString),
+            };
+            js_args.push(arg);
+        }
+        let result = match tags[0] {
+            b'V' => {
+                host_js_call_void(body, arity, &js_args)?;
+                Node::Prim("I".to_owned())
+            }
+            b'D' => Node::Float64(host_js_call_double(body, arity, &js_args)?),
+            b'F' => Node::Float32(host_js_call_double(body, arity, &js_args)? as f32),
+            b'P' => Node::Ptr(i64::from(host_js_call_ptr(body, arity, &js_args)?)),
+            b'B' => Node::Prim(
+                if host_js_call_bool(body, arity, &js_args)? {
+                    "A"
+                } else {
+                    "K"
+                }
+                .to_owned(),
+            ),
+            b'S' => Node::Bytes(host_js_call_string(body, arity, &js_args)?),
+            b'I' | b'U' => Node::Int(i64::from(host_js_call_int(body, arity, &js_args)?)),
+            b'J' => return Err(EvalError::UnsupportedJsFfi),
+            _ => return Err(EvalError::InvalidByteString),
+        };
+        let result = self.push_node(result);
+        Ok(Some((arity + 1, self.pair(result, args[arity]))))
+    }
+
+    fn js_wrap(
+        &mut self,
+        tags: &str,
+        args: &[NodeId],
+    ) -> Result<Option<(usize, NodeId)>, EvalError> {
+        validate_js_tags(tags.as_bytes())?;
+        if args.len() < 2 {
+            return Ok(None);
+        }
+        Err(EvalError::UnsupportedJsFfi)
+    }
+
     fn eval_ffi_name(&mut self, id: NodeId) -> Result<String, EvalError> {
         let root = self.reduce_node_whnf(id, 10_000)?;
         let root = self.resolve(root)?;
@@ -2478,6 +2728,15 @@ impl Program {
         match self.nodes[self.resolve(root)?.0] {
             Node::Float32(n) => Ok(n),
             _ => Err(EvalError::ExpectedFloat32(root)),
+        }
+    }
+
+    fn eval_bool(&mut self, id: NodeId) -> Result<bool, EvalError> {
+        let root = self.reduce_node_whnf(id, 10_000)?;
+        match &self.nodes[self.resolve(root)?.0] {
+            Node::Prim(name) if name == "A" => Ok(true),
+            Node::Prim(name) if name == "K" => Ok(false),
+            _ => Err(EvalError::ExpectedInt(root)),
         }
     }
 
@@ -2621,6 +2880,18 @@ impl Program {
             self.allocations.len() - 1
         };
         self.pointer_for_allocation(slot, 0)
+    }
+
+    fn alloc_c_string_bytes(&mut self, bytes: &[u8]) -> Result<i64, EvalError> {
+        let len = bytes.len().checked_add(1).ok_or(EvalError::Overflow)?;
+        let ptr = self.alloc_memory(len)?;
+        self.write_pointer_bytes(ptr, bytes)?;
+        self.write_pointer_bytes(
+            ptr.checked_add(i64::try_from(bytes.len()).map_err(|_| EvalError::Overflow)?)
+                .ok_or(EvalError::Overflow)?,
+            &[0],
+        )?;
+        Ok(ptr)
     }
 
     fn errno_ptr(&mut self) -> Result<i64, EvalError> {
@@ -2839,6 +3110,54 @@ impl Program {
             let _ = (fd, buf_ptr, len, flags);
             self.host_int_node(HostIntResult::err(errno_i32("ENOSYS")))
         }
+    }
+
+    fn new_mpz_node(&mut self) -> Result<Node, EvalError> {
+        let bigint = self.push_node(Node::BigInt(b"0".to_vec()));
+        let ptr = self.pointer_for_node(bigint, 0)?;
+        Ok(Node::ForeignPtr {
+            bytes: None,
+            offset: 0,
+            ptr,
+            finalizer: None,
+        })
+    }
+
+    fn mpz_node_id(&self, ptr: i64) -> Result<NodeId, EvalError> {
+        let (slot, offset) = self.decode_pointer(ptr)?;
+        if offset != 0 {
+            return Err(EvalError::ExpectedForeignPtr(NodeId(slot)));
+        }
+        let id = NodeId(slot);
+        match self.nodes.get(id.0) {
+            Some(Node::BigInt(_)) => Ok(id),
+            _ => Err(EvalError::ExpectedForeignPtr(id)),
+        }
+    }
+
+    fn mpz_decimal_bytes_for_ptr(&self, ptr: i64) -> Option<&[u8]> {
+        let (slot, offset) = self.decode_pointer(ptr).ok()?;
+        if offset != 0 {
+            return None;
+        }
+        match self.nodes.get(slot)? {
+            Node::BigInt(bytes) => Some(bytes),
+            _ => None,
+        }
+    }
+
+    fn mpz_value(&self, ptr: i64) -> Result<MpzValue, EvalError> {
+        let id = self.mpz_node_id(ptr)?;
+        let Node::BigInt(bytes) = &self.nodes[id.0] else {
+            return Err(EvalError::ExpectedForeignPtr(id));
+        };
+        MpzValue::parse_decimal(bytes).map_err(|_| EvalError::InvalidByteString)
+    }
+
+    fn write_mpz_value(&mut self, ptr: i64, value: MpzValue) -> Result<(), EvalError> {
+        let id = self.mpz_node_id(ptr)?;
+        self.nodes[id.0] = Node::BigInt(value.to_decimal_bytes());
+        Ok(())
     }
 
     fn write_strerror(&mut self, errno: i32, ptr: i64, size: usize) -> Result<i64, EvalError> {
@@ -4919,7 +5238,10 @@ impl Program {
             Node::ForeignPtr {
                 bytes, offset, ptr, ..
             } => {
-                if let Some(bytes) = bytes {
+                if let Some(mpz) = self.mpz_decimal_bytes_for_ptr(*ptr) {
+                    out.push('%');
+                    serialize_bytes_comb(mpz, out);
+                } else if let Some(bytes) = bytes {
                     if *offset == 0 {
                         out.push_str("bs2fp ");
                         serialize_bytes_comb(bytes, out);
@@ -5277,8 +5599,13 @@ impl Program {
                 out.push_str(&n.to_string());
             }
             Node::ForeignPtr { ptr, .. } => {
-                out.push_str("ForeignPtr#");
-                out.push_str(&ptr.to_string());
+                if let Some(mpz) = self.mpz_decimal_bytes_for_ptr(*ptr) {
+                    out.push('%');
+                    render_bytes(mpz, out);
+                } else {
+                    out.push_str("ForeignPtr#");
+                    out.push_str(&ptr.to_string());
+                }
             }
             Node::Weak { .. } => {
                 out.push_str("Weak#");
@@ -6354,6 +6681,751 @@ fn int_to_i32(n: i64) -> Result<i32, EvalError> {
     i32::try_from(n).map_err(|_| EvalError::Overflow)
 }
 
+fn validate_js_tags(tags: &[u8]) -> Result<(), EvalError> {
+    if tags.is_empty() {
+        return Err(EvalError::InvalidByteString);
+    }
+    for (idx, tag) in tags.iter().copied().enumerate() {
+        let ok = matches!(tag, b'I' | b'U' | b'D' | b'F' | b'P' | b'B' | b'J' | b'S')
+            || (idx == 0 && tag == b'V');
+        if !ok {
+            return Err(EvalError::InvalidByteString);
+        }
+    }
+    Ok(())
+}
+
+fn host_js_debug(bytes: &[u8]) -> Result<(), EvalError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let bytes = nul_terminated(bytes)?;
+        unsafe {
+            mhs_js_debug(bytes.as_ptr());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = bytes;
+        Err(EvalError::UnsupportedJsFfi)
+    }
+}
+
+fn host_js_eval_run(bytes: &[u8]) -> Result<(), EvalError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let bytes = nul_terminated(bytes)?;
+        unsafe {
+            mhs_js_eval_run(bytes.as_ptr());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = bytes;
+        Err(EvalError::UnsupportedJsFfi)
+    }
+}
+
+fn host_js_eval_call(bytes: &[u8]) -> Result<Vec<u8>, EvalError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let bytes = nul_terminated(bytes)?;
+        unsafe {
+            let ptr = mhs_js_eval_call(bytes.as_ptr());
+            copy_host_c_string(ptr)
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = bytes;
+        Err(EvalError::UnsupportedJsFfi)
+    }
+}
+
+fn host_js_set_haskell_callback(callback: i32) -> Result<(), EvalError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        unsafe {
+            mhs_js_set_haskellCallback(callback);
+        }
+        Ok(())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = callback;
+        Err(EvalError::UnsupportedJsFfi)
+    }
+}
+
+fn host_js_call_void(body: &[u8], arity: usize, args: &[JsArg]) -> Result<(), EvalError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let idx = host_js_prepare_call(body, arity, args)?;
+        unsafe {
+            mhs_js_call_void(idx);
+        }
+        host_js_check_error()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (body, arity, args);
+        Err(EvalError::UnsupportedJsFfi)
+    }
+}
+
+fn host_js_call_int(body: &[u8], arity: usize, args: &[JsArg]) -> Result<i32, EvalError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let idx = host_js_prepare_call(body, arity, args)?;
+        let result = unsafe { mhs_js_call_int(idx) };
+        host_js_check_error()?;
+        Ok(result)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (body, arity, args);
+        Err(EvalError::UnsupportedJsFfi)
+    }
+}
+
+fn host_js_call_double(body: &[u8], arity: usize, args: &[JsArg]) -> Result<f64, EvalError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let idx = host_js_prepare_call(body, arity, args)?;
+        let result = unsafe { mhs_js_call_dbl(idx) };
+        host_js_check_error()?;
+        Ok(result)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (body, arity, args);
+        Err(EvalError::UnsupportedJsFfi)
+    }
+}
+
+fn host_js_call_ptr(body: &[u8], arity: usize, args: &[JsArg]) -> Result<i32, EvalError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let idx = host_js_prepare_call(body, arity, args)?;
+        let result = unsafe { mhs_js_call_ptr(idx) };
+        host_js_check_error()?;
+        Ok(result)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (body, arity, args);
+        Err(EvalError::UnsupportedJsFfi)
+    }
+}
+
+fn host_js_call_bool(body: &[u8], arity: usize, args: &[JsArg]) -> Result<bool, EvalError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let idx = host_js_prepare_call(body, arity, args)?;
+        let result = unsafe { mhs_js_call_bool(idx) != 0 };
+        host_js_check_error()?;
+        Ok(result)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (body, arity, args);
+        Err(EvalError::UnsupportedJsFfi)
+    }
+}
+
+fn host_js_call_string(body: &[u8], arity: usize, args: &[JsArg]) -> Result<Vec<u8>, EvalError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let idx = host_js_prepare_call(body, arity, args)?;
+        unsafe {
+            let ptr = mhs_js_call_str(idx);
+            let len = usize::try_from(mhs_js_slen()).map_err(|_| EvalError::Overflow)?;
+            let result = copy_host_bytes(ptr, len)?;
+            host_js_check_error()?;
+            Ok(result)
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (body, arity, args);
+        Err(EvalError::UnsupportedJsFfi)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn host_js_prepare_call(body: &[u8], arity: usize, args: &[JsArg]) -> Result<i32, EvalError> {
+    let body = nul_terminated(body)?;
+    let arity = i32::try_from(arity).map_err(|_| EvalError::Overflow)?;
+    unsafe {
+        mhs_js_setup();
+        let idx = mhs_js_register(body.as_ptr(), arity);
+        mhs_js_argreset();
+        for arg in args {
+            match arg {
+                JsArg::Int(value) => mhs_js_push_int(*value),
+                JsArg::UInt(value) => mhs_js_push_uint(*value),
+                JsArg::Double(value) => mhs_js_push_dbl(*value),
+                JsArg::Object(value) => mhs_js_push_obj(*value),
+                JsArg::String(bytes) => {
+                    let len = i32::try_from(bytes.len()).map_err(|_| EvalError::Overflow)?;
+                    mhs_js_push_str(bytes.as_ptr(), len);
+                }
+            }
+        }
+        Ok(idx)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn host_js_check_error() -> Result<(), EvalError> {
+    unsafe {
+        if mhs_js_haserr() != 0 {
+            mhs_js_logerr();
+            return Err(EvalError::UnsupportedJsFfi);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn nul_terminated(bytes: &[u8]) -> Result<Vec<u8>, EvalError> {
+    if bytes.contains(&0) {
+        return Err(EvalError::InvalidByteString);
+    }
+    let mut out = Vec::with_capacity(bytes.len() + 1);
+    out.extend_from_slice(bytes);
+    out.push(0);
+    Ok(out)
+}
+
+#[cfg(target_arch = "wasm32")]
+unsafe fn copy_host_c_string(ptr: *const std::os::raw::c_char) -> Result<Vec<u8>, EvalError> {
+    if ptr.is_null() {
+        return Ok(Vec::new());
+    }
+    Ok(unsafe { std::ffi::CStr::from_ptr(ptr) }.to_bytes().to_vec())
+}
+
+#[cfg(target_arch = "wasm32")]
+unsafe fn copy_host_bytes(
+    ptr: *const std::os::raw::c_char,
+    len: usize,
+) -> Result<Vec<u8>, EvalError> {
+    if ptr.is_null() {
+        return if len == 0 {
+            Ok(Vec::new())
+        } else {
+            Err(EvalError::InvalidByteString)
+        };
+    }
+    Ok(unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) }.to_vec())
+}
+
+#[cfg(target_arch = "wasm32")]
+unsafe extern "C" {
+    fn mhs_js_debug(ptr: *const u8);
+    fn mhs_js_eval_run(ptr: *const u8);
+    fn mhs_js_eval_call(ptr: *const u8) -> *const std::os::raw::c_char;
+    fn mhs_js_set_haskellCallback(callback: i32);
+    fn mhs_js_setup();
+    fn mhs_js_register(body: *const u8, arity: i32) -> i32;
+    fn mhs_js_argreset();
+    fn mhs_js_push_int(value: i32);
+    fn mhs_js_push_uint(value: u32);
+    fn mhs_js_push_dbl(value: f64);
+    fn mhs_js_push_obj(handle: i32);
+    fn mhs_js_push_str(ptr: *const u8, len: i32);
+    fn mhs_js_call_int(idx: i32) -> i32;
+    fn mhs_js_call_dbl(idx: i32) -> f64;
+    fn mhs_js_call_ptr(idx: i32) -> i32;
+    fn mhs_js_call_bool(idx: i32) -> i32;
+    fn mhs_js_call_str(idx: i32) -> *const std::os::raw::c_char;
+    fn mhs_js_call_void(idx: i32);
+    fn mhs_js_slen() -> i32;
+    fn mhs_js_haserr() -> i32;
+    fn mhs_js_logerr();
+}
+
+const MPZ_BASE: u32 = 1_000_000_000;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MpzValue {
+    negative: bool,
+    digits: Vec<u32>,
+}
+
+impl MpzValue {
+    fn zero() -> Self {
+        Self {
+            negative: false,
+            digits: Vec::new(),
+        }
+    }
+
+    fn one() -> Self {
+        Self {
+            negative: false,
+            digits: vec![1],
+        }
+    }
+
+    fn from_u64(mut value: u64) -> Self {
+        let mut digits = Vec::new();
+        let base = u64::from(MPZ_BASE);
+        while value != 0 {
+            digits.push((value % base) as u32);
+            value /= base;
+        }
+        Self {
+            negative: false,
+            digits,
+        }
+    }
+
+    fn from_i64(value: i64) -> Self {
+        let mut out = Self::from_u64(value.unsigned_abs());
+        out.negative = value < 0 && !out.is_zero();
+        out
+    }
+
+    fn parse_decimal(bytes: &[u8]) -> Result<Self, ()> {
+        let (negative, digits) = match bytes {
+            [b'-', rest @ ..] => (true, rest),
+            [b'+', rest @ ..] => (false, rest),
+            rest => (false, rest),
+        };
+        if digits.is_empty() {
+            return Err(());
+        }
+        let mut value = Self::zero();
+        for &byte in digits {
+            if !byte.is_ascii_digit() {
+                return Err(());
+            }
+            value.mul_small_mut(10);
+            value.add_small_mut(u32::from(byte - b'0'));
+        }
+        value.negative = negative && !value.is_zero();
+        Ok(value)
+    }
+
+    fn to_decimal_bytes(&self) -> Vec<u8> {
+        if self.is_zero() {
+            return b"0".to_vec();
+        }
+        let mut out = Vec::new();
+        if self.negative {
+            out.push(b'-');
+        }
+        let mut digits = self.digits.iter().rev();
+        if let Some(first) = digits.next() {
+            out.extend(first.to_string().into_bytes());
+        }
+        for digit in digits {
+            out.extend(format!("{digit:09}").into_bytes());
+        }
+        out
+    }
+
+    fn normalize(&mut self) {
+        while self.digits.last() == Some(&0) {
+            self.digits.pop();
+        }
+        if self.digits.is_empty() {
+            self.negative = false;
+        }
+    }
+
+    fn normalized(mut self) -> Self {
+        self.normalize();
+        self
+    }
+
+    fn is_zero(&self) -> bool {
+        self.digits.is_empty()
+    }
+
+    fn abs(&self) -> Self {
+        let mut out = self.clone();
+        out.negative = false;
+        out
+    }
+
+    fn cmp_abs(&self, other: &Self) -> Ordering {
+        match self.digits.len().cmp(&other.digits.len()) {
+            Ordering::Equal => {
+                for (left, right) in self.digits.iter().rev().zip(other.digits.iter().rev()) {
+                    match left.cmp(right) {
+                        Ordering::Equal => {}
+                        ordering => return ordering,
+                    }
+                }
+                Ordering::Equal
+            }
+            ordering => ordering,
+        }
+    }
+
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.negative, other.negative) {
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            (false, false) => self.cmp_abs(other),
+            (true, true) => other.cmp_abs(self),
+        }
+    }
+
+    fn abs_add(&self, other: &Self) -> Self {
+        let mut out = Vec::with_capacity(self.digits.len().max(other.digits.len()) + 1);
+        let mut carry = 0_u64;
+        let base = u64::from(MPZ_BASE);
+        let len = self.digits.len().max(other.digits.len());
+        for idx in 0..len {
+            let left = u64::from(*self.digits.get(idx).unwrap_or(&0));
+            let right = u64::from(*other.digits.get(idx).unwrap_or(&0));
+            let sum = left + right + carry;
+            out.push((sum % base) as u32);
+            carry = sum / base;
+        }
+        if carry != 0 {
+            out.push(carry as u32);
+        }
+        Self {
+            negative: false,
+            digits: out,
+        }
+        .normalized()
+    }
+
+    fn abs_sub(&self, other: &Self) -> Self {
+        debug_assert!(self.cmp_abs(other) != Ordering::Less);
+        let mut out = Vec::with_capacity(self.digits.len());
+        let mut borrow = 0_i64;
+        let base = i64::from(MPZ_BASE);
+        for idx in 0..self.digits.len() {
+            let left = i64::from(self.digits[idx]) - borrow;
+            let right = i64::from(*other.digits.get(idx).unwrap_or(&0));
+            if left < right {
+                out.push((left + base - right) as u32);
+                borrow = 1;
+            } else {
+                out.push((left - right) as u32);
+                borrow = 0;
+            }
+        }
+        Self {
+            negative: false,
+            digits: out,
+        }
+        .normalized()
+    }
+
+    fn add(&self, other: &Self) -> Self {
+        if self.negative == other.negative {
+            let mut out = self.abs_add(other);
+            out.negative = self.negative && !out.is_zero();
+            return out;
+        }
+        match self.cmp_abs(other) {
+            Ordering::Greater => {
+                let mut out = self.abs_sub(other);
+                out.negative = self.negative && !out.is_zero();
+                out
+            }
+            Ordering::Less => {
+                let mut out = other.abs_sub(self);
+                out.negative = other.negative && !out.is_zero();
+                out
+            }
+            Ordering::Equal => Self::zero(),
+        }
+    }
+
+    fn sub(&self, other: &Self) -> Self {
+        let mut neg_other = other.clone();
+        if !neg_other.is_zero() {
+            neg_other.negative = !neg_other.negative;
+        }
+        self.add(&neg_other)
+    }
+
+    fn mul(&self, other: &Self) -> Self {
+        if self.is_zero() || other.is_zero() {
+            return Self::zero();
+        }
+        let base = u64::from(MPZ_BASE);
+        let mut out = vec![0_u64; self.digits.len() + other.digits.len()];
+        for (i, &left) in self.digits.iter().enumerate() {
+            let mut carry = 0_u64;
+            for (j, &right) in other.digits.iter().enumerate() {
+                let idx = i + j;
+                let raw = out[idx] + u64::from(left) * u64::from(right) + carry;
+                out[idx] = raw % base;
+                carry = raw / base;
+            }
+            if carry != 0 {
+                out[i + other.digits.len()] += carry;
+            }
+        }
+        let mut digits = Vec::with_capacity(out.len());
+        let mut carry = 0_u64;
+        for raw in out {
+            let raw = raw + carry;
+            digits.push((raw % base) as u32);
+            carry = raw / base;
+        }
+        while carry != 0 {
+            digits.push((carry % base) as u32);
+            carry /= base;
+        }
+        Self {
+            negative: self.negative != other.negative,
+            digits,
+        }
+        .normalized()
+    }
+
+    fn mul_small_mut(&mut self, value: u32) {
+        if self.is_zero() || value == 1 {
+            return;
+        }
+        if value == 0 {
+            self.digits.clear();
+            self.negative = false;
+            return;
+        }
+        let base = u64::from(MPZ_BASE);
+        let mut carry = 0_u64;
+        for digit in &mut self.digits {
+            let raw = u64::from(*digit) * u64::from(value) + carry;
+            *digit = (raw % base) as u32;
+            carry = raw / base;
+        }
+        while carry != 0 {
+            self.digits.push((carry % base) as u32);
+            carry /= base;
+        }
+    }
+
+    fn add_small_mut(&mut self, value: u32) {
+        if value == 0 {
+            return;
+        }
+        let base = u64::from(MPZ_BASE);
+        let mut carry = u64::from(value);
+        let mut idx = 0;
+        while carry != 0 {
+            if idx == self.digits.len() {
+                self.digits.push(0);
+            }
+            let raw = u64::from(self.digits[idx]) + carry;
+            self.digits[idx] = (raw % base) as u32;
+            carry = raw / base;
+            idx += 1;
+        }
+    }
+
+    fn div2_mut(&mut self) -> bool {
+        let mut rem = 0_u64;
+        let base = u64::from(MPZ_BASE);
+        for digit in self.digits.iter_mut().rev() {
+            let raw = rem * base + u64::from(*digit);
+            *digit = (raw / 2) as u32;
+            rem = raw % 2;
+        }
+        self.normalize();
+        rem != 0
+    }
+
+    fn shl1_mut(&mut self) {
+        self.mul_small_mut(2);
+    }
+
+    fn shl_bits(mut self, bits: usize) -> Self {
+        for _ in 0..bits {
+            self.shl1_mut();
+        }
+        self
+    }
+
+    fn shr_abs_bits(&self, bits: usize) -> (Self, bool) {
+        let mut out = self.abs();
+        let mut dropped = false;
+        for _ in 0..bits {
+            dropped |= out.div2_mut();
+        }
+        (out, dropped)
+    }
+
+    fn fdiv_q_2exp(&self, bits: usize) -> Self {
+        let (mut quot, dropped) = self.shr_abs_bits(bits);
+        if self.negative {
+            if dropped {
+                quot.add_small_mut(1);
+            }
+            if !quot.is_zero() {
+                quot.negative = true;
+            }
+        }
+        quot
+    }
+
+    fn to_bits_abs(&self) -> Vec<bool> {
+        let mut tmp = self.abs();
+        let mut bits = Vec::new();
+        while !tmp.is_zero() {
+            bits.push(tmp.div2_mut());
+        }
+        bits
+    }
+
+    fn from_bits_abs(bits: &[bool]) -> Self {
+        let mut out = Self::zero();
+        for bit in bits.iter().rev() {
+            out.shl1_mut();
+            if *bit {
+                out.add_small_mut(1);
+            }
+        }
+        out
+    }
+
+    fn one_shl(bits: usize) -> Self {
+        Self::one().shl_bits(bits)
+    }
+
+    fn div_rem_abs(&self, divisor: &Self) -> Result<(Self, Self), EvalError> {
+        if divisor.is_zero() {
+            return Err(EvalError::InvalidByteString);
+        }
+        if self.cmp_abs(divisor) == Ordering::Less {
+            return Ok((Self::zero(), self.abs()));
+        }
+        let bits = self.to_bits_abs();
+        let mut quot = Self::zero();
+        let mut rem = Self::zero();
+        for bit in bits.iter().rev() {
+            rem.shl1_mut();
+            if *bit {
+                rem.add_small_mut(1);
+            }
+            quot.shl1_mut();
+            if rem.cmp_abs(divisor) != Ordering::Less {
+                rem = rem.abs_sub(divisor);
+                quot.add_small_mut(1);
+            }
+        }
+        Ok((quot, rem))
+    }
+
+    fn tdiv_qr(&self, divisor: &Self) -> Result<(Self, Self), EvalError> {
+        let (mut quot, mut rem) = self.abs().div_rem_abs(&divisor.abs())?;
+        quot.negative = self.negative != divisor.negative && !quot.is_zero();
+        rem.negative = self.negative && !rem.is_zero();
+        Ok((quot, rem))
+    }
+
+    fn bit_len(&self) -> usize {
+        self.to_bits_abs().len()
+    }
+
+    fn to_twos_bits(&self, width: usize) -> Vec<bool> {
+        let mut bits = if self.negative {
+            Self::one_shl(width).sub(&self.abs()).to_bits_abs()
+        } else {
+            self.to_bits_abs()
+        };
+        bits.resize(width, false);
+        bits
+    }
+
+    fn from_twos_bits(bits: &[bool]) -> Self {
+        if bits.last() != Some(&true) {
+            return Self::from_bits_abs(bits);
+        }
+        let unsigned = Self::from_bits_abs(bits);
+        let mut out = Self::one_shl(bits.len()).sub(&unsigned);
+        if !out.is_zero() {
+            out.negative = true;
+        }
+        out
+    }
+
+    fn bitwise(&self, other: &Self, op: fn(bool, bool) -> bool) -> Self {
+        let width = self.bit_len().max(other.bit_len()) + 1;
+        let left = self.to_twos_bits(width);
+        let right = other.to_twos_bits(width);
+        let bits: Vec<bool> = left
+            .into_iter()
+            .zip(right)
+            .map(|(left, right)| op(left, right))
+            .collect();
+        Self::from_twos_bits(&bits)
+    }
+
+    fn bitand(&self, other: &Self) -> Self {
+        self.bitwise(other, |left, right| left & right)
+    }
+
+    fn bitor(&self, other: &Self) -> Self {
+        self.bitwise(other, |left, right| left | right)
+    }
+
+    fn bitxor(&self, other: &Self) -> Self {
+        self.bitwise(other, |left, right| left ^ right)
+    }
+
+    fn test_bit_abs(&self, bit: usize) -> bool {
+        self.to_bits_abs().get(bit).copied().unwrap_or(false)
+    }
+
+    fn test_bit_signed(&self, bit: usize) -> bool {
+        if !self.negative {
+            return self.test_bit_abs(bit);
+        }
+        let shifted = self.fdiv_q_2exp(bit);
+        shifted.abs().test_bit_abs(0)
+    }
+
+    fn signed_popcount(&self) -> Result<i64, EvalError> {
+        let count = i64::try_from(self.to_bits_abs().into_iter().filter(|bit| *bit).count())
+            .map_err(|_| EvalError::Overflow)?;
+        Ok(if self.negative { -count } else { count })
+    }
+
+    fn log2(&self) -> Result<i64, EvalError> {
+        i64::try_from(self.bit_len().saturating_sub(1)).map_err(|_| EvalError::Overflow)
+    }
+
+    fn to_u64_low(&self) -> u64 {
+        let mut out = 0_u64;
+        for (idx, bit) in self.to_bits_abs().into_iter().take(64).enumerate() {
+            if bit {
+                out |= 1_u64 << idx;
+            }
+        }
+        out
+    }
+
+    fn to_i64_wrapping(&self) -> i64 {
+        let low = self.to_u64_low();
+        if self.negative {
+            0_u64.wrapping_sub(low) as i64
+        } else {
+            low as i64
+        }
+    }
+
+    fn to_f64(&self) -> f64 {
+        let mut out = 0.0;
+        for &digit in self.digits.iter().rev() {
+            out = out * f64::from(MPZ_BASE) + f64::from(digit);
+        }
+        if self.negative { -out } else { out }
+    }
+}
+
 fn size_of_i64<T>() -> i64 {
     std::mem::size_of::<T>() as i64
 }
@@ -6468,6 +7540,7 @@ fn strerror_bytes(errno: i32) -> Vec<u8> {
 ))]
 fn errno_constant(name: &str) -> Option<i64> {
     Some(i64::from(match name {
+        "EOK" => 0,
         "E2BIG" => libc::E2BIG,
         "EACCES" => libc::EACCES,
         "EADDRINUSE" => libc::EADDRINUSE,
@@ -6576,6 +7649,9 @@ fn errno_constant(name: &str) -> Option<i64> {
     not(any(target_os = "linux", target_os = "android"))
 ))]
 fn errno_constant(name: &str) -> Option<i64> {
+    if name == "EOK" {
+        return Some(0);
+    }
     const ERRNO_NAMES: &[&str] = &[
         "E2BIG",
         "EACCES",
@@ -7553,6 +8629,7 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "errno"
         | "environ"
         | "get_executable_path"
+        | "new_mpz"
         | "openb_wr_mem" => 0,
         "malloc"
         | "free"
@@ -7569,6 +8646,10 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "closedir"
         | "c_d_name"
         | "close"
+        | "js_debug"
+        | "js_eval_run"
+        | "js_eval_call"
+        | "js_set_haskellCallback"
         | "add_FILE"
         | "add_utf8"
         | "add_crlf"
@@ -7609,6 +8690,12 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "peek_size_t"
         | "peek_flt32"
         | "peek_flt64"
+        | "mpz_get_d"
+        | "mpz_get_f"
+        | "mpz_get_si"
+        | "mpz_get_si64"
+        | "mpz_log2"
+        | "mpz_popcount"
         | "acos"
         | "asin"
         | "atan"
@@ -7633,11 +8720,15 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "poke_int32" | "poke_int64" | "poke_char" | "poke_schar" | "poke_uchar"
         | "poke_short" | "poke_ushort" | "poke_int" | "poke_uint" | "poke_long" | "poke_ulong"
         | "poke_llong" | "poke_ullong" | "poke_size_t" | "poke_flt32" | "poke_flt64"
-        | "openb_rd_mem" | "getcpu" | "gettimeofday" | "listen" | "putb" | "ungetb" | "atan2"
-        | "pow" | "scalbn" | "atan2f" | "powf" | "scalbnf" => 2,
+        | "openb_rd_mem" | "getcpu" | "gettimeofday" | "listen" | "mpz_abs" | "mpz_cmp"
+        | "mpz_init_set_si" | "mpz_init_set_si64" | "mpz_init_set_ui" | "mpz_init_set_ui64"
+        | "mpz_neg" | "mpz_tstbit" | "putb" | "ungetb" | "atan2" | "pow" | "scalbn" | "atan2f"
+        | "powf" | "scalbnf" => 2,
         "memcpy" | "memmove" | "setenv" | "md5Array" | "get_mem" | "readb" | "writeb" | "open"
-        | "accept" | "bind" | "connect" | "fcntl" | "socket" => 3,
+        | "accept" | "bind" | "connect" | "fcntl" | "mpz_add" | "mpz_and" | "mpz_fdiv_q_2exp"
+        | "mpz_ior" | "mpz_mul" | "mpz_mul_2exp" | "mpz_sub" | "mpz_xor" | "socket" => 3,
         "recv" | "send" => 4,
+        "mpz_tdiv_qr" => 4,
         "getsockopt" | "setsockopt" => 5,
         "strerror_r" => 3,
         _ => return None,
