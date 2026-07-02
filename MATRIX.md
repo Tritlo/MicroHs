@@ -232,9 +232,11 @@ operations rather than the likely hot path for normal MicroHs programs.
 | `lzma-bfile-read-chain:200` | 1,932,381 | 507,415 | 3.81 | yes |
 | `rle-bfile-read-chain:200` | 1,692,821 | 348,352 | 4.86 | yes |
 
-### Smoke Only
+### Comment
 
-No benchmark scenario rows are currently smoke-only. High-level browser JS smoke remains tracked in the tier status because it is not a numeric Rust/C benchmark row.
+| topic | current theory |
+|---|---|
+| Rust/C performance gap | The remaining comparable gaps look semantic-overhead dominated, not parity noise: the slow common rows repeatedly build tiny `IO.>>` / `IO.lazyBind` / FFI graphs, allocate pair/app nodes, walk reducer spines, and copy through guest-memory/BFILE adapters. C is still much flatter in those paths. Narrow micro-probes so far suggest the gap is not fixed by one-symbol dispatch tricks; useful wins likely need reducing structural graph churn around IO/FFI or adding carefully measured direct paths for whole common patterns. |
 
 ### Compiler-Generated Compressor Write Smokes
 
