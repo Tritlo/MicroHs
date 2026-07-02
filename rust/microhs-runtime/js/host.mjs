@@ -1,10 +1,7 @@
-import { readFile } from "node:fs/promises";
-
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 export async function instantiateMicroHsRuntime(wasm) {
-  const bytes = typeof wasm === "string" || wasm instanceof URL ? await readFile(wasm) : wasm;
   const state = {
     reg: [],
     argbuf: [],
@@ -24,7 +21,11 @@ export async function instantiateMicroHsRuntime(wasm) {
   };
 
   const imports = { env: makeImports(state) };
-  const { instance, module } = await WebAssembly.instantiate(bytes, imports);
+  const source = await loadWasmSource(wasm);
+  const { instance, module } =
+    source instanceof WebAssembly.Module
+      ? { instance: await WebAssembly.instantiate(source, imports), module: source }
+      : await WebAssembly.instantiate(source, imports);
   state.exports = instance.exports;
   state.memory = instance.exports.memory;
 
@@ -60,6 +61,64 @@ export async function instantiateMicroHsRuntime(wasm) {
       state.exports.mhs_rust_program_free(handle);
     },
   };
+}
+
+async function loadWasmSource(wasm) {
+  if (wasm instanceof WebAssembly.Module) {
+    return wasm;
+  }
+  if (wasm instanceof ArrayBuffer) {
+    return wasm;
+  }
+  if (ArrayBuffer.isView(wasm)) {
+    return wasm;
+  }
+  if (typeof Response !== "undefined" && wasm instanceof Response) {
+    return wasm.arrayBuffer();
+  }
+  if (typeof wasm === "string" || wasm instanceof URL) {
+    if (typeof fetch === "function" && shouldFetch(wasm)) {
+      try {
+        const response = await fetch(wasm);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        return response.arrayBuffer();
+      } catch (error) {
+        if (!isNodeFileSource(wasm)) {
+          throw error;
+        }
+      }
+    }
+    const { readFile } = await import("node:fs/promises");
+    return readFile(wasm);
+  }
+  throw new TypeError("unsupported MicroHs wasm source");
+}
+
+function shouldFetch(wasm) {
+  if (wasm instanceof URL) {
+    return wasm.protocol !== "file:";
+  }
+  return isProbablyBrowser() || /^[a-z][a-z0-9+.-]*:/i.test(wasm);
+}
+
+function isProbablyBrowser() {
+  return typeof window !== "undefined" && typeof window.document !== "undefined";
+}
+
+function isProbablyNode() {
+  return typeof process !== "undefined" && process.versions?.node;
+}
+
+function isNodeFileSource(wasm) {
+  if (!isProbablyNode()) {
+    return false;
+  }
+  if (wasm instanceof URL) {
+    return wasm.protocol === "file:";
+  }
+  return typeof wasm === "string" && !/^[a-z][a-z0-9+.-]*:/i.test(wasm);
 }
 
 function makeImports(state) {
