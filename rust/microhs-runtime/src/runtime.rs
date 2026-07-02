@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
-use std::mem::size_of;
+use std::mem::{MaybeUninit, size_of};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct NodeId(pub usize);
@@ -62,7 +62,7 @@ const FORCE_REDUCTION_LIMIT: usize = usize::MAX;
 const BFILE_PTR_STRIDE: i64 = 1_i64 << 32;
 const DIR_PTR_BASE: i64 = i64::MIN + (1_i64 << 61);
 const DIR_PTR_STRIDE: i64 = 1_i64 << 32;
-const INLINE_SPINE: usize = 8;
+const INLINE_SPINE: usize = 16;
 const UTF8_ASCII_REFILL: usize = 1024;
 
 #[derive(Clone, Debug)]
@@ -352,8 +352,8 @@ struct Spine {
 
 enum SpineStorage {
     Inline {
-        args: [NodeId; INLINE_SPINE],
-        apps: [NodeId; INLINE_SPINE],
+        args: [MaybeUninit<NodeId>; INLINE_SPINE],
+        apps: [MaybeUninit<NodeId>; INLINE_SPINE],
         len: usize,
     },
     Heap {
@@ -365,17 +365,24 @@ enum SpineStorage {
 impl Spine {
     fn args(&self) -> &[NodeId] {
         match &self.storage {
-            SpineStorage::Inline { args, len, .. } => &args[..*len],
+            SpineStorage::Inline { args, len, .. } => initialized_node_slice(args, *len),
             SpineStorage::Heap { args, .. } => args,
         }
     }
 
     fn apps(&self) -> &[NodeId] {
         match &self.storage {
-            SpineStorage::Inline { apps, len, .. } => &apps[..*len],
+            SpineStorage::Inline { apps, len, .. } => initialized_node_slice(apps, *len),
             SpineStorage::Heap { apps, .. } => apps,
         }
     }
+}
+
+fn initialized_node_slice(storage: &[MaybeUninit<NodeId>], len: usize) -> &[NodeId] {
+    debug_assert!(len <= storage.len());
+    // SAFETY: Spine::spine writes exactly the first `len` elements before storing
+    // an Inline spine, and NodeId is Copy with no drop glue.
+    unsafe { std::slice::from_raw_parts(storage.as_ptr().cast::<NodeId>(), len) }
 }
 
 struct StepResult {
@@ -1279,8 +1286,8 @@ impl Program {
 
     fn spine(&self, root: NodeId) -> Result<Spine, EvalError> {
         let mut node = self.resolve(root)?;
-        let mut inline_args = [NodeId(usize::MAX); INLINE_SPINE];
-        let mut inline_apps = [NodeId(usize::MAX); INLINE_SPINE];
+        let mut inline_args = [const { MaybeUninit::uninit() }; INLINE_SPINE];
+        let mut inline_apps = [const { MaybeUninit::uninit() }; INLINE_SPINE];
         let mut inline_len = 0;
         let mut heap: Option<(Vec<NodeId>, Vec<NodeId>)> = None;
         while let Node::App(fun, arg) = self.nodes[node.0] {
@@ -1289,14 +1296,18 @@ impl Program {
                 args.push(arg);
                 apps.push(node);
             } else if inline_len < INLINE_SPINE {
-                inline_args[inline_len] = arg;
-                inline_apps[inline_len] = node;
+                inline_args[inline_len].write(arg);
+                inline_apps[inline_len].write(node);
                 inline_len += 1;
             } else {
                 let mut args = Vec::with_capacity(INLINE_SPINE * 2);
                 let mut apps = Vec::with_capacity(INLINE_SPINE * 2);
-                args.extend_from_slice(&inline_args);
-                apps.extend_from_slice(&inline_apps);
+                for idx in 0..inline_len {
+                    // SAFETY: indices below inline_len were written above.
+                    args.push(unsafe { inline_args[idx].assume_init() });
+                    // SAFETY: indices below inline_len were written above.
+                    apps.push(unsafe { inline_apps[idx].assume_init() });
+                }
                 args.push(arg);
                 apps.push(node);
                 heap = Some((args, apps));
