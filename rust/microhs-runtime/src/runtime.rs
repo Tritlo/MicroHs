@@ -1055,6 +1055,11 @@ impl Program {
         self.app(result_pair, world)
     }
 
+    fn unit_pair(&mut self, world: NodeId) -> NodeId {
+        let unit = self.prim("I");
+        self.pair(unit, world)
+    }
+
     fn just(&mut self, value: NodeId) -> NodeId {
         let z = self.prim("Z");
         let u = self.prim("U");
@@ -1868,7 +1873,6 @@ impl Program {
                 return Ok(Some((2, self.pair(result, args[1]))));
             }
         }
-
         let arity = ffi_arity(name).ok_or_else(|| EvalError::UnknownFfi(name.to_owned()))?;
         if args.len() < arity + 1 {
             return Ok(None);
@@ -2527,13 +2531,14 @@ impl Program {
             }
             "peekWord" => {
                 let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_unsigned(ptr, 8)? as i64)
+                let result = self.push_node(Node::Int(self.peek_unsigned(ptr, 8)? as i64));
+                return Ok(Some((2, self.pair(result, args[1]))));
             }
             "pokeWord" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int(args[1])?;
                 self.poke_unsigned(ptr, 8, value as u64)?;
-                Node::Prim("I".to_owned())
+                return Ok(Some((3, self.unit_pair(args[2]))));
             }
             "peek_uint8" => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -2567,13 +2572,14 @@ impl Program {
             }
             "peek_uint64" => {
                 let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int64(self.peek_unsigned(ptr, 8)? as i64)
+                let result = self.push_node(Node::Int64(self.peek_unsigned(ptr, 8)? as i64));
+                return Ok(Some((2, self.pair(result, args[1]))));
             }
             "poke_uint64" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let value = self.eval_int64(args[1])?;
                 self.poke_unsigned(ptr, 8, value as u64)?;
-                Node::Prim("I".to_owned())
+                return Ok(Some((3, self.unit_pair(args[2]))));
             }
             "peek_int8" => {
                 let ptr = self.eval_pointer_value(args[0])?;
