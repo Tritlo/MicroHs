@@ -1692,6 +1692,63 @@ impl Program {
                 let path = self.read_c_string(ptr)?;
                 Node::Int(remove_path_bytes(&path))
             }
+            "system" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let command = if ptr == 0 {
+                    None
+                } else {
+                    Some(self.read_c_string(ptr)?)
+                };
+                Node::Int(system_command_bytes(command.as_deref()))
+            }
+            "chdir" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let path = self.read_c_string(ptr)?;
+                Node::Int(chdir_path_bytes(&path))
+            }
+            "mkdir" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let path = self.read_c_string(ptr)?;
+                let mode = self.eval_int(args[1])?;
+                Node::Int(mkdir_path_bytes(&path, mode))
+            }
+            "getcwd" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let size = int_to_usize(self.eval_int(args[1])?)?;
+                if let Some(mut bytes) = current_dir_bytes() {
+                    bytes.push(0);
+                    if bytes.len() <= size {
+                        self.write_pointer_bytes(ptr, &bytes)?;
+                        Node::Ptr(ptr)
+                    } else {
+                        Node::Ptr(0)
+                    }
+                } else {
+                    Node::Ptr(0)
+                }
+            }
+            "get_permissions" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let path = self.read_c_string(ptr)?;
+                Node::Int(get_permissions_path_bytes(&path))
+            }
+            "set_permissions" => {
+                let ptr = self.eval_pointer_value(args[0])?;
+                let path = self.read_c_string(ptr)?;
+                let permissions = self.eval_int(args[1])?;
+                Node::Int(set_permissions_path_bytes(&path, permissions))
+            }
+            "get_executable_path" => {
+                let ptr = if let Some(mut bytes) = executable_path_bytes() {
+                    bytes.push(0);
+                    let ptr = self.alloc_memory(bytes.len())?;
+                    self.write_pointer_bytes(ptr, &bytes)?;
+                    ptr
+                } else {
+                    0
+                };
+                Node::Ptr(ptr)
+            }
             "fopen" => {
                 let path_ptr = self.eval_pointer_value(args[0])?;
                 let mode_ptr = self.eval_pointer_value(args[1])?;
@@ -5827,6 +5884,283 @@ fn remove_path_bytes(path: &[u8]) -> i64 {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
+fn system_command_bytes(command: Option<&[u8]>) -> i64 {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::process::ExitStatusExt;
+
+    let Some(command) = command else {
+        return 1;
+    };
+    match std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(OsStr::from_bytes(command))
+        .status()
+    {
+        Ok(status) => i64::from(status.into_raw()),
+        Err(_) => -1,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn system_command_bytes(command: Option<&[u8]>) -> i64 {
+    let _ = command;
+    -1
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn system_command_bytes(command: Option<&[u8]>) -> i64 {
+    let Some(command) = command else {
+        return 1;
+    };
+    let Ok(command) = std::str::from_utf8(command) else {
+        return -1;
+    };
+    match std::process::Command::new("cmd")
+        .arg("/C")
+        .arg(command)
+        .status()
+    {
+        Ok(status) => status.code().map_or(-1, i64::from),
+        Err(_) => -1,
+    }
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn chdir_path_bytes(path: &[u8]) -> i64 {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = std::path::Path::new(OsStr::from_bytes(path));
+    if std::env::set_current_dir(path).is_ok() {
+        0
+    } else {
+        -1
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn chdir_path_bytes(path: &[u8]) -> i64 {
+    let _ = path;
+    -1
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn chdir_path_bytes(path: &[u8]) -> i64 {
+    let Ok(path) = std::str::from_utf8(path) else {
+        return -1;
+    };
+    if std::env::set_current_dir(path).is_ok() {
+        0
+    } else {
+        -1
+    }
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn mkdir_path_bytes(path: &[u8], mode: i64) -> i64 {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::DirBuilderExt;
+
+    let Ok(mode) = u32::try_from(mode) else {
+        return -1;
+    };
+    let path = std::path::Path::new(OsStr::from_bytes(path));
+    if std::fs::DirBuilder::new().mode(mode).create(path).is_ok() {
+        0
+    } else {
+        -1
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn mkdir_path_bytes(path: &[u8], mode: i64) -> i64 {
+    let _ = (path, mode);
+    -1
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn mkdir_path_bytes(path: &[u8], mode: i64) -> i64 {
+    let _ = mode;
+    let Ok(path) = std::str::from_utf8(path) else {
+        return -1;
+    };
+    if std::fs::create_dir(path).is_ok() {
+        0
+    } else {
+        -1
+    }
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn current_dir_bytes() -> Option<Vec<u8>> {
+    use std::os::unix::ffi::OsStringExt;
+
+    Some(std::env::current_dir().ok()?.into_os_string().into_vec())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn current_dir_bytes() -> Option<Vec<u8>> {
+    None
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn current_dir_bytes() -> Option<Vec<u8>> {
+    Some(
+        std::env::current_dir()
+            .ok()?
+            .to_string_lossy()
+            .into_owned()
+            .into_bytes(),
+    )
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn executable_path_bytes() -> Option<Vec<u8>> {
+    use std::os::unix::ffi::OsStringExt;
+
+    Some(std::env::current_exe().ok()?.into_os_string().into_vec())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn executable_path_bytes() -> Option<Vec<u8>> {
+    None
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn executable_path_bytes() -> Option<Vec<u8>> {
+    Some(
+        std::env::current_exe()
+            .ok()?
+            .to_string_lossy()
+            .into_owned()
+            .into_bytes(),
+    )
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn get_permissions_path_bytes(path: &[u8]) -> i64 {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = std::path::Path::new(OsStr::from_bytes(path));
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return -1;
+    };
+    let mode = metadata.permissions().mode();
+    let mut permissions = 0;
+    if mode & 0o400 != 0 {
+        permissions |= 4;
+    }
+    if mode & 0o200 != 0 {
+        permissions |= 2;
+    }
+    if mode & 0o100 != 0 {
+        permissions |= if metadata.is_dir() { 8 } else { 1 };
+    }
+    permissions
+}
+
+#[cfg(target_arch = "wasm32")]
+fn get_permissions_path_bytes(path: &[u8]) -> i64 {
+    let _ = path;
+    -1
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn get_permissions_path_bytes(path: &[u8]) -> i64 {
+    let Ok(path) = std::str::from_utf8(path) else {
+        return -1;
+    };
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return -1;
+    };
+    let mut permissions = 4;
+    if !metadata.permissions().readonly() {
+        permissions |= 2;
+    }
+    if metadata.is_dir() {
+        permissions |= 8;
+    }
+    permissions
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> i64 {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    unsafe extern "C" {
+        fn umask(mask: u32) -> u32;
+    }
+
+    let Ok(permissions) = u32::try_from(permissions) else {
+        return -1;
+    };
+    let path = std::path::Path::new(OsStr::from_bytes(path));
+    let Ok(file) = std::fs::File::open(path) else {
+        return -1;
+    };
+    let Ok(metadata) = file.metadata() else {
+        return -1;
+    };
+    let mut user_mode = 0;
+    if permissions & 4 != 0 {
+        user_mode |= 0o400;
+    }
+    if permissions & 2 != 0 {
+        user_mode |= 0o200;
+    }
+    if permissions & 1 != 0 || permissions & 8 != 0 {
+        user_mode |= 0o100;
+    }
+    let mut mode = user_mode | (user_mode >> 3) | (user_mode >> 6);
+    // SAFETY: umask is process-global like in the C runtime. We restore it immediately.
+    let mask = unsafe { umask(0) };
+    // SAFETY: restores the mask value just read above.
+    unsafe {
+        umask(mask);
+    }
+    mode &= !mask;
+    mode |= metadata.permissions().mode() & !0o777;
+    if file
+        .set_permissions(std::fs::Permissions::from_mode(mode))
+        .is_ok()
+    {
+        0
+    } else {
+        -1
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> i64 {
+    let _ = (path, permissions);
+    -1
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
+fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> i64 {
+    let _ = permissions;
+    let Ok(path) = std::str::from_utf8(path) else {
+        return -1;
+    };
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return -1;
+    };
+    let mut permissions = metadata.permissions();
+    permissions.set_readonly(false);
+    if std::fs::set_permissions(path, permissions).is_ok() {
+        0
+    } else {
+        -1
+    }
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
 fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Option<BFile> {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
@@ -5934,14 +6268,31 @@ fn open_native_file(path: &std::path::Path, mode: NativeFileMode) -> Option<std:
 
 fn ffi_arity(name: &str) -> Option<usize> {
     Some(match name {
-        "GETRAW" | "GETTIMEMICRO" | "islinux" | "ismacos" | "iswindows" | "sizeof_char"
-        | "sizeof_short" | "sizeof_int" | "sizeof_long" | "sizeof_llong" | "sizeof_size_t"
-        | "want_gmp" | "want_imath" | "&closeb" | "&free" | "openb_wr_mem" => 0,
+        "GETRAW"
+        | "GETTIMEMICRO"
+        | "islinux"
+        | "ismacos"
+        | "iswindows"
+        | "sizeof_char"
+        | "sizeof_short"
+        | "sizeof_int"
+        | "sizeof_long"
+        | "sizeof_llong"
+        | "sizeof_size_t"
+        | "want_gmp"
+        | "want_imath"
+        | "&closeb"
+        | "&free"
+        | "get_executable_path"
+        | "openb_wr_mem" => 0,
         "malloc"
         | "free"
         | "strlen"
         | "getenv"
         | "remove"
+        | "system"
+        | "chdir"
+        | "get_permissions"
         | "add_FILE"
         | "add_utf8"
         | "add_crlf"
@@ -6000,13 +6351,14 @@ fn ffi_arity(name: &str) -> Option<usize> {
         | "sinf"
         | "sqrtf"
         | "tanf" => 1,
-        "calloc" | "realloc" | "strcpy" | "fopen" | "add_buf" | "md5BFILE" | "md5String"
-        | "pokePtr" | "pokeWord" | "poke_uint8" | "poke_uint16" | "poke_uint32" | "poke_uint64"
-        | "poke_int8" | "poke_int16" | "poke_int32" | "poke_int64" | "poke_char" | "poke_schar"
-        | "poke_uchar" | "poke_short" | "poke_ushort" | "poke_int" | "poke_uint" | "poke_long"
-        | "poke_ulong" | "poke_llong" | "poke_ullong" | "poke_size_t" | "poke_flt32"
-        | "poke_flt64" | "openb_rd_mem" | "putb" | "ungetb" | "atan2" | "pow" | "scalbn"
-        | "atan2f" | "powf" | "scalbnf" => 2,
+        "calloc" | "realloc" | "strcpy" | "fopen" | "add_buf" | "mkdir" | "getcwd"
+        | "set_permissions" | "md5BFILE" | "md5String" | "pokePtr" | "pokeWord" | "poke_uint8"
+        | "poke_uint16" | "poke_uint32" | "poke_uint64" | "poke_int8" | "poke_int16"
+        | "poke_int32" | "poke_int64" | "poke_char" | "poke_schar" | "poke_uchar"
+        | "poke_short" | "poke_ushort" | "poke_int" | "poke_uint" | "poke_long" | "poke_ulong"
+        | "poke_llong" | "poke_ullong" | "poke_size_t" | "poke_flt32" | "poke_flt64"
+        | "openb_rd_mem" | "putb" | "ungetb" | "atan2" | "pow" | "scalbn" | "atan2f" | "powf"
+        | "scalbnf" => 2,
         "memcpy" | "memmove" | "md5Array" | "get_mem" | "readb" | "writeb" => 3,
         _ => return None,
     })
