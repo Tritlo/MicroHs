@@ -11,15 +11,15 @@ performance, or benchmark classification changes.
 |---|---|
 | branch | `microhs-rust` |
 | upstream tracking | `origin/microhs-rust` |
-| local commits ahead after this snapshot commit | 43 |
-| runtime code baseline | `70eabf4d Make array benchmark use IO array primitives` |
+| local commits ahead after this snapshot commit | 47 |
+| runtime code baseline | ignored IO action shortcut checkpoint |
 | dirty files after this snapshot commit | none expected |
 | dirty work | none in tracked runtime files |
 | matrix file | `MATRIX.md`, tracked from this snapshot |
 
 ## Verification Baseline
 
-Last fully verified committed state: `70eabf4d Make array benchmark use IO array primitives`.
+Last fully verified state: ignored IO action shortcut checkpoint.
 
 | gate | status |
 |---|---|
@@ -41,6 +41,7 @@ Last fully verified committed state: `70eabf4d Make array benchmark use IO array
 | `make bin/mhsbench` | passed/up to date at `70eabf4d` |
 | `cargo build --release --bin mhs-rust-bench --quiet` | passed at `70eabf4d` |
 | `cargo build --release --bin mhs-rust --quiet` | passed at `70eabf4d` |
+| ignored IO action shortcut perf probe | passed before checkpoint commit; `io-chain`, `io-control-chain`, `argref-chain`, `ffi-chain`, `ffi-math-chain`, `ffi-const-chain`, `env-set-chain`, and `remove-missing-chain` improved with matching sinks; `ffi-mem-chain` and `bfile-read-chain` canaries stayed in the same band |
 | reducer inline-spine perf probe | passed at `63d03844`; against `f8b9e1d5` temp build, current Rust improved `arith-chain`, `io-chain`, `ffi-chain`, `ffi-mem-chain`, and `bfile-read-chain` by roughly 4-13% |
 | runtime primitive-cache perf probe | passed at `cf664e6f`; against `63d03844` matrix rows, current Rust improved `arith-chain`, `io-chain`, `ffi-chain`, `ffi-mem-chain`, and `bfile-read-chain` by roughly 2-7% |
 | zero-arity FFI fast-path perf probe | passed at `646e75ab`; `ffi-chain` and `ffi-const-chain` improved with matching sinks; `io-chain` control row did not regress |
@@ -183,23 +184,23 @@ runtime primitives.
 | `unpack-chain:200` | 8,678 | 97,157 | 0.09 | yes |
 | `fromutf8-chain:200` | 9,939 | 97,162 | 0.10 | yes |
 | `array-chain:200` | 3,572 | 91,485 | 0.04 | yes |
-| `io-chain:200` | 621,594 | 116,360 | 5.34 | yes |
+| `io-chain:200` | 60,782 | 131,232 | 0.46 | yes |
 | `io-array-chain:200` | 3,747 | 92,561 | 0.04 | yes |
 | `io-bytes-chain:200` | 1,814 | 90,873 | 0.02 | yes |
-| `io-control-chain:200` | 165,415 | 121,329 | 1.36 | yes |
-| `argref-chain:200` | 841,404 | 126,502 | 6.65 | yes |
+| `io-control-chain:200` | 75,528 | 142,687 | 0.53 | yes |
+| `argref-chain:200` | 55,481 | 128,597 | 0.43 | yes |
 | `stdio-chain:200` | 143,397 | 112,014 | 1.28 | yes |
-| `ffi-chain:200` | 777,479 | 147,305 | 5.28 | yes |
-| `ffi-math-chain:200` | 852,633 | 140,632 | 6.06 | yes |
-| `ffi-const-chain:200` | 886,890 | 169,891 | 5.22 | yes |
-| `ffi-mem-chain:200` | 1,182,371 | 229,666 | 5.15 | yes |
+| `ffi-chain:200` | 64,427 | 158,747 | 0.41 | yes |
+| `ffi-math-chain:200` | 82,002 | 170,476 | 0.48 | yes |
+| `ffi-const-chain:200` | 76,276 | 200,473 | 0.38 | yes |
+| `ffi-mem-chain:200` | 1,224,237 | 239,483 | 5.11 | yes |
 | `ffi-wide-mem-chain:200` | 3,780,602 | 382,665 | 9.88 | yes |
 | `ffi-word-mem-chain:200` | 3,753,346 | 403,997 | 9.29 | yes |
 | `ffi-ptr-mem-chain:200` | 1,982,846 | 374,858 | 5.29 | yes |
 | `ffi-strcpy-chain:200` | 4,102,245 | 405,087 | 10.13 | yes |
-| `bfile-read-chain:200` | 1,374,154 | 260,549 | 5.27 | yes |
+| `bfile-read-chain:200` | 1,398,217 | 275,511 | 5.07 | yes |
 | `getenv-chain:200` | 1,469,514 | 344,612 | 4.26 | yes |
-| `env-set-chain:200` | 2,657,331 | 608,483 | 4.37 | yes |
+| `env-set-chain:200` | 1,958,847 | 602,186 | 3.25 | yes |
 | `getcwd-chain:200` | 3,972,309 | 1,174,708 | 3.38 | yes |
 | `file-read-close-chain:200` | 4,276,220 | 1,284,254 | 3.33 | yes |
 | `utf8-bfile-read-chain:200` | 1,638,707 | 333,696 | 4.91 | yes |
@@ -225,7 +226,7 @@ operations rather than the likely hot path for normal MicroHs programs.
 | `md5-string-chain:200` | 4,378,292 | 455,086 | 9.62 | yes |
 | `errno-chain:200` | 4,126,808 | 446,975 | 9.23 | yes |
 | `dir-read-chain:200` | 9,372,765 | 3,237,676 | 2.89 | yes |
-| `remove-missing-chain:200` | 1,542,420 | 377,177 | 4.09 | yes |
+| `remove-missing-chain:200` | 642,622 | 368,672 | 1.74 | yes |
 | `base64-bfile-read-chain:200` | 1,685,450 | 341,881 | 4.93 | yes |
 | `lz77-bfile-read-chain:200` | 2,555,758 | 1,119,364 | 2.28 | yes |
 | `bwt-bfile-read-chain:200` | 1,607,342 | 366,929 | 4.38 | yes |
@@ -236,7 +237,7 @@ operations rather than the likely hot path for normal MicroHs programs.
 
 | topic | current theory |
 |---|---|
-| Rust/C performance gap | The remaining comparable gaps look semantic-overhead dominated, not parity noise: the slow common rows repeatedly build tiny `IO.>>` / `IO.lazyBind` / FFI graphs, allocate pair/app nodes, walk reducer spines, and copy through guest-memory/BFILE adapters. C is still much flatter in those paths. Narrow micro-probes so far suggest the gap is not fixed by one-symbol dispatch tricks; useful wins likely need reducing structural graph churn around IO/FFI or adding carefully measured direct paths for whole common patterns. |
+| Rust/C performance gap | The ignored-action shortcut confirms the gap is mostly semantic overhead, not parity noise: simple `IO.>>`/direct-FFI chains are now faster than C when the runtime can execute the ignored left action as a whole pattern. The remaining common gaps are concentrated in `IO.lazyBind` and guest-memory/BFILE paths, where the result of one action feeds the next and the Rust runtime still allocates pair/app nodes, walks reducer spines, and copies through adapters. |
 
 ### Compiler-Generated Compressor Write Smokes
 
@@ -261,6 +262,6 @@ Rows in this section are generated from temporary pure Haskell programs compiled
 | high-level temp/CPU tests | runtime now covers `tmpname` and `getcpu`; direct smokes cover the raw FFI actions only | pending full high-level `System.IO.openTmpFile` / `System.CPUTime` tests once the compiler binary is available |
 | commit runtime parity checkpoint | `63702f10 Add Rust mpz and JS FFI coverage` | done |
 | JS full parity | runtimeFFI missing-symbol coverage is zero; `JSVal` object result/argument handles, wrapper creation boundary, owning-program handle plumbing, wrapper tag registry, internal StablePtr callback trampoline, typed JS wrapper callback API, real Rust `.wasm` build artifact, wasm embedding exports, browser-loadable JS host shim, direct wasm dynamic JS FFI smoke, same-program wrapper callback smoke, and broad wrapper tag coverage are in place, but high-level `foreign import javascript` browser parity is not complete; `.combffi` probing did not expose enough JavaScript import metadata for a runtime-only bridge | pending compiler-emitted metadata or generated glue path |
-| performance phase | seven performance checkpoints plus one benchmark parity checkpoint committed; numeric benchmark matrix rows now all sink-match C; rows are split into common-case and rare/specialized; common-operation targets should continue with IO/FFI/memory/BFILE rows where Rust is still roughly 3x-10x slower than C | active |
+| performance phase | eight performance checkpoints plus one benchmark parity checkpoint committed; numeric benchmark matrix rows now all sink-match C; rows are split into common-case and rare/specialized; common-operation targets should continue with `IO.lazyBind`, guest-memory, and BFILE rows where Rust is still roughly 3x-10x slower than C | active |
 | rejected performance probes | `KnownFfi` enum/symbol specialization, single-pass BFILE read dispatch, direct unit-return FFI pairing, direct Unix `getcwd` into guest allocation, head-node clone collapse in `step`, primitive-node cache, broad fixed-primitive borrowed classifier, pre-clone `IO.>>` branch, broad borrowed C-string host paths, borrowed `md5String`, over-broad pointer FFI pre-dispatch, generic-arm `peekPtr`/`pokePtr` direct returns, zero-arity FFI candidate guard, direct zero-arity FFI under `IO.>>`, direct FFI shortcut under `IO.lazyBind`, borrowed fixed-size peeks, runtime handle-table free lists, shared `Rc<str>` node symbols, and the `IO.return`/`K` continuation collapse were measured and reverted because important end-to-end rows were neutral or slower | done, do not reapply blindly |
 | keep compiler Haskell | scope is C runtime/evaluator rewrite; Haskell compiler remains authoritative `.comb` producer | ongoing |
