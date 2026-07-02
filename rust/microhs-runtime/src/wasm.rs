@@ -7,6 +7,7 @@ const CALLBACK_LIMIT: usize = 100_000;
 
 thread_local! {
     static PROGRAMS: RefCell<Vec<Option<Program>>> = const { RefCell::new(Vec::new()) };
+    static RESULT_BYTES: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 #[unsafe(no_mangle)]
@@ -69,6 +70,31 @@ pub extern "C" fn mhs_rust_program_reduce(handle: u32, limit: usize) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn mhs_rust_program_render(handle: u32) -> *const u8 {
+    let Ok(bytes) = with_program_mut(handle, |program| {
+        Ok(program.render(program.root()).into_bytes())
+    }) else {
+        clear_result_bytes();
+        return std::ptr::null();
+    };
+    RESULT_BYTES
+        .try_with(|result| {
+            let mut result = result.try_borrow_mut().map_err(|_| ())?;
+            *result = bytes;
+            Ok::<*const u8, ()>(result.as_ptr())
+        })
+        .unwrap_or(Ok(std::ptr::null()))
+        .unwrap_or(std::ptr::null())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mhs_rust_result_len() -> usize {
+    RESULT_BYTES
+        .try_with(|result| result.try_borrow().map(|result| result.len()).unwrap_or(0))
+        .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn mhs_rust_wrapper_invoke(
     program_handle: u32,
     stable_ptr: u32,
@@ -120,6 +146,14 @@ fn insert_program(mut program: Program) -> Option<u32> {
         })
         .ok()
         .flatten()
+}
+
+fn clear_result_bytes() {
+    let _ = RESULT_BYTES.try_with(|result| {
+        if let Ok(mut result) = result.try_borrow_mut() {
+            result.clear();
+        }
+    });
 }
 
 fn with_program_mut<R>(

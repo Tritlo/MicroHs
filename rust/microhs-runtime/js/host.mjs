@@ -48,6 +48,14 @@ export async function instantiateMicroHsRuntime(wasm) {
     reduce(handle, limit = 100000) {
       return state.exports.mhs_rust_program_reduce(handle, limit) === 0;
     },
+    render(handle) {
+      const ptr = state.exports.mhs_rust_program_render(handle);
+      const len = state.exports.mhs_rust_result_len();
+      if (ptr === 0) {
+        throw new Error("MicroHs render failed");
+      }
+      return readUtf8(state, ptr, len);
+    },
     freeProgram(handle) {
       state.exports.mhs_rust_program_free(handle);
     },
