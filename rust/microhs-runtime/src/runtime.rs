@@ -833,12 +833,6 @@ fn small_int_index(value: i64) -> Option<usize> {
     }
 }
 
-struct StepResult {
-    node: NodeId,
-    in_place: bool,
-    reductions: usize,
-}
-
 struct EvalLoopStep {
     node: NodeId,
     reductions: usize,
@@ -1007,92 +1001,7 @@ impl<T> FrameStack<T> {
     }
 }
 
-type IntFrameStack = FrameStack<IntFrame>;
-type Int64FrameStack = FrameStack<Int64Frame>;
-type Float64FrameStack = FrameStack<Float64Frame>;
-type Float32FrameStack = FrameStack<Float32Frame>;
-type BytesFrameStack = FrameStack<BytesFrame>;
 type EvalFrameStack = FrameStack<EvalFrame>;
-
-trait PushIntFrame {
-    fn push_int_frame(&mut self, frame: IntFrame);
-}
-
-trait PushInt64Frame {
-    fn push_int64_frame(&mut self, frame: Int64Frame);
-}
-
-trait PushFloat64Frame {
-    fn push_float64_frame(&mut self, frame: Float64Frame);
-}
-
-trait PushFloat32Frame {
-    fn push_float32_frame(&mut self, frame: Float32Frame);
-}
-
-trait PushBytesFrame {
-    fn push_bytes_frame(&mut self, frame: BytesFrame);
-}
-
-impl PushIntFrame for IntFrameStack {
-    fn push_int_frame(&mut self, frame: IntFrame) {
-        self.push(frame);
-    }
-}
-
-impl PushIntFrame for EvalFrameStack {
-    fn push_int_frame(&mut self, frame: IntFrame) {
-        self.push(EvalFrame::Int(frame));
-    }
-}
-
-impl PushInt64Frame for Int64FrameStack {
-    fn push_int64_frame(&mut self, frame: Int64Frame) {
-        self.push(frame);
-    }
-}
-
-impl PushInt64Frame for EvalFrameStack {
-    fn push_int64_frame(&mut self, frame: Int64Frame) {
-        self.push(EvalFrame::Int64(frame));
-    }
-}
-
-impl PushFloat64Frame for Float64FrameStack {
-    fn push_float64_frame(&mut self, frame: Float64Frame) {
-        self.push(frame);
-    }
-}
-
-impl PushFloat64Frame for EvalFrameStack {
-    fn push_float64_frame(&mut self, frame: Float64Frame) {
-        self.push(EvalFrame::Float64(frame));
-    }
-}
-
-impl PushFloat32Frame for Float32FrameStack {
-    fn push_float32_frame(&mut self, frame: Float32Frame) {
-        self.push(frame);
-    }
-}
-
-impl PushFloat32Frame for EvalFrameStack {
-    fn push_float32_frame(&mut self, frame: Float32Frame) {
-        self.push(EvalFrame::Float32(frame));
-    }
-}
-
-impl PushBytesFrame for BytesFrameStack {
-    fn push_bytes_frame(&mut self, frame: BytesFrame) {
-        self.push(frame);
-    }
-}
-
-impl PushBytesFrame for EvalFrameStack {
-    fn push_bytes_frame(&mut self, frame: BytesFrame) {
-        self.push(EvalFrame::Bytes(frame));
-    }
-}
 
 impl ConversionFrameKind {
     fn from_prim(name: &str) -> Option<Self> {
@@ -1441,38 +1350,6 @@ impl Program {
         if let Some(profile) = self.profile.as_mut() {
             profile.non_small_int_allocations += 1;
         }
-    }
-
-    #[inline]
-    fn step_result(
-        &mut self,
-        profile_head: &Option<String>,
-        node: NodeId,
-        in_place: bool,
-        reductions: usize,
-    ) -> StepResult {
-        if profile_head.is_some() {
-            self.profile_reduction(profile_head, reductions);
-        }
-        StepResult {
-            node,
-            in_place,
-            reductions,
-        }
-    }
-
-    fn step_app_result(
-        &mut self,
-        profile_head: &Option<String>,
-        used: usize,
-        args: &[NodeId],
-        apps: &[NodeId],
-        fun: NodeId,
-        arg: NodeId,
-        reductions: usize,
-    ) -> StepResult {
-        let (node, in_place) = self.apply_reduction_app(used, args, apps, fun, arg);
-        self.step_result(profile_head, node, in_place, reductions)
     }
 
     fn eval_loop_result(
@@ -2279,483 +2156,6 @@ impl Program {
         }
     }
 
-    fn step(&mut self, root: NodeId, budget: usize) -> Result<Option<StepResult>, EvalError> {
-        let spine = self.spine(root)?;
-        let head = spine.head;
-        let args = spine.args();
-        let apps = spine.apps();
-        let profile_head = if self.profile.is_some() {
-            let heap_spine = matches!(&spine.storage, SpineStorage::Heap { .. });
-            self.profile_step(head, args.len(), heap_spine)
-        } else {
-            None
-        };
-        macro_rules! app_step {
-            ($used:expr, $fun:expr, $arg:expr) => {
-                return Ok(Some(self.step_app_result(
-                    &profile_head,
-                    $used,
-                    args,
-                    apps,
-                    $fun,
-                    $arg,
-                    1,
-                )));
-            };
-        }
-        if let Node::Ffi(name) = self.nodes[head.0].clone() {
-            let Some((used, mut node)) = self.ffi_call(&name, &args)? else {
-                return Ok(None);
-            };
-            let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
-            return Ok(Some(self.step_result(&profile_head, node, in_place, 1)));
-        }
-        if let Node::JsCall { tags, body } = self.nodes[head.0].clone() {
-            let Some((used, mut node)) = self.js_call(&tags, &body, &args)? else {
-                return Ok(None);
-            };
-            let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
-            return Ok(Some(self.step_result(&profile_head, node, in_place, 1)));
-        }
-        if let Node::JsWrap { tags } = self.nodes[head.0].clone() {
-            let Some((used, mut node)) = self.js_wrap(&tags, &args)? else {
-                return Ok(None);
-            };
-            let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
-            return Ok(Some(self.step_result(&profile_head, node, in_place, 1)));
-        }
-
-        let Node::Prim(prim) = self.nodes[head.0].clone() else {
-            return Ok(None);
-        };
-        let known = prim.known();
-        use KnownPrim::*;
-
-        if known == Some(U) && args.len() >= 2 {
-            if let Some(mut node) = self.selector_pair_field(args[0], args[1])? {
-                self.profile_shortcut("selector_pair_field", 1);
-                let in_place = self.apply_reduction_spine(&mut node, 2, args, apps);
-                return Ok(Some(self.step_result(&profile_head, node, in_place, 1)));
-            }
-        }
-
-        if known == Some(IoThen) && args.len() >= 3 && budget >= 2 {
-            if let Some(reductions) = self.ignored_io_action_reductions(args[0], budget - 1)? {
-                self.profile_shortcut("io_then_ignored_action", 1);
-                let world = self
-                    .run_ignored_io_action(args[0], args[2])?
-                    .expect("preflighted ignored IO action should execute");
-                let mut node = self.app(args[1], world);
-                let in_place = self.apply_reduction_spine(&mut node, 3, args, apps);
-                return Ok(Some(self.step_result(
-                    &profile_head,
-                    node,
-                    in_place,
-                    reductions + 1,
-                )));
-            }
-            let k = self.prim("K");
-            let then = self.app(k, args[1]);
-            let action = self.app(args[0], args[2]);
-            let mut node = self.app(action, then);
-            let in_place = self.apply_reduction_spine(&mut node, 3, args, apps);
-            return Ok(Some(self.step_result(&profile_head, node, in_place, 2)));
-        }
-
-        if known == Some(IoBind) && args.len() >= 3 {
-            if let Some(result) = self.io_return_action_result(args[0])? {
-                self.profile_shortcut("io_bind_return_action", 1);
-                let next = self.app(args[1], result);
-                let mut node = self.app(next, args[2]);
-                let in_place = self.apply_reduction_spine(&mut node, 3, args, apps);
-                return Ok(Some(self.step_result(&profile_head, node, in_place, 2)));
-            }
-        }
-
-        let rewrite = match known {
-            Some(I | Ord | Chr) if !args.is_empty() => Some((1, args[0])),
-            Some(K) if args.len() >= 2 => Some((2, args[0])),
-            Some(A) if args.len() >= 2 => Some((2, args[1])),
-            Some(U) if args.len() >= 2 => {
-                app_step!(2, args[1], args[0]);
-            }
-            Some(IoPerformIo) if !args.is_empty() => {
-                let world = self.world();
-                let k = self.prim("K");
-                let action = self.app(args[0], world);
-                let n = self.app(action, k);
-                Some((1, n))
-            }
-            Some(IoAtomic) if args.len() >= 2 => {
-                let k = self.prim("K");
-                let action = self.app(args[0], args[1]);
-                let result = self.app(action, k);
-                let pair = self.prim("P");
-                let result_pair = self.app(pair, result);
-                let n = self.app(result_pair, args[1]);
-                Some((2, n))
-            }
-            Some(IoBind) if args.len() >= 3 => {
-                let action = self.app(args[0], args[2]);
-                let n = self.app(action, args[1]);
-                Some((3, n))
-            }
-            Some(IoThen) if args.len() >= 2 => {
-                let bind = self.prim("IO.>>=");
-                let bind_action = self.app(bind, args[0]);
-                let k = self.prim("K");
-                let then = self.app(k, args[1]);
-                let n = self.app(bind_action, then);
-                Some((2, n))
-            }
-            Some(IoReturn) if args.len() >= 3 => {
-                let kx = self.app(args[2], args[0]);
-                let n = self.app(kx, args[1]);
-                Some((3, n))
-            }
-            Some(IoLazyBind) if args.len() >= 3 => {
-                let world_result = self.app(args[0], args[2]);
-                let fst = self.fst();
-                let snd = self.snd();
-                let result = self.app(fst, world_result);
-                let world = self.app(snd, world_result);
-                let next = self.app(args[1], result);
-                let n = self.app(next, world);
-                Some((3, n))
-            }
-            Some(IoStrict) if args.len() >= 2 => {
-                self.reduce_node_whnf_with_frames(args[1], FORCE_REDUCTION_LIMIT)?;
-                let n = self.app(args[0], args[1]);
-                Some((2, n))
-            }
-            Some(IoGc) if args.len() >= 2 => {
-                let unit = self.prim("I");
-                Some((2, self.pair(unit, args[1])))
-            }
-            Some(IoStats) if !args.is_empty() => {
-                let alloc = self.int(i64::try_from(self.nodes.len()).unwrap_or(i64::MAX));
-                let reductions = self.int(i64::try_from(self.reductions).unwrap_or(i64::MAX));
-                let stats = self.pair(alloc, reductions);
-                Some((1, self.pair(stats, args[0])))
-            }
-            Some(IoPp) if args.len() >= 2 => {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let rendered = self.render(args[0]);
-                    eprintln!("{rendered}");
-                }
-                let unit = self.prim("I");
-                Some((2, self.pair(unit, args[1])))
-            }
-            Some(IoPrint) if args.len() >= 3 => {
-                let handle = self.eval_io_handle(args[0])?;
-                let value = self.reduce_node_whnf(args[1], FORCE_REDUCTION_LIMIT)?;
-                let rendered = self.render(value);
-                self.write_io_handle(handle, &format!("{rendered}\n"))?;
-                let unit = self.prim("I");
-                Some((3, self.pair(unit, args[2])))
-            }
-            Some(IoSerialize) if args.len() >= 3 => {
-                let handle = self.eval_io_handle(args[0])?;
-                let value = self.reduce_node_whnf(args[1], FORCE_REDUCTION_LIMIT)?;
-                let serialized = self.serialize_program(value)?;
-                self.write_io_handle_bytes(handle, &serialized)?;
-                let unit = self.prim("I");
-                Some((3, self.pair(unit, args[2])))
-            }
-            Some(IoGetArgRef) if !args.is_empty() => {
-                let arg_array = self.arg_ref_array();
-                Some((1, self.pair(arg_array, args[0])))
-            }
-            Some(IoThid) if !args.is_empty() => {
-                let thread = self.push_node(Node::ThreadId(1));
-                Some((1, self.pair(thread, args[0])))
-            }
-            Some(IoYield) if !args.is_empty() => {
-                let unit = self.prim("I");
-                Some((1, self.pair(unit, args[0])))
-            }
-            Some(IoGetMaskingState) if !args.is_empty() => {
-                let state = self.int(self.masking_state);
-                Some((1, self.pair(state, args[0])))
-            }
-            Some(IoSetMaskingState) if args.len() >= 2 => {
-                self.masking_state = self.eval_int(args[0])?;
-                let unit = self.prim("I");
-                Some((2, self.pair(unit, args[1])))
-            }
-            Some(Dynsym) if !args.is_empty() => {
-                let name = self.eval_ffi_name(args[0])?;
-                Some((1, self.push_node(Node::Ffi(name))))
-            }
-            Some(IoThreadStatus) if args.len() >= 2 => {
-                self.eval_thread_id(args[0])?;
-                let status = self.int(0);
-                Some((2, self.pair(status, args[1])))
-            }
-            Some(IoNewMVar) if !args.is_empty() => {
-                let mvar = self.push_node(Node::MVar(None));
-                Some((1, self.pair(mvar, args[0])))
-            }
-            Some(IoTakeMVar) if args.len() >= 2 => {
-                let mvar = self.eval_mvar_id(args[0])?;
-                let value = self.take_mvar(mvar)?.ok_or(EvalError::InvalidMVar)?;
-                Some((2, self.pair(value, args[1])))
-            }
-            Some(IoReadMVar) if args.len() >= 2 => {
-                let mvar = self.eval_mvar_id(args[0])?;
-                let value = self.read_mvar(mvar)?.ok_or(EvalError::InvalidMVar)?;
-                Some((2, self.pair(value, args[1])))
-            }
-            Some(IoPutMVar) if args.len() >= 3 => {
-                let mvar = self.eval_mvar_id(args[0])?;
-                self.put_mvar(mvar, args[1])?;
-                let unit = self.prim("I");
-                Some((3, self.pair(unit, args[2])))
-            }
-            Some(IoTryTakeMVar) if args.len() >= 2 => {
-                let mvar = self.eval_mvar_id(args[0])?;
-                let value = match self.take_mvar(mvar)? {
-                    Some(value) => self.just(value),
-                    None => self.nothing(),
-                };
-                Some((2, self.pair(value, args[1])))
-            }
-            Some(IoTryReadMVar) if args.len() >= 2 => {
-                let mvar = self.eval_mvar_id(args[0])?;
-                let value = match self.read_mvar(mvar)? {
-                    Some(value) => self.just(value),
-                    None => self.nothing(),
-                };
-                Some((2, self.pair(value, args[1])))
-            }
-            Some(IoTryPutMVar) if args.len() >= 3 => {
-                let mvar = self.eval_mvar_id(args[0])?;
-                let value = if self.try_put_mvar(mvar, args[1])? {
-                    self.prim("A")
-                } else {
-                    self.prim("K")
-                };
-                Some((3, self.pair(value, args[2])))
-            }
-            Some(Catch) if args.len() >= 3 => {
-                let action = self.app(args[0], args[2]);
-                Some((3, self.catch_result(action, args[1], args[2])?))
-            }
-            Some(CatchR) if args.len() >= 3 => {
-                Some((3, self.catch_result(args[0], args[1], args[2])?))
-            }
-            Some(Raise) if !args.is_empty() => return Err(EvalError::Raised(args[0])),
-            Some(Rnf) if args.len() >= 2 => {
-                let noerr = self.eval_int(args[0])? != 0;
-                self.rnf(noerr, args[1])?;
-                Some((2, self.prim("I")))
-            }
-            Some(Seq) if args.len() >= 2 => {
-                self.reduce_node_whnf_with_frames(args[0], FORCE_REDUCTION_LIMIT)?;
-                Some((2, args[1]))
-            }
-            Some(IsInt) if !args.is_empty() => {
-                let root = self.reduce_node_whnf_with_frames(args[0], FORCE_REDUCTION_LIMIT)?;
-                let n = match self.nodes[self.resolve(root)?.0] {
-                    Node::Int(n) => n,
-                    _ => -1,
-                };
-                Some((1, self.int(n)))
-            }
-            Some(Thnum) if !args.is_empty() => {
-                let thread = self.eval_thread_id(args[0])?;
-                Some((1, self.int(thread)))
-            }
-            Some(S) if args.len() >= 3 => {
-                let x = args[2];
-                let left = self.app(args[0], x);
-                let right = self.app(args[1], x);
-                app_step!(3, left, right);
-            }
-            Some(SPrime) if args.len() >= 4 => {
-                let yw = self.app(args[1], args[3]);
-                let zw = self.app(args[2], args[3]);
-                let left = self.app(args[0], yw);
-                app_step!(4, left, zw);
-            }
-            Some(B) if args.len() >= 3 => {
-                let yz = self.app(args[1], args[2]);
-                app_step!(3, args[0], yz);
-            }
-            Some(BPrime) if args.len() >= 4 => {
-                let zw = self.app(args[2], args[3]);
-                let xy = self.app(args[0], args[1]);
-                app_step!(4, xy, zw);
-            }
-            Some(BPrime) if args.len() >= 2 => {
-                let xy = self.app(args[0], args[1]);
-                let b = self.prim("B");
-                app_step!(2, b, xy);
-            }
-            Some(Z) if args.len() >= 3 => {
-                app_step!(3, args[0], args[1]);
-            }
-            Some(Z) if args.len() >= 2 => {
-                let xy = self.app(args[0], args[1]);
-                let k = self.prim("K");
-                app_step!(2, k, xy);
-            }
-            Some(J) if args.len() >= 3 => {
-                app_step!(3, args[2], args[0]);
-            }
-            Some(L) if args.len() >= 3 => {
-                app_step!(3, args[1], args[0]);
-            }
-            Some(KK) if args.len() >= 3 => Some((3, args[1])),
-            Some(KA) if args.len() >= 3 => Some((3, args[2])),
-            Some(C) if args.len() >= 3 => {
-                let xz = self.app(args[0], args[2]);
-                app_step!(3, xz, args[1]);
-            }
-            Some(CPrime) if args.len() >= 4 => {
-                let yw = self.app(args[1], args[3]);
-                let xyw = self.app(args[0], yw);
-                app_step!(4, xyw, args[2]);
-            }
-            Some(P) if args.len() >= 3 => {
-                let zx = self.app(args[2], args[0]);
-                app_step!(3, zx, args[1]);
-            }
-            Some(R) if args.len() >= 3 => {
-                let yz = self.app(args[1], args[2]);
-                app_step!(3, yz, args[0]);
-            }
-            Some(R) if args.len() >= 2 => {
-                let c = self.prim("C");
-                let cy = self.app(c, args[1]);
-                app_step!(2, cy, args[0]);
-            }
-            Some(O) if args.len() >= 4 => {
-                let wx = self.app(args[3], args[0]);
-                app_step!(4, wx, args[1]);
-            }
-            Some(K2) if args.len() >= 3 => Some((3, args[0])),
-            Some(K2) if args.len() >= 2 => {
-                let k = self.prim("K");
-                app_step!(2, k, args[0]);
-            }
-            Some(K3) if args.len() >= 4 => Some((4, args[0])),
-            Some(K3) if args.len() >= 2 => {
-                let k2 = self.prim("K2");
-                app_step!(2, k2, args[0]);
-            }
-            Some(K4) if args.len() >= 5 => Some((5, args[0])),
-            Some(K4) if args.len() >= 2 => {
-                let k3 = self.prim("K3");
-                app_step!(2, k3, args[0]);
-            }
-            Some(CPrimeB) if args.len() >= 4 => {
-                let yw = self.app(args[1], args[3]);
-                let xz = self.app(args[0], args[2]);
-                app_step!(4, xz, yw);
-            }
-            Some(CPrimeB) if args.len() >= 3 => {
-                let xz = self.app(args[0], args[2]);
-                let b = self.prim("B");
-                let bxz = self.app(b, xz);
-                app_step!(3, bxz, args[1]);
-            }
-            Some(Y) if !args.is_empty() => {
-                app_step!(1, args[0], apps[0]);
-            }
-            Some(Tag(tag)) if args.len() >= 2 => {
-                let tag = self.int(i64::from(tag));
-                let ytag = self.app(args[1], tag);
-                app_step!(2, ytag, args[0]);
-            }
-            Some(Tuple(fields)) if args.len() > usize::from(fields) => {
-                let fields = usize::from(fields);
-                if budget >= 2 {
-                    let selector = args[fields];
-                    let available_extra = args.len() - fields - 1;
-                    if let Some(extra_used) =
-                        self.tuple_first_field_selector_extra(selector, fields, available_extra)?
-                    {
-                        self.profile_shortcut("tuple_first_field_selector", 1);
-                        let mut node = args[0];
-                        let used = fields + 1 + extra_used;
-                        let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
-                        return Ok(Some(self.step_result(&profile_head, node, in_place, 2)));
-                    }
-                }
-                let mut n = args[fields];
-                for arg in &args[..fields - 1] {
-                    n = self.app(n, *arg);
-                }
-                app_step!(fields + 1, n, args[fields - 1]);
-            }
-            _ if args.len() >= 2 => {
-                let name = prim.name();
-                self.array_op(name, &args)?
-                    .or(self.foreign_ptr_op(name, &args)?)
-                    .or(self.stable_ptr_op(name, &args)?)
-                    .or(self.weak_ptr_op(name, &args)?)
-                    .or(self.bytes_op(name, &args)?)
-                    .or(self.float64_binop(name, &args)?)
-                    .or(self.float32_binop(name, &args)?)
-                    .or(self.int64_binop(name, &args)?)
-                    .or(self.int_binop(name, &args)?)
-                    .or(self.array_unop(name, &args)?)
-                    .or(self.bytes_unop(name, &args)?)
-                    .or(self.float64_unop(name, &args)?)
-                    .or(self.float32_unop(name, &args)?)
-                    .or(self.pointer_conversion(name, &args)?)
-                    .or(self.float_conversion(name, &args)?)
-                    .or(self.int64_unop(name, &args)?)
-                    .or(self.int_conversion(name, &args)?)
-                    .or(self.int_unop(name, &args)?)
-            }
-            _ if !args.is_empty() => {
-                let name = prim.name();
-                self.array_unop(name, &args)?
-                    .or(self.foreign_ptr_unop(name, &args)?)
-                    .or(self.stable_ptr_unop(name, &args)?)
-                    .or(self.weak_ptr_unop(name, &args)?)
-                    .or(self.bytes_unop(name, &args)?)
-                    .or(self.float64_unop(name, &args)?)
-                    .or(self.float32_unop(name, &args)?)
-                    .or(self.pointer_conversion(name, &args)?)
-                    .or(self.float_conversion(name, &args)?)
-                    .or(self.int64_unop(name, &args)?)
-                    .or(self.int_conversion(name, &args)?)
-                    .or(self.int_unop(name, &args)?)
-            }
-            _ => None,
-        };
-
-        let Some((mut used, mut node)) = rewrite else {
-            let name = prim.name();
-            if !args.is_empty() && !is_supported_runtime_prim_name(name) {
-                return Err(EvalError::UnknownPrim(name.to_owned()));
-            }
-            return Ok(None);
-        };
-        let mut reductions = 1;
-        if matches!(known, Some(I | Ord | Chr)) {
-            let mut alias_shortcuts = 0;
-            while reductions < budget && used < args.len() && self.is_identity_alias_node(node)? {
-                node = args[used];
-                used += 1;
-                reductions += 1;
-                alias_shortcuts += 1;
-            }
-            self.profile_shortcut("identity_alias_chain", alias_shortcuts);
-        }
-        let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
-        Ok(Some(self.step_result(
-            &profile_head,
-            node,
-            in_place,
-            reductions,
-        )))
-    }
-
     fn ignored_io_action_reductions(
         &mut self,
         action: NodeId,
@@ -3058,31 +2458,6 @@ impl Program {
         in_place
     }
 
-    fn apply_reduction_app(
-        &mut self,
-        used: usize,
-        args: &[NodeId],
-        apps: &[NodeId],
-        fun: NodeId,
-        arg: NodeId,
-    ) -> (NodeId, bool) {
-        debug_assert!(used <= args.len());
-        debug_assert!(args.len() <= apps.len());
-        if used == 0 {
-            let mut node = self.app(fun, arg);
-            let in_place = self.apply_reduction_spine(&mut node, used, args, apps);
-            return (node, in_place);
-        }
-
-        let mut node = apps[used - 1];
-        self.nodes[node.0] = Node::App(fun, arg);
-        for (arg, app) in args[used..].iter().zip(&apps[used..]) {
-            self.nodes[app.0] = Node::App(node, *arg);
-            node = *app;
-        }
-        (node, true)
-    }
-
     fn is_identity_alias_node(&mut self, id: NodeId) -> Result<bool, EvalError> {
         let id = self.resolve_profiled(id)?;
         Ok(matches!(
@@ -3260,66 +2635,11 @@ impl Program {
         }
     }
 
-    fn begin_int_force_frame(
-        &mut self,
-        root: NodeId,
-    ) -> Result<Option<(IntFrame, NodeId)>, EvalError> {
-        let spine = self.spine(root)?;
-        let head = spine.head;
-        let args = spine.args();
-        let Some(prim_name) = (match &self.nodes[head.0] {
-            Node::Prim(name) => Some(name.name()),
-            _ => None,
-        }) else {
-            return Ok(None);
-        };
-
-        let force = if args.len() >= 2 {
-            IntBinOp::from_prim(prim_name)
-                .map(|op| (2, IntFrameKind::BinSecond { op, x: args[0] }, args[1]))
-        } else {
-            None
-        }
-        .or_else(|| {
-            if args.is_empty() {
-                None
-            } else {
-                IntUnOp::from_prim(prim_name).map(|op| (1, IntFrameKind::Un { op }, args[0]))
-            }
-        });
-        let Some((used, kind, next)) = force else {
-            return Ok(None);
-        };
-
-        let profile_head = if self.profile.is_some() {
-            let heap_spine = matches!(&spine.storage, SpineStorage::Heap { .. });
-            self.profile_step(head, args.len(), heap_spine)
-        } else {
-            None
-        };
-        let redex = if args.len() == used {
-            StrictRedex::Root(root)
-        } else {
-            StrictRedex::Spine {
-                root,
-                used,
-                args: args.to_vec(),
-                apps: spine.apps().to_vec(),
-            }
-        };
-        let frame = IntFrame {
-            redex,
-            profile_head,
-            kind,
-        };
-        Ok(Some((frame, next)))
-    }
-
     fn finish_int_frame(
         &mut self,
         frame: IntFrame,
         value: i64,
-        stack: &mut impl PushIntFrame,
+        stack: &mut EvalFrameStack,
     ) -> Result<(NodeId, usize), EvalError> {
         let result = match frame.kind {
             IntFrameKind::BinSecond { op, x } => {
@@ -3329,7 +2649,7 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: IntFrameKind::BinFirst { op, y: value },
                 };
-                stack.push_int_frame(next_frame);
+                stack.push(EvalFrame::Int(next_frame));
                 return Ok((next, 0));
             }
             IntFrameKind::BinFirst { op, y } => op
@@ -3368,47 +2688,6 @@ impl Program {
         Ok((node, 1))
     }
 
-    fn force_int(&mut self, root: NodeId, limit: usize) -> Result<i64, EvalError> {
-        let mut current = self.resolve(root)?;
-        let mut steps = 0;
-        let mut stack = IntFrameStack::default();
-        loop {
-            let current_resolved = self.resolve(current)?;
-            if let Node::Int(value) = self.nodes[current_resolved.0] {
-                let Some(frame) = stack.pop() else {
-                    return Ok(value);
-                };
-                let (next, reductions) = self.finish_int_frame(frame, value, &mut stack)?;
-                steps += reductions;
-                self.reductions += reductions;
-                if steps >= limit {
-                    return Err(EvalError::StepLimit { limit });
-                }
-                current = next;
-                continue;
-            }
-
-            if let Some((frame, next)) = self.begin_int_force_frame(current_resolved)? {
-                stack.push(frame);
-                current = next;
-                continue;
-            }
-
-            if steps >= limit {
-                return Err(EvalError::StepLimit { limit });
-            }
-            let Some(step) = self.step(current_resolved, limit - steps)? else {
-                return Err(EvalError::ExpectedInt(current_resolved));
-            };
-            steps += step.reductions;
-            self.reductions += step.reductions;
-            if !step.in_place && step.node != current_resolved {
-                self.nodes[current_resolved.0] = Node::Indir(Some(step.node));
-            }
-            current = step.node;
-        }
-    }
-
     fn int64_result_node(&mut self, result: Int64Result) -> NodeId {
         match result {
             Int64Result::Int64(n) => self.push_node(Node::Int64(n)),
@@ -3424,69 +2703,11 @@ impl Program {
         }
     }
 
-    fn begin_int64_force_frame(
-        &mut self,
-        root: NodeId,
-    ) -> Result<Option<(Int64Frame, NodeId)>, EvalError> {
-        let spine = self.spine(root)?;
-        let head = spine.head;
-        let args = spine.args();
-        let Some(prim_name) = (match &self.nodes[head.0] {
-            Node::Prim(name) => Some(name.name()),
-            _ => None,
-        }) else {
-            return Ok(None);
-        };
-
-        let force = if args.len() >= 2 {
-            if let Some(op) = Int64BinOp::from_prim(prim_name) {
-                if op.rhs_is_shift() {
-                    let y = self.eval_int(args[1])?;
-                    Some((2, Int64FrameKind::ShiftFirst { op, y }, args[0]))
-                } else {
-                    Some((2, Int64FrameKind::BinSecond { op, x: args[0] }, args[1]))
-                }
-            } else {
-                None
-            }
-        } else if !args.is_empty() {
-            Int64UnOp::from_prim(prim_name).map(|op| (1, Int64FrameKind::Un { op }, args[0]))
-        } else {
-            None
-        };
-        let Some((used, kind, next)) = force else {
-            return Ok(None);
-        };
-
-        let profile_head = if self.profile.is_some() {
-            let heap_spine = matches!(&spine.storage, SpineStorage::Heap { .. });
-            self.profile_step(head, args.len(), heap_spine)
-        } else {
-            None
-        };
-        let redex = if args.len() == used {
-            StrictRedex::Root(root)
-        } else {
-            StrictRedex::Spine {
-                root,
-                used,
-                args: args.to_vec(),
-                apps: spine.apps().to_vec(),
-            }
-        };
-        let frame = Int64Frame {
-            redex,
-            profile_head,
-            kind,
-        };
-        Ok(Some((frame, next)))
-    }
-
     fn finish_int64_frame(
         &mut self,
         frame: Int64Frame,
         value: i64,
-        stack: &mut impl PushInt64Frame,
+        stack: &mut EvalFrameStack,
     ) -> Result<(NodeId, usize), EvalError> {
         let node = match frame.kind {
             Int64FrameKind::BinSecond { op, x } => {
@@ -3496,7 +2717,7 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: Int64FrameKind::BinFirst { op, y: value },
                 };
-                stack.push_int64_frame(next_frame);
+                stack.push(EvalFrame::Int64(next_frame));
                 return Ok((next, 0));
             }
             Int64FrameKind::BinFirst { op, y } => {
@@ -3869,47 +3090,6 @@ impl Program {
         Err(EvalError::StepLimit { limit })
     }
 
-    fn force_int64(&mut self, root: NodeId, limit: usize) -> Result<i64, EvalError> {
-        let mut current = self.resolve(root)?;
-        let mut steps = 0;
-        let mut stack = Int64FrameStack::default();
-        loop {
-            let current_resolved = self.resolve(current)?;
-            if let Node::Int64(value) = self.nodes[current_resolved.0] {
-                let Some(frame) = stack.pop() else {
-                    return Ok(value);
-                };
-                let (next, reductions) = self.finish_int64_frame(frame, value, &mut stack)?;
-                steps += reductions;
-                self.reductions += reductions;
-                if steps >= limit {
-                    return Err(EvalError::StepLimit { limit });
-                }
-                current = next;
-                continue;
-            }
-
-            if let Some((frame, next)) = self.begin_int64_force_frame(current_resolved)? {
-                stack.push(frame);
-                current = next;
-                continue;
-            }
-
-            if steps >= limit {
-                return Err(EvalError::StepLimit { limit });
-            }
-            let Some(step) = self.step(current_resolved, limit - steps)? else {
-                return Err(EvalError::ExpectedInt64(current_resolved));
-            };
-            steps += step.reductions;
-            self.reductions += step.reductions;
-            if !step.in_place && step.node != current_resolved {
-                self.nodes[current_resolved.0] = Node::Indir(Some(step.node));
-            }
-            current = step.node;
-        }
-    }
-
     fn float64_result_node(&mut self, result: Float64Result) -> NodeId {
         match result {
             Float64Result::Float(n) => self.push_node(Node::Float64(n)),
@@ -3917,67 +3097,11 @@ impl Program {
         }
     }
 
-    fn begin_float64_force_frame(
-        &mut self,
-        root: NodeId,
-    ) -> Result<Option<(Float64Frame, NodeId)>, EvalError> {
-        let spine = self.spine(root)?;
-        let head = spine.head;
-        let args = spine.args();
-        let Some(prim_name) = (match &self.nodes[head.0] {
-            Node::Prim(name) => Some(name.name()),
-            _ => None,
-        }) else {
-            return Ok(None);
-        };
-
-        let force = if args.len() >= 2 {
-            Float64BinOp::from_prim(prim_name)
-                .map(|op| (2, Float64FrameKind::BinSecond { op, x: args[0] }, args[1]))
-        } else {
-            None
-        }
-        .or_else(|| {
-            if args.is_empty() {
-                None
-            } else {
-                Float64UnOp::from_prim(prim_name)
-                    .map(|op| (1, Float64FrameKind::Un { op }, args[0]))
-            }
-        });
-        let Some((used, kind, next)) = force else {
-            return Ok(None);
-        };
-
-        let profile_head = if self.profile.is_some() {
-            let heap_spine = matches!(&spine.storage, SpineStorage::Heap { .. });
-            self.profile_step(head, args.len(), heap_spine)
-        } else {
-            None
-        };
-        let redex = if args.len() == used {
-            StrictRedex::Root(root)
-        } else {
-            StrictRedex::Spine {
-                root,
-                used,
-                args: args.to_vec(),
-                apps: spine.apps().to_vec(),
-            }
-        };
-        let frame = Float64Frame {
-            redex,
-            profile_head,
-            kind,
-        };
-        Ok(Some((frame, next)))
-    }
-
     fn finish_float64_frame(
         &mut self,
         frame: Float64Frame,
         value: f64,
-        stack: &mut impl PushFloat64Frame,
+        stack: &mut EvalFrameStack,
     ) -> (NodeId, usize) {
         let node = match frame.kind {
             Float64FrameKind::BinSecond { op, x } => {
@@ -3987,7 +3111,7 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: Float64FrameKind::BinFirst { op, y: value },
                 };
-                stack.push_float64_frame(next_frame);
+                stack.push(EvalFrame::Float64(next_frame));
                 return (next, 0);
             }
             Float64FrameKind::BinFirst { op, y } => self.float64_result_node(op.apply(value, y)),
@@ -4001,47 +3125,6 @@ impl Program {
         (node, 1)
     }
 
-    fn force_float64(&mut self, root: NodeId, limit: usize) -> Result<f64, EvalError> {
-        let mut current = self.resolve(root)?;
-        let mut steps = 0;
-        let mut stack = Float64FrameStack::default();
-        loop {
-            let current_resolved = self.resolve(current)?;
-            if let Node::Float64(value) = self.nodes[current_resolved.0] {
-                let Some(frame) = stack.pop() else {
-                    return Ok(value);
-                };
-                let (next, reductions) = self.finish_float64_frame(frame, value, &mut stack);
-                steps += reductions;
-                self.reductions += reductions;
-                if steps >= limit {
-                    return Err(EvalError::StepLimit { limit });
-                }
-                current = next;
-                continue;
-            }
-
-            if let Some((frame, next)) = self.begin_float64_force_frame(current_resolved)? {
-                stack.push(frame);
-                current = next;
-                continue;
-            }
-
-            if steps >= limit {
-                return Err(EvalError::StepLimit { limit });
-            }
-            let Some(step) = self.step(current_resolved, limit - steps)? else {
-                return Err(EvalError::ExpectedFloat64(current_resolved));
-            };
-            steps += step.reductions;
-            self.reductions += step.reductions;
-            if !step.in_place && step.node != current_resolved {
-                self.nodes[current_resolved.0] = Node::Indir(Some(step.node));
-            }
-            current = step.node;
-        }
-    }
-
     fn float32_result_node(&mut self, result: Float32Result) -> NodeId {
         match result {
             Float32Result::Float(n) => self.push_node(Node::Float32(n)),
@@ -4049,67 +3132,11 @@ impl Program {
         }
     }
 
-    fn begin_float32_force_frame(
-        &mut self,
-        root: NodeId,
-    ) -> Result<Option<(Float32Frame, NodeId)>, EvalError> {
-        let spine = self.spine(root)?;
-        let head = spine.head;
-        let args = spine.args();
-        let Some(prim_name) = (match &self.nodes[head.0] {
-            Node::Prim(name) => Some(name.name()),
-            _ => None,
-        }) else {
-            return Ok(None);
-        };
-
-        let force = if args.len() >= 2 {
-            Float32BinOp::from_prim(prim_name)
-                .map(|op| (2, Float32FrameKind::BinSecond { op, x: args[0] }, args[1]))
-        } else {
-            None
-        }
-        .or_else(|| {
-            if args.is_empty() {
-                None
-            } else {
-                Float32UnOp::from_prim(prim_name)
-                    .map(|op| (1, Float32FrameKind::Un { op }, args[0]))
-            }
-        });
-        let Some((used, kind, next)) = force else {
-            return Ok(None);
-        };
-
-        let profile_head = if self.profile.is_some() {
-            let heap_spine = matches!(&spine.storage, SpineStorage::Heap { .. });
-            self.profile_step(head, args.len(), heap_spine)
-        } else {
-            None
-        };
-        let redex = if args.len() == used {
-            StrictRedex::Root(root)
-        } else {
-            StrictRedex::Spine {
-                root,
-                used,
-                args: args.to_vec(),
-                apps: spine.apps().to_vec(),
-            }
-        };
-        let frame = Float32Frame {
-            redex,
-            profile_head,
-            kind,
-        };
-        Ok(Some((frame, next)))
-    }
-
     fn finish_float32_frame(
         &mut self,
         frame: Float32Frame,
         value: f32,
-        stack: &mut impl PushFloat32Frame,
+        stack: &mut EvalFrameStack,
     ) -> (NodeId, usize) {
         let node = match frame.kind {
             Float32FrameKind::BinSecond { op, x } => {
@@ -4119,7 +3146,7 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: Float32FrameKind::BinFirst { op, y: value },
                 };
-                stack.push_float32_frame(next_frame);
+                stack.push(EvalFrame::Float32(next_frame));
                 return (next, 0);
             }
             Float32FrameKind::BinFirst { op, y } => self.float32_result_node(op.apply(value, y)),
@@ -4131,47 +3158,6 @@ impl Program {
         }
         let node = self.apply_strict_redex(frame.redex, node);
         (node, 1)
-    }
-
-    fn force_float32(&mut self, root: NodeId, limit: usize) -> Result<f32, EvalError> {
-        let mut current = self.resolve(root)?;
-        let mut steps = 0;
-        let mut stack = Float32FrameStack::default();
-        loop {
-            let current_resolved = self.resolve(current)?;
-            if let Node::Float32(value) = self.nodes[current_resolved.0] {
-                let Some(frame) = stack.pop() else {
-                    return Ok(value);
-                };
-                let (next, reductions) = self.finish_float32_frame(frame, value, &mut stack);
-                steps += reductions;
-                self.reductions += reductions;
-                if steps >= limit {
-                    return Err(EvalError::StepLimit { limit });
-                }
-                current = next;
-                continue;
-            }
-
-            if let Some((frame, next)) = self.begin_float32_force_frame(current_resolved)? {
-                stack.push(frame);
-                current = next;
-                continue;
-            }
-
-            if steps >= limit {
-                return Err(EvalError::StepLimit { limit });
-            }
-            let Some(step) = self.step(current_resolved, limit - steps)? else {
-                return Err(EvalError::ExpectedFloat32(current_resolved));
-            };
-            steps += step.reductions;
-            self.reductions += step.reductions;
-            if !step.in_place && step.node != current_resolved {
-                self.nodes[current_resolved.0] = Node::Indir(Some(step.node));
-            }
-            current = step.node;
-        }
     }
 
     fn bytes_bin_result_node(
@@ -4215,55 +3201,11 @@ impl Program {
         Ok(node)
     }
 
-    fn begin_bytes_force_frame(
-        &mut self,
-        root: NodeId,
-    ) -> Result<Option<(BytesFrame, NodeId)>, EvalError> {
-        let spine = self.spine(root)?;
-        let head = spine.head;
-        let args = spine.args();
-        let Some(prim_name) = (match &self.nodes[head.0] {
-            Node::Prim(name) => Some(name.name()),
-            _ => None,
-        }) else {
-            return Ok(None);
-        };
-        if args.len() < 2 {
-            return Ok(None);
-        }
-        let Some(op) = BytesBinOp::from_prim(prim_name) else {
-            return Ok(None);
-        };
-
-        let profile_head = if self.profile.is_some() {
-            let heap_spine = matches!(&spine.storage, SpineStorage::Heap { .. });
-            self.profile_step(head, args.len(), heap_spine)
-        } else {
-            None
-        };
-        let redex = if args.len() == 2 {
-            StrictRedex::Root(root)
-        } else {
-            StrictRedex::Spine {
-                root,
-                used: 2,
-                args: args.to_vec(),
-                apps: spine.apps().to_vec(),
-            }
-        };
-        let frame = BytesFrame {
-            redex,
-            profile_head,
-            kind: BytesFrameKind::BinSecond { op, x: args[0] },
-        };
-        Ok(Some((frame, args[1])))
-    }
-
     fn finish_bytes_frame(
         &mut self,
         frame: BytesFrame,
         value: NodeId,
-        stack: &mut impl PushBytesFrame,
+        stack: &mut EvalFrameStack,
     ) -> Result<(NodeId, usize), EvalError> {
         let node = match frame.kind {
             BytesFrameKind::BinSecond { op, x } => {
@@ -4273,7 +3215,7 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: BytesFrameKind::BinFirst { op, y: value },
                 };
-                stack.push_bytes_frame(next_frame);
+                stack.push(EvalFrame::Bytes(next_frame));
                 return Ok((next, 0));
             }
             BytesFrameKind::BinFirst { op, y } => self.bytes_bin_result_node(op, value, y)?,
@@ -4284,57 +3226,6 @@ impl Program {
         }
         let node = self.apply_strict_redex(frame.redex, node);
         Ok((node, 1))
-    }
-
-    fn force_bytes_id_from_frame(
-        &mut self,
-        frame: BytesFrame,
-        next: NodeId,
-        limit: usize,
-    ) -> Result<NodeId, EvalError> {
-        let mut current = next;
-        let mut steps = 0;
-        let mut stack = BytesFrameStack::default();
-        stack.push(frame);
-        loop {
-            let current_resolved = self.resolve(current)?;
-            match self.nodes[current_resolved.0] {
-                Node::Bytes(_) | Node::MutableBytes { .. } => {
-                    let Some(frame) = stack.pop() else {
-                        return Ok(current_resolved);
-                    };
-                    let (next, reductions) =
-                        self.finish_bytes_frame(frame, current_resolved, &mut stack)?;
-                    steps += reductions;
-                    self.reductions += reductions;
-                    if steps >= limit {
-                        return Err(EvalError::StepLimit { limit });
-                    }
-                    current = next;
-                    continue;
-                }
-                _ => {}
-            }
-
-            if let Some((frame, next)) = self.begin_bytes_force_frame(current_resolved)? {
-                stack.push(frame);
-                current = next;
-                continue;
-            }
-
-            if steps >= limit {
-                return Err(EvalError::StepLimit { limit });
-            }
-            let Some(step) = self.step(current_resolved, limit - steps)? else {
-                return Err(EvalError::ExpectedBytes(current_resolved));
-            };
-            steps += step.reductions;
-            self.reductions += step.reductions;
-            if !step.in_place && step.node != current_resolved {
-                self.nodes[current_resolved.0] = Node::Indir(Some(step.node));
-            }
-            current = step.node;
-        }
     }
 
     fn int_binop(
@@ -6287,7 +5178,12 @@ impl Program {
         if let Node::Int(n) = self.nodes[root.0] {
             return Ok(n);
         }
-        self.force_int(root, FORCE_REDUCTION_LIMIT)
+        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
+        let root = self.resolve(root)?;
+        match self.nodes[root.0] {
+            Node::Int(n) => Ok(n),
+            _ => Err(EvalError::ExpectedInt(root)),
+        }
     }
 
     fn eval_int64(&mut self, id: NodeId) -> Result<i64, EvalError> {
@@ -6295,7 +5191,12 @@ impl Program {
         if let Node::Int64(n) = self.nodes[root.0] {
             return Ok(n);
         }
-        self.force_int64(root, FORCE_REDUCTION_LIMIT)
+        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
+        let root = self.resolve(root)?;
+        match self.nodes[root.0] {
+            Node::Int64(n) => Ok(n),
+            _ => Err(EvalError::ExpectedInt64(root)),
+        }
     }
 
     fn eval_float64(&mut self, id: NodeId) -> Result<f64, EvalError> {
@@ -6303,7 +5204,12 @@ impl Program {
         if let Node::Float64(n) = self.nodes[root.0] {
             return Ok(n);
         }
-        self.force_float64(root, FORCE_REDUCTION_LIMIT)
+        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
+        let root = self.resolve(root)?;
+        match self.nodes[root.0] {
+            Node::Float64(n) => Ok(n),
+            _ => Err(EvalError::ExpectedFloat64(root)),
+        }
     }
 
     fn eval_float32(&mut self, id: NodeId) -> Result<f32, EvalError> {
@@ -6311,7 +5217,12 @@ impl Program {
         if let Node::Float32(n) = self.nodes[root.0] {
             return Ok(n);
         }
-        self.force_float32(root, FORCE_REDUCTION_LIMIT)
+        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
+        let root = self.resolve(root)?;
+        match self.nodes[root.0] {
+            Node::Float32(n) => Ok(n),
+            _ => Err(EvalError::ExpectedFloat32(root)),
+        }
     }
 
     fn eval_bool(&mut self, id: NodeId) -> Result<bool, EvalError> {
@@ -6386,9 +5297,6 @@ impl Program {
         match self.nodes[root.0] {
             Node::Bytes(_) | Node::MutableBytes { .. } => return Ok(root),
             _ => {}
-        }
-        if let Some((frame, next)) = self.begin_bytes_force_frame(root)? {
-            return self.force_bytes_id_from_frame(frame, next, FORCE_REDUCTION_LIMIT);
         }
         let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
         let id = self.resolve(root)?;
