@@ -148,6 +148,24 @@ fn print_profile(profile: &EvalProfile, top: usize) {
     eprintln!("profile_reductions: {}", profile.reductions);
     eprintln!("profile_app_allocations: {}", profile.app_allocations);
     eprintln!(
+        "profile_arg_materializations: {}",
+        profile.arg_materializations
+    );
+    eprintln!(
+        "profile_arg_materialized_nodes: {}",
+        profile.arg_materialized_nodes
+    );
+    eprintln!("profile_spine_rewrites: {}", profile.spine_rewrites);
+    eprintln!(
+        "profile_spine_rewrite_extra_args: {}",
+        profile.spine_rewrite_extra_args
+    );
+    eprintln!("profile_app_rewrites: {}", profile.app_rewrites);
+    eprintln!(
+        "profile_app_rewrite_extra_args: {}",
+        profile.app_rewrite_extra_args
+    );
+    eprintln!(
         "profile_small_int_cache_hits: {}",
         profile.small_int_cache_hits
     );

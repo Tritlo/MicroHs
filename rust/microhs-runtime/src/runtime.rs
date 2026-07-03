@@ -607,6 +607,12 @@ pub struct EvalProfile {
     pub successful_steps: usize,
     pub reductions: usize,
     pub app_allocations: usize,
+    pub arg_materializations: usize,
+    pub arg_materialized_nodes: usize,
+    pub spine_rewrites: usize,
+    pub spine_rewrite_extra_args: usize,
+    pub app_rewrites: usize,
+    pub app_rewrite_extra_args: usize,
     pub small_int_cache_hits: usize,
     pub small_int_cache_misses: usize,
     pub non_small_int_allocations: usize,
@@ -1332,6 +1338,30 @@ impl Program {
     }
 
     #[cold]
+    fn profile_arg_materialization(&mut self, nodes: usize) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.arg_materializations += 1;
+            profile.arg_materialized_nodes += nodes;
+        }
+    }
+
+    #[cold]
+    fn profile_spine_rewrite(&mut self, extra_args: usize) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.spine_rewrites += 1;
+            profile.spine_rewrite_extra_args += extra_args;
+        }
+    }
+
+    #[cold]
+    fn profile_app_rewrite(&mut self, extra_args: usize) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.app_rewrites += 1;
+            profile.app_rewrite_extra_args += extra_args;
+        }
+    }
+
+    #[cold]
     fn profile_small_int_cache_hit(&mut self) {
         if let Some(profile) = self.profile.as_mut() {
             profile.small_int_cache_hits += 1;
@@ -1450,6 +1480,9 @@ impl Program {
         arg: NodeId,
         reductions: usize,
     ) -> EvalLoopStep {
+        if profile_head.is_some() {
+            self.profile_app_rewrite(spine.len() - used);
+        }
         let node = self.apply_eval_spine_app(root, spine, used, fun, arg);
         self.eval_loop_result(profile_head, node, reductions)
     }
@@ -1540,6 +1573,9 @@ impl Program {
         }
         macro_rules! rewrite_step {
             ($used:expr, $node:expr, $reductions:expr) => {{
+                if profile_head.is_some() {
+                    self.profile_spine_rewrite(spine.len() - $used);
+                }
                 let node = self.apply_eval_spine_rewrite(root, spine, $used, $node);
                 return Ok(Some(self.eval_loop_result(
                     &profile_head,
@@ -1593,6 +1629,9 @@ impl Program {
         let head_node = self.nodes[head.0].clone();
         match head_node {
             Node::Ffi(name) => {
+                if self.profile.is_some() {
+                    self.profile_arg_materialization(args_len);
+                }
                 spine.write_args_head_order(scratch_args);
                 let Some((used, node)) = self.ffi_call(&name, scratch_args.as_slice())? else {
                     return Ok(None);
@@ -1600,6 +1639,9 @@ impl Program {
                 rewrite_step!(used, node, 1);
             }
             Node::JsCall { tags, body } => {
+                if self.profile.is_some() {
+                    self.profile_arg_materialization(args_len);
+                }
                 spine.write_args_head_order(scratch_args);
                 let Some((used, node)) = self.js_call(&tags, &body, scratch_args.as_slice())?
                 else {
@@ -1608,6 +1650,9 @@ impl Program {
                 rewrite_step!(used, node, 1);
             }
             Node::JsWrap { tags } => {
+                if self.profile.is_some() {
+                    self.profile_arg_materialization(args_len);
+                }
                 spine.write_args_head_order(scratch_args);
                 let Some((used, node)) = self.js_wrap(&tags, scratch_args.as_slice())? else {
                     return Ok(None);
@@ -2087,6 +2132,9 @@ impl Program {
                     }
                     _ if args_len >= 2 => {
                         let name = prim.name();
+                        if self.profile.is_some() {
+                            self.profile_arg_materialization(args_len);
+                        }
                         spine.write_args_head_order(scratch_args);
                         let args = scratch_args.as_slice();
                         self.array_op(name, args)?
@@ -2110,6 +2158,9 @@ impl Program {
                     }
                     _ if args_len >= 1 => {
                         let name = prim.name();
+                        if self.profile.is_some() {
+                            self.profile_arg_materialization(args_len);
+                        }
                         spine.write_args_head_order(scratch_args);
                         let args = scratch_args.as_slice();
                         self.array_unop(name, args)?
@@ -2148,6 +2199,9 @@ impl Program {
                         alias_shortcuts += 1;
                     }
                     self.profile_shortcut("identity_alias_chain", alias_shortcuts);
+                }
+                if profile_head.is_some() {
+                    self.profile_spine_rewrite(args_len - used);
                 }
                 let node = self.apply_eval_spine_rewrite(root, spine, used, node);
                 Ok(Some(self.eval_loop_result(&profile_head, node, reductions)))
@@ -5173,118 +5227,111 @@ impl Program {
         }
     }
 
-    fn eval_int(&mut self, id: NodeId) -> Result<i64, EvalError> {
+    #[inline]
+    fn eval_whnf_value<T>(
+        &mut self,
+        id: NodeId,
+        extract: impl Fn(&Self, NodeId) -> Option<T>,
+        expected: impl Fn(NodeId) -> EvalError,
+    ) -> Result<T, EvalError> {
         let root = self.resolve(id)?;
-        if let Node::Int(n) = self.nodes[root.0] {
-            return Ok(n);
+        if let Some(value) = extract(self, root) {
+            return Ok(value);
         }
         let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
         let root = self.resolve(root)?;
-        match self.nodes[root.0] {
-            Node::Int(n) => Ok(n),
-            _ => Err(EvalError::ExpectedInt(root)),
-        }
+        extract(self, root).ok_or_else(|| expected(root))
+    }
+
+    fn eval_int(&mut self, id: NodeId) -> Result<i64, EvalError> {
+        self.eval_whnf_value(
+            id,
+            |program, root| match program.nodes[root.0] {
+                Node::Int(n) => Some(n),
+                _ => None,
+            },
+            EvalError::ExpectedInt,
+        )
     }
 
     fn eval_int64(&mut self, id: NodeId) -> Result<i64, EvalError> {
-        let root = self.resolve(id)?;
-        if let Node::Int64(n) = self.nodes[root.0] {
-            return Ok(n);
-        }
-        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
-        let root = self.resolve(root)?;
-        match self.nodes[root.0] {
-            Node::Int64(n) => Ok(n),
-            _ => Err(EvalError::ExpectedInt64(root)),
-        }
+        self.eval_whnf_value(
+            id,
+            |program, root| match program.nodes[root.0] {
+                Node::Int64(n) => Some(n),
+                _ => None,
+            },
+            EvalError::ExpectedInt64,
+        )
     }
 
     fn eval_float64(&mut self, id: NodeId) -> Result<f64, EvalError> {
-        let root = self.resolve(id)?;
-        if let Node::Float64(n) = self.nodes[root.0] {
-            return Ok(n);
-        }
-        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
-        let root = self.resolve(root)?;
-        match self.nodes[root.0] {
-            Node::Float64(n) => Ok(n),
-            _ => Err(EvalError::ExpectedFloat64(root)),
-        }
+        self.eval_whnf_value(
+            id,
+            |program, root| match program.nodes[root.0] {
+                Node::Float64(n) => Some(n),
+                _ => None,
+            },
+            EvalError::ExpectedFloat64,
+        )
     }
 
     fn eval_float32(&mut self, id: NodeId) -> Result<f32, EvalError> {
-        let root = self.resolve(id)?;
-        if let Node::Float32(n) = self.nodes[root.0] {
-            return Ok(n);
-        }
-        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
-        let root = self.resolve(root)?;
-        match self.nodes[root.0] {
-            Node::Float32(n) => Ok(n),
-            _ => Err(EvalError::ExpectedFloat32(root)),
-        }
+        self.eval_whnf_value(
+            id,
+            |program, root| match program.nodes[root.0] {
+                Node::Float32(n) => Some(n),
+                _ => None,
+            },
+            EvalError::ExpectedFloat32,
+        )
     }
 
     fn eval_bool(&mut self, id: NodeId) -> Result<bool, EvalError> {
-        let root = self.resolve(id)?;
-        match &self.nodes[root.0] {
-            Node::Prim(name) if name == "A" => return Ok(true),
-            Node::Prim(name) if name == "K" => return Ok(false),
-            _ => {}
-        }
-        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
-        match &self.nodes[self.resolve(root)?.0] {
-            Node::Prim(name) if name == "A" => Ok(true),
-            Node::Prim(name) if name == "K" => Ok(false),
-            _ => Err(EvalError::ExpectedInt(root)),
-        }
+        self.eval_whnf_value(
+            id,
+            |program, root| match &program.nodes[root.0] {
+                Node::Prim(name) if name == "A" => Some(true),
+                Node::Prim(name) if name == "K" => Some(false),
+                _ => None,
+            },
+            EvalError::ExpectedInt,
+        )
     }
 
     fn eval_thread_id(&mut self, id: NodeId) -> Result<i64, EvalError> {
-        let root = self.resolve(id)?;
-        if let Node::ThreadId(n) = self.nodes[root.0] {
-            return Ok(n);
-        }
-        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
-        match self.nodes[self.resolve(root)?.0] {
-            Node::ThreadId(n) => Ok(n),
-            _ => Err(EvalError::ExpectedThreadId(root)),
-        }
+        self.eval_whnf_value(
+            id,
+            |program, root| match program.nodes[root.0] {
+                Node::ThreadId(n) => Some(n),
+                _ => None,
+            },
+            EvalError::ExpectedThreadId,
+        )
     }
 
     fn eval_pointer_value(&mut self, id: NodeId) -> Result<i64, EvalError> {
-        let root = self.resolve(id)?;
-        match &self.nodes[root.0] {
-            Node::Int(n) | Node::Ptr(n) | Node::RawFunPtr(n) | Node::ThreadId(n) => return Ok(*n),
-            Node::Prim(name) => {
-                if let Some(ptr) = std_handle_ptr(name.name()) {
-                    return Ok(ptr);
-                }
-            }
-            _ => {}
-        }
-        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
-        match &self.nodes[self.resolve(root)?.0] {
-            Node::Int(n) | Node::Ptr(n) | Node::RawFunPtr(n) | Node::ThreadId(n) => Ok(*n),
-            Node::Prim(name) => std_handle_ptr(name.name()).ok_or(EvalError::ExpectedPointer(root)),
-            _ => Err(EvalError::ExpectedPointer(root)),
-        }
+        self.eval_whnf_value(
+            id,
+            |program, root| match &program.nodes[root.0] {
+                Node::Int(n) | Node::Ptr(n) | Node::RawFunPtr(n) | Node::ThreadId(n) => Some(*n),
+                Node::Prim(name) => std_handle_ptr(name.name()),
+                _ => None,
+            },
+            EvalError::ExpectedPointer,
+        )
     }
 
     fn eval_foreign_ptr_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
-        let root = self.resolve(id)?;
-        match &self.nodes[root.0] {
-            Node::ForeignPtr { .. } => return Ok(root),
-            Node::Prim(name) if std_handle(name.name()).is_some() => return Ok(root),
-            _ => {}
-        }
-        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
-        let id = self.resolve(root)?;
-        match &self.nodes[id.0] {
-            Node::ForeignPtr { .. } => Ok(id),
-            Node::Prim(name) if std_handle(name.name()).is_some() => Ok(id),
-            _ => Err(EvalError::ExpectedForeignPtr(root)),
-        }
+        self.eval_whnf_value(
+            id,
+            |program, root| match &program.nodes[root.0] {
+                Node::ForeignPtr { .. } => Some(root),
+                Node::Prim(name) if std_handle(name.name()).is_some() => Some(root),
+                _ => None,
+            },
+            EvalError::ExpectedForeignPtr,
+        )
     }
 
     fn eval_bytes(&mut self, id: NodeId) -> Result<Vec<u8>, EvalError> {
@@ -5293,30 +5340,25 @@ impl Program {
     }
 
     fn eval_bytes_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
-        let root = self.resolve(id)?;
-        match self.nodes[root.0] {
-            Node::Bytes(_) | Node::MutableBytes { .. } => return Ok(root),
-            _ => {}
-        }
-        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
-        let id = self.resolve(root)?;
-        match self.nodes[id.0] {
-            Node::Bytes(_) | Node::MutableBytes { .. } => Ok(id),
-            _ => Err(EvalError::ExpectedBytes(root)),
-        }
+        self.eval_whnf_value(
+            id,
+            |program, root| match program.nodes[root.0] {
+                Node::Bytes(_) | Node::MutableBytes { .. } => Some(root),
+                _ => None,
+            },
+            EvalError::ExpectedBytes,
+        )
     }
 
     fn eval_array_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
-        let root = self.resolve(id)?;
-        if let Node::Array(_) = self.nodes[root.0] {
-            return Ok(root);
-        }
-        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
-        let id = self.resolve(root)?;
-        match self.nodes[id.0] {
-            Node::Array(_) => Ok(id),
-            _ => Err(EvalError::ExpectedArray(root)),
-        }
+        self.eval_whnf_value(
+            id,
+            |program, root| match program.nodes[root.0] {
+                Node::Array(_) => Some(root),
+                _ => None,
+            },
+            EvalError::ExpectedArray,
+        )
     }
 
     fn array(&self, id: NodeId) -> Result<&[NodeId], EvalError> {
@@ -8048,12 +8090,14 @@ impl Program {
     }
 
     fn eval_weak_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
-        let root = self.reduce_node_whnf(id, FORCE_REDUCTION_LIMIT)?;
-        let id = self.resolve(root)?;
-        match self.nodes[id.0] {
-            Node::Weak { .. } => Ok(id),
-            _ => Err(EvalError::ExpectedWeak(root)),
-        }
+        self.eval_whnf_value(
+            id,
+            |program, root| match program.nodes[root.0] {
+                Node::Weak { .. } => Some(root),
+                _ => None,
+            },
+            EvalError::ExpectedWeak,
+        )
     }
 
     fn deref_weak_ptr(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
@@ -8083,12 +8127,14 @@ impl Program {
     }
 
     fn eval_mvar_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
-        let root = self.reduce_node_whnf(id, FORCE_REDUCTION_LIMIT)?;
-        let id = self.resolve(root)?;
-        match self.nodes[id.0] {
-            Node::MVar(_) => Ok(id),
-            _ => Err(EvalError::ExpectedMVar(root)),
-        }
+        self.eval_whnf_value(
+            id,
+            |program, root| match program.nodes[root.0] {
+                Node::MVar(_) => Some(root),
+                _ => None,
+            },
+            EvalError::ExpectedMVar,
+        )
     }
 
     fn read_mvar(&self, id: NodeId) -> Result<Option<NodeId>, EvalError> {

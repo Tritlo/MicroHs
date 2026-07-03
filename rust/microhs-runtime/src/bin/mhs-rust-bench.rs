@@ -1071,6 +1071,24 @@ fn print_profile(profile: &ProfileBench, top: usize) {
         profile.profile.app_allocations
     );
     println!(
+        "profile_arg_materializations: {}",
+        profile.profile.arg_materializations
+    );
+    println!(
+        "profile_arg_materialized_nodes: {}",
+        profile.profile.arg_materialized_nodes
+    );
+    println!("profile_spine_rewrites: {}", profile.profile.spine_rewrites);
+    println!(
+        "profile_spine_rewrite_extra_args: {}",
+        profile.profile.spine_rewrite_extra_args
+    );
+    println!("profile_app_rewrites: {}", profile.profile.app_rewrites);
+    println!(
+        "profile_app_rewrite_extra_args: {}",
+        profile.profile.app_rewrite_extra_args
+    );
+    println!(
         "profile_small_int_cache_hits: {}",
         profile.profile.small_int_cache_hits
     );
