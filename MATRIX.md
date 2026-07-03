@@ -2,249 +2,131 @@
 
 Updated: 2026-07-03
 
-This is the current status matrix for the Rust rewrite of the MicroHs C
-runtime/evaluator. The Haskell compiler stays in Haskell; this work is the
-runtime/evaluator and host support for `.comb`.
+This is the working dashboard for the Rust rewrite of the MicroHs C
+runtime/evaluator. The Haskell compiler stays in Haskell; Rust consumes and
+executes compiler-produced `.comb`.
+
+`EVALLESSONS.md` is the detailed scratch note. This file should stay short
+enough to answer: what is comparable, what is slow, what lesson is active, and
+what should not be retried blindly.
 
 ## Current State
 
 | item | state |
 |---|---|
-| branch | `microhs-rust` |
-| upstream tracking | `origin/microhs-rust` |
-| local commits ahead after this snapshot commit | 117 |
-| runtime baseline | F2 generic strict coercion fold and rewrite/materialization counters |
-| tracked dirty files expected after commit | none |
-| untracked notes | `EVALLESSONS.md` is local working material |
+| branch | `microhs-rust`, ahead of `origin/microhs-rust`, not pushed |
+| current runtime checkpoint | `c561db52 Box cold node payloads` |
+| compiler scope | unchanged; keep the compiler in Haskell |
+| runtime scope | Rust replacement for the C runtime/evaluator and host support |
+| node layout | `Node` is 32 bytes, down from 56; cold `ForeignPtr`, `JsCall`, `Weak`, and `MutableBytes` payloads are boxed |
+| parity state | benchmark/smoke rows are sink-comparable; full Rust self-host compile is not at parity |
+| untracked notes | `EVALLESSONS.md` remains local working material |
 
 ## Verification
 
-Last verified checkpoint: `01436e6f Fold generic strict coercions`.
-
-| gate | status |
+| gate | current status |
 |---|---|
-| `cargo fmt --all --check` | passed |
-| `git diff --check` | passed before commit |
-| `cargo check -p microhs-runtime --lib --quiet` | passed |
-| `cargo check -p microhs-runtime --bins --quiet` | passed |
-| `cargo test -p microhs-runtime --quiet` | passed, 34 tests |
-| `cargo build --release -p microhs-runtime --bins --quiet` | passed |
-| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed |
-| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed |
-| `make bin/mhsbench` | up to date from earlier checkpoint |
+| Rust format/check/test/build | passed for `c561db52`: `cargo fmt --all --check`, `cargo check -p microhs-runtime --bins --quiet`, `cargo test -p microhs-runtime --quiet`, release bin build, wasm lib build |
+| `git diff --check` | passed before `c561db52` |
+| common benchmark sinks | matching |
+| rare/smoke benchmark sinks | matching; no longer tracked as a live performance table here |
+| self-host `--help` proxy | runs and prints identical usage |
+| full self-host compile | C completes; Rust still times out without an output comb |
 
-## Runtime Coverage
+## Coverage
 
-| area | status | notes |
-|---|---|---|
-| `.comb` parser/serializer | comparable | version `v8.4`, labels, literals, application, C-compatible string/Integer output |
-| core reducer/combinators | comparable | hot SK/zoo/data paths benchmarked against C |
-| numeric primops | comparable | Int, Int64, Float64, Float32; strict forcing mostly owned by the WHNF loop |
-| ByteString primops | comparable | core bytes/list/UTF-8 paths covered; ByteString benchmarks sink-match C |
-| arrays and mutable bytes | comparable | benchmark uses the IO/world-shaped contract C implements |
-| IO core/exceptions/masking stubs | comparable | catch/raise, RTS arithmetic exceptions, uncaught display, basic IO covered |
-| MVar/StablePtr/Weak/ForeignPtr | comparable smoke | single-threaded semantics covered; ForeignPtr finalizers still wait for GC |
-| FFI constants/math/memory | comparable | dynamic FFI subset, errno, malloc/calloc/realloc/free, typed peek/poke |
-| filesystem/env/process FFI | comparable smoke | native behavior and errno recording implemented for covered calls |
-| BFILE transducers | comparable smoke | memory/file/UTF-8/CRLF/buffer/RLE/base64/LZ77/BWT/LZMA paths covered |
-| MD5/compression | comparable rare paths | present and sink-matching; not common-case performance targets |
-| JS FFI hooks | partial | wasm host shim and wrapper smokes pass; high-level browser metadata/glue still pending |
-| mpz/imath FFI | comparable smoke | decimal-backed `MpzValue`; correctness smokes pass, performance not a target yet |
-| Haskell compiler | kept in Haskell | Rust consumes compiler-produced `.comb` |
-
-## Benchmark Protocol
-
-| setting | value |
+| area | state |
 |---|---|
-| Rust command | `target/release/mhs-rust-bench --scenario <name> --iters 1000 --warmup-iters 100 --c-mhsbench ./bin/mhsbench` |
-| C command | invoked by Rust harness via `./bin/mhsbench` |
-| default C mode | `whnf` |
-| comparison rule | sink must match before timing is meaningful |
-| ratio | Rust ns/iter divided by C ns/iter |
-| caveat | this machine may be busy; trust sinks, work counts, and profile distributions over one-off raw timings |
+| `.comb` parse/render for benchmark programs | comparable |
+| core reducer/combinators | comparable; now performance work |
+| numeric, bytes, arrays, IO core | comparable |
+| MVar, StablePtr, Weak, ForeignPtr | comparable smoke; ForeignPtr finalizers still need GC |
+| FFI, filesystem/env/process, BFILE codecs, MD5/compression | comparable smoke/rare paths; not current performance targets |
+| JS FFI hooks | partial; wasm shim smokes pass, high-level browser glue still pending |
+| `IO.serialize`/sharing/cycles | incomplete; defer until after evaluator/GC shape is clearer |
+| GC/F5 | not implemented; blocked on explicit roots/stack protocol |
+| self-hosting | `--help` proxy runs; full compile remains the main parity/perf target |
 
-## Common Benchmarks
+## Performance Snapshot
 
-These rows are sink-comparable and remain the first performance target.
+Current numbers are from the 32-byte `Node` runtime. They are same-machine
+measurements, so treat ratios and sinks as more useful than single raw times.
 
-| scenario | Rust ns/iter | C ns/iter | ratio | sink |
+| scenario | Rust ns/iter | C ns/iter | ratio | note |
 |---|---:|---:|---:|---|
-| `identity-chain:1000` | 37,794 | 140,241 | 0.27 | yes |
-| `arith-chain:200` | 35,306 | 108,521 | 0.33 | yes |
-| `int64-chain:200` | 37,806 | 108,862 | 0.35 | yes |
-| `float64-chain:200` | 46,167 | 126,383 | 0.37 | yes |
-| `float32-chain:200` | 45,533 | 127,072 | 0.36 | yes |
-| `bytes-chain:200` | 56,110 | 181,975 | 0.31 | yes |
-| `cstring-pack:200` | 1,706 | 102,501 | 0.02 | yes |
-| `foreignptr-slice:200` | 1,494 | 94,820 | 0.02 | yes |
-| `unpack-chain:200` | 8,678 | 97,157 | 0.09 | yes |
-| `fromutf8-chain:200` | 9,939 | 97,162 | 0.10 | yes |
-| `array-chain:200` | 3,572 | 91,485 | 0.04 | yes |
-| `io-chain:200` | 69,336 | 130,358 | 0.53 | yes |
-| `io-array-chain:200` | 3,747 | 92,561 | 0.04 | yes |
-| `io-bytes-chain:200` | 1,814 | 90,873 | 0.02 | yes |
-| `io-control-chain:200` | 53,668 | 142,576 | 0.38 | yes |
-| `performio-apply-chain:200` | 65,891 | 125,436 | 0.53 | yes |
-| `argref-chain:200` | 55,481 | 128,597 | 0.43 | yes |
-| `stdio-chain:200` | 143,397 | 112,014 | 1.28 | yes |
-| `ffi-chain:200` | 60,830 | 152,403 | 0.40 | yes |
-| `ffi-math-chain:200` | 82,002 | 170,476 | 0.48 | yes |
-| `ffi-const-chain:200` | 76,276 | 200,473 | 0.38 | yes |
-| `ffi-mem-chain:200` | 183,052 | 233,483 | 0.78 | yes |
-| `bfile-read-chain:200` | 295,939 | 274,019 | 1.08 | yes |
-| `mvar-chain:200` | 20,784 | 117,743 | 0.18 | yes |
-| `ptr-chain:200` | 80,302 | 107,577 | 0.75 | yes |
-| `rnf-chain:200` | 85,682 | 4,673,986 | 0.02 | yes |
-| `stableptr-chain:200` | 11,719 | 118,789 | 0.10 | yes |
-| `weak-chain:200` | 20,320 | 115,161 | 0.18 | yes |
-| `zoo-chain:300` | 54,581 | 134,304 | 0.41 | yes |
-| `data-chain:300` | 59,828 | 141,740 | 0.42 | yes |
+| `arith-chain:200` | 32,942 | 111,871 | 0.29 | common scalar |
+| `int64-chain:200` | 39,461 | 112,530 | 0.35 | common scalar |
+| `float64-chain:200` | 46,549 | 121,874 | 0.38 | common scalar |
+| `float32-chain:200` | 41,795 | 122,829 | 0.34 | common scalar |
+| `bytes-chain:200` | 54,156 | 180,043 | 0.30 | common bytes |
+| `data-chain:300` | 57,598 | 140,868 | 0.41 | common graph |
+| `zoo-chain:300` | 67,478 | 134,055 | 0.50 | regressed under 32-byte layout |
+| `io-control-chain:200` | 52,687 | 145,050 | 0.36 | common IO control |
+| `performio-apply-chain:200` | 59,504 | 126,326 | 0.47 | common IO/apply |
+| `stdio-chain:200` | 110,693 | 129,220 | 0.86 | near C |
+| `bfile-read-chain:200` | 275,811 | 283,242 | 0.97 | near C |
+| self-host `--help` proxy | 54,222,897 | 13,337,937 | 4.1 | main current gap |
 
-## Rare/Specialized Benchmarks
-
-These rows are sink-comparable, but lower priority for F2 because they cover
-codec, filesystem, errno, or host-heavy paths.
-
-| scenario | Rust ns/iter | C ns/iter | ratio | sink |
-|---|---:|---:|---:|---|
-| `ffi-wide-mem-chain:200` | 4,591,002 | 412,413 | 11.13 | yes |
-| `ffi-word-mem-chain:200` | 3,996,918 | 373,408 | 10.70 | yes |
-| `ffi-ptr-mem-chain:200` | 1,975,729 | 359,302 | 5.50 | yes |
-| `ffi-strcpy-chain:200` | 4,358,649 | 401,217 | 10.86 | yes |
-| `getenv-chain:200` | 930,970 | 370,071 | 2.52 | yes |
-| `env-set-chain:200` | 675,467 | 646,157 | 1.05 | yes |
-| `getcwd-chain:200` | 3,972,309 | 1,174,708 | 3.38 | yes |
-| `file-read-close-chain:200` | 3,681,595 | 1,334,167 | 2.76 | yes |
-| `utf8-bfile-read-chain:200` | 402,575 | 341,293 | 1.18 | yes |
-| `crlf-bfile-read-chain:200` | 424,645 | 324,672 | 1.31 | yes |
-| `buf-bfile-read-chain:200` | 1,618,560 | 360,791 | 4.49 | yes |
-| `md5-string-chain:200` | 4,378,292 | 455,086 | 9.62 | yes |
-| `errno-chain:200` | 4,126,808 | 446,975 | 9.23 | yes |
-| `dir-read-chain:200` | 9,372,765 | 3,237,676 | 2.89 | yes |
-| `remove-missing-chain:200` | 642,622 | 368,672 | 1.74 | yes |
-| `base64-bfile-read-chain:200` | 1,685,450 | 341,881 | 4.93 | yes |
-| `lz77-bfile-read-chain:200` | 2,555,758 | 1,119,364 | 2.28 | yes |
-| `bwt-bfile-read-chain:200` | 1,607,342 | 366,929 | 4.38 | yes |
-| `lzma-bfile-read-chain:200` | 1,932,381 | 507,415 | 3.81 | yes |
-| `rle-bfile-read-chain:200` | 1,692,821 | 348,352 | 4.86 | yes |
-
-## Self-Hosting
-
-Self-hosting means running the Haskell MicroHs compiler comb under the runtime
-to compile `MicroHs.Main` back to a `.comb`. The compiler stays Haskell.
-
-| check | C runtime | Rust runtime | status |
-|---|---:|---:|---|
-| compiler comb input | 647 KiB `/tmp/mhs-selfhost.comb` | parses | input ready |
-| `--help` main proxy | 11,152,613 ns/iter; sink `661902` | 64,076,443 ns/iter; sink `661902` | runs, prints identical usage, about 5.7x C |
-| full self-host compile | 61,920,977,046 ns/iter; emits 647 KiB comb | latest Rust run timed out at 900s with no output comb | not at parity |
+Compared with the previous 56-byte-node self-host proxy, the 32-byte layout
+improves Rust from about 64.1 ms to 54.2 ms per iteration. The `zoo` regression
+means the layout is promising but not settled.
 
 ## Self-Host Profile
 
-Command:
-
-```sh
-target/release/mhs-rust-bench --input /tmp/mhs-selfhost.comb --mode main \
-  --warmup-iters 0 --iters 1 --profile --profile-top 12 -- ./bin/mhs --help
-```
-
-| measure | count | implication |
+| measure | latest value | implication |
 |---|---:|---|
-| profiled iteration time | 100.653 ms | instrumentation overhead; do not compare directly with normal timing |
-| reductions | 297,417 | F2 changes are preserving work count |
-| step attempts | 300,286 | most loop trips do real reduction |
-| successful step heads | 294,554 | multi-reduction shortcuts explain the gap to total reductions |
-| nodes after run | 615,854 | graph size unchanged by current F2 loop work |
-| app allocations | 347,838 | allocation/rewrite traffic remains central |
-| generic arg materializations | 8,523 / 37,356 nodes | measurable but secondary |
-| spine rewrites | 62,496 / 251,284 extra args | result rewrites rebuild substantial tails |
-| app rewrites | 226,403 / 1,300,478 extra args | current strongest signal for F2 performance work |
-| heap spines | 1,302 | 16-slot inline spine covers almost all hot arities |
-| max spine arity | 75 | long spines exist even in `--help` |
-| profiled resolve calls | 5,014,674 | resolve/classification traffic is much larger than reductions |
-| followed indirections | 99,346 | only about 2% of resolve calls follow an indirection |
-| max resolve chain | 4 | deep indirection chains are not the current bottleneck |
-| shortcut hits | `selector_pair_field` 24; `identity_alias_chain` 5 | existing narrow shortcuts barely fire here |
+| reductions | 297,417 | work count is stable across F2 changes |
+| profiled iteration time | 93.984 ms | profile overhead; compare distributions, not wall time |
+| nodes after run | 615,854 | graph size unchanged by loop cleanup |
+| app allocations | 347,838 | allocation pressure remains central |
+| arg materializations | 8,523 / 37,356 nodes | measurable, but secondary |
+| spine rewrites | 62,496 / 251,284 extra args | substantial tail rebuild traffic |
+| app rewrites | 226,403 / 1,300,478 extra args | strongest F2 performance signal |
+| resolve calls | 5,014,674 | classification/resolve traffic dominates reductions |
+| max resolve chain | 4 | deep indirections are not the current bottleneck |
 
-Top reduction heads: `B` 56,409; `C` 36,472; `C'` 25,246; `P` 20,309;
-`C'B` 20,142; `K` 14,202; `S` 13,980; `Z` 13,932; `O` 8,986; `A` 8,863.
+Top self-host heads are still `B`, `C`, `C'`, `P`, `C'B`, `K`, `S`, `Z`, `O`,
+and `A`. The hot path is evaluator/spine/update mechanics, not smoke coverage.
 
-Static self-host comb shape: 661,784 bytes; 262,025 parse nodes; 146,725
-application nodes; 104,562 primitive nodes; 3,226 labels. The hot path is
-still reducer/spine/update mechanics, not IO/FFI coverage.
+## Active Lessons
 
-## F2 Status
-
-| item | state |
-|---|---|
-| evaluator-owned WHNF spine loop | implemented with reusable `EvalSpine` |
-| strict-result markers | implemented for Int, Int64, Float64, Float32, ByteString, comparisons/orderings, mixed Int64 shifts, conversions |
-| strict WHNF frames | implemented for `seq`, `IO.strict`, and `isInt` paths |
-| direct scalar/bytes helpers | route through `reduce_whnf_from`; old side mini-drivers removed |
-| generic strict coercions | share `eval_whnf_value`; no separate helper driver shape |
-| remaining F2 work | app update/rebuild mechanics and repeated resolve/classification |
-| GC/F5 unblocker | closer, but not done; the runtime still needs an explicit enumerable root protocol for every path before GC |
-
-## Lessons From `eval.c`
-
-| lesson | Rust status | next action |
+| lesson | implemented | current reading |
 |---|---|---|
-| compact node representation | not started | defer until evaluator/GC shape settles |
-| primitive heads as tags | partial | extend only when profiles justify it beyond current `KnownPrim` |
-| application spine on evaluator stack | partial | current `EvalSpine` is a bridge; final C shape wants less rebuild |
-| redex-root update and app reuse | partial | current priority: reduce extra-argument app rewrite/rebuild cost |
-| Y knot | done | keep cycle/no-self-indirection behavior |
-| permanent common nodes/small ints | partial | useful for graph size, not yet a clear speed lever |
-| marker continuations for strict forcing | mostly done for F2 common cases | remaining issue is not helper recursion, it is update/rebuild mechanics |
-| arity-shaped combinator rewrites | partial | keep hot `B`/`C`/`C'`/`P`/`C'B` paths simple and direct |
-| GCRED-style simplification | not started | defer until GC exists |
-| IO as graph rewrites | partial | only add more shortcuts with profile evidence |
-| counters near evaluator | partial | current counters point at app rewrites and resolve/classification |
+| one evaluator loop should own strict forcing | mostly yes | generic strict helper folding is done; do not reopen this without new evidence |
+| compact node representation matters | in progress | first useful cut is 56 -> 32 bytes; keep measuring the `zoo` tradeoff |
+| redex-root and app reuse are load-bearing | partial | next F2 work should reduce app rebuild/update traffic |
+| primitive heads want tags, not strings | partial | narrow static-name interning regressed self-host; revisit only as part of a real representation change |
+| GC is a performance feature, not just correctness | no | F5 needs explicit roots and stack ownership before implementation |
+| smoke parity is no longer the bottleneck | yes | keep smokes for regressions, but stop expanding the matrix around them |
 
 ## Current Theory
 
-The remaining Rust/C gap is evaluator throughput, not parity noise. The short
-self-host proxy is sink-clean and stable at 297,417 reductions, but Rust still
-pays for repeated resolve/node classification, owned spine construction, extra
-argument rebuild, and transient app allocation where C stays in one stack/goto
-loop and mutates the redex/root cells directly.
+The remaining Rust/C gap is evaluator throughput. Rust wins most small common
+benchmarks, but self-host still pays for repeated resolve/classification,
+transient app allocation, and extra-argument rebuilds where C stays in one
+compact stack/goto evaluator and mutates redex/root cells directly.
 
-The newest profile counters make generic argument materialization look
-secondary: 8,523 materializations over 37,356 nodes versus 226,403 app rewrites
-carrying 1,300,478 extra arguments. The next useful F2 work should therefore
-target app update/rebuild mechanics and resolve/classification volume, not
-another narrow cache or helper-unification pass.
+The 32-byte node cut improves self-host by about 15%, which supports the cache
+locality lesson from `eval.c`. The `zoo` regression says layout/codegen effects
+are real; the next work should improve representation and update mechanics
+together instead of adding another narrow cache or helper-unification pass.
 
-## Recent Rejected F2 Probes
+## Rejected Probes Still Worth Remembering
 
-These were sink-correct but abandoned after measurement on 2026-07-03.
-
-| probe | result | reason |
-|---|---|---|
-| C-style outer continuation reuse | rejected | leaving extra apps unrethreaded made self-host `--help` jump from about 64 ms to seconds; resolve chains grew to 5,556 |
-| first-extra-app compression only | rejected | fixed the huge resolve-chain blow-up, but self-host stayed slightly slower and common rows were mixed |
-| app-result-only tail reuse | rejected | removed writes that often looked redundant, but stopped compressing resolved extra args and did not improve self-host |
-| guarded `App` writes | rejected | preserved graph shape, but the branch/read cost beat the avoided stores on self-host and data/bfile rows |
-| static `Prim` names for supported runtime prims | rejected | improved scalar microbench rows, but self-host timing regressed; full primitive tagging needs a more deliberate representation change |
-
-## Current Next Items
-
-| item | status |
+| probe | reason not to retry as a narrow tweak |
 |---|---|
-| F2 app rewrite/update work | active |
-| self-hosting parity | blocked on runtime throughput/GC; full Rust compile still exceeds 900s |
-| GC/F5 | next structural frontier after F2 root/update/stack shape is good enough |
-| JS full parity | pending compiler-emitted metadata or generated glue path |
-| rare high-level library tests | defer until compiler self-host path is more useful |
-| keep compiler Haskell | ongoing; scope is the C runtime/evaluator rewrite |
+| skipping outer-app rethreading / C-style continuation reuse | self-host jumped from milliseconds to seconds; resolve chains grew to 5,556 |
+| first-extra-app compression only | fixed the blow-up but did not improve self-host and mixed common rows |
+| app-result-only tail reuse | removed writes but lost useful extra-arg compression |
+| guarded `App` writes | branch/read cost beat avoided stores |
+| static `Prim` names for current runtime prims | scalar microbench win, self-host regression |
+| older one-off caches/layout probes | measured no clear win; only revisit as part of a wider representation/evaluator change |
 
-## Do Not Reapply Blindly
+## Next
 
-These were measured and either regressed important rows or failed the self-host
-proxy: start-node resolve-chain compression, saturated-redex root updates,
-descriptor-slice `EvalSpine` access, inline `StepAction` marker requests,
-all-Int/unrestricted marker probes, broad lazy generic primitive cascades,
-primitive singleton/cache seeding, reverse-free inline spine layout, and
-skipping outer-app rethreading after reduction. Also do not reapply guarded
-`App` writes or string-to-static primitive interning as narrow tweaks; they need
-a wider evaluator/node-representation change to be worthwhile.
+| priority | work |
+|---|---|
+| 1 | decide whether the 32-byte node layout becomes the new baseline after one fuller matrix run |
+| 2 | finish F2 around app update/rebuild and resolve/classification volume |
+| 3 | use the self-host proxy as the primary benchmark; rerun full self-host with bounded time only when the proxy improves |
+| 4 | unblock F5 by making roots and evaluator stack ownership explicit |
