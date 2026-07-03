@@ -215,6 +215,18 @@ carrying 1,300,478 extra arguments. The next useful F2 work should therefore
 target app update/rebuild mechanics and resolve/classification volume, not
 another narrow cache or helper-unification pass.
 
+## Recent Rejected F2 Probes
+
+These were sink-correct but abandoned after measurement on 2026-07-03.
+
+| probe | result | reason |
+|---|---|---|
+| C-style outer continuation reuse | rejected | leaving extra apps unrethreaded made self-host `--help` jump from about 64 ms to seconds; resolve chains grew to 5,556 |
+| first-extra-app compression only | rejected | fixed the huge resolve-chain blow-up, but self-host stayed slightly slower and common rows were mixed |
+| app-result-only tail reuse | rejected | removed writes that often looked redundant, but stopped compressing resolved extra args and did not improve self-host |
+| guarded `App` writes | rejected | preserved graph shape, but the branch/read cost beat the avoided stores on self-host and data/bfile rows |
+| static `Prim` names for supported runtime prims | rejected | improved scalar microbench rows, but self-host timing regressed; full primitive tagging needs a more deliberate representation change |
+
 ## Current Next Items
 
 | item | status |
@@ -233,4 +245,6 @@ proxy: start-node resolve-chain compression, saturated-redex root updates,
 descriptor-slice `EvalSpine` access, inline `StepAction` marker requests,
 all-Int/unrestricted marker probes, broad lazy generic primitive cascades,
 primitive singleton/cache seeding, reverse-free inline spine layout, and
-skipping outer-app rethreading after reduction.
+skipping outer-app rethreading after reduction. Also do not reapply guarded
+`App` writes or string-to-static primitive interning as narrow tweaks; they need
+a wider evaluator/node-representation change to be worthwhile.
