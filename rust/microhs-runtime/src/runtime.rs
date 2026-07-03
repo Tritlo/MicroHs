@@ -719,12 +719,12 @@ struct StepResult {
 }
 
 struct IntFrame {
-    redex: IntRedex,
+    redex: StrictRedex,
     profile_head: Option<String>,
     kind: IntFrameKind,
 }
 
-enum IntRedex {
+enum StrictRedex {
     Root(NodeId),
     Spine {
         root: NodeId,
@@ -741,7 +741,7 @@ enum IntFrameKind {
 }
 
 struct Int64Frame {
-    redex: IntRedex,
+    redex: StrictRedex,
     profile_head: Option<String>,
     kind: Int64FrameKind,
 }
@@ -752,45 +752,62 @@ enum Int64FrameKind {
     Un { op: Int64UnOp },
 }
 
-#[derive(Default)]
-struct IntFrameStack {
-    top: Option<IntFrame>,
-    rest: Vec<IntFrame>,
+struct Float64Frame {
+    redex: StrictRedex,
+    profile_head: Option<String>,
+    kind: Float64FrameKind,
 }
 
-impl IntFrameStack {
-    fn push(&mut self, frame: IntFrame) {
+enum Float64FrameKind {
+    BinSecond { op: Float64BinOp, x: NodeId },
+    BinFirst { op: Float64BinOp, y: f64 },
+    Un { op: Float64UnOp },
+}
+
+struct Float32Frame {
+    redex: StrictRedex,
+    profile_head: Option<String>,
+    kind: Float32FrameKind,
+}
+
+enum Float32FrameKind {
+    BinSecond { op: Float32BinOp, x: NodeId },
+    BinFirst { op: Float32BinOp, y: f32 },
+    Un { op: Float32UnOp },
+}
+
+struct FrameStack<T> {
+    top: Option<T>,
+    rest: Vec<T>,
+}
+
+impl<T> Default for FrameStack<T> {
+    fn default() -> Self {
+        Self {
+            top: None,
+            rest: Vec::new(),
+        }
+    }
+}
+
+impl<T> FrameStack<T> {
+    fn push(&mut self, frame: T) {
         if let Some(top) = self.top.replace(frame) {
             self.rest.push(top);
         }
     }
 
-    fn pop(&mut self) -> Option<IntFrame> {
+    fn pop(&mut self) -> Option<T> {
         let frame = self.top.take()?;
         self.top = self.rest.pop();
         Some(frame)
     }
 }
 
-#[derive(Default)]
-struct Int64FrameStack {
-    top: Option<Int64Frame>,
-    rest: Vec<Int64Frame>,
-}
-
-impl Int64FrameStack {
-    fn push(&mut self, frame: Int64Frame) {
-        if let Some(top) = self.top.replace(frame) {
-            self.rest.push(top);
-        }
-    }
-
-    fn pop(&mut self) -> Option<Int64Frame> {
-        let frame = self.top.take()?;
-        self.top = self.rest.pop();
-        Some(frame)
-    }
-}
+type IntFrameStack = FrameStack<IntFrame>;
+type Int64FrameStack = FrameStack<Int64Frame>;
+type Float64FrameStack = FrameStack<Float64Frame>;
+type Float32FrameStack = FrameStack<Float32Frame>;
 
 impl Program {
     pub fn new(nodes: Vec<Node>, root: NodeId, labels: HashMap<usize, NodeId>) -> Self {
@@ -2162,9 +2179,9 @@ impl Program {
             None
         };
         let redex = if args.len() == used {
-            IntRedex::Root(root)
+            StrictRedex::Root(root)
         } else {
-            IntRedex::Spine {
+            StrictRedex::Spine {
                 root,
                 used,
                 args: args.to_vec(),
@@ -2212,12 +2229,12 @@ impl Program {
         }
         let mut node = self.int_result_node(result);
         match frame.redex {
-            IntRedex::Root(root) => {
+            StrictRedex::Root(root) => {
                 if node != root {
                     self.nodes[root.0] = Node::Indir(Some(node));
                 }
             }
-            IntRedex::Spine {
+            StrictRedex::Spine {
                 root,
                 used,
                 args,
@@ -2331,9 +2348,9 @@ impl Program {
             None
         };
         let redex = if args.len() == used {
-            IntRedex::Root(root)
+            StrictRedex::Root(root)
         } else {
-            IntRedex::Spine {
+            StrictRedex::Spine {
                 root,
                 used,
                 args: args.to_vec(),
@@ -2382,18 +2399,18 @@ impl Program {
         if frame.profile_head.is_some() {
             self.profile_reduction(&frame.profile_head, 1);
         }
-        self.apply_int_redex(frame.redex, node);
+        self.apply_strict_redex(frame.redex, node);
         Ok((node, 1))
     }
 
-    fn apply_int_redex(&mut self, redex: IntRedex, mut node: NodeId) {
+    fn apply_strict_redex(&mut self, redex: StrictRedex, mut node: NodeId) {
         match redex {
-            IntRedex::Root(root) => {
+            StrictRedex::Root(root) => {
                 if node != root {
                     self.nodes[root.0] = Node::Indir(Some(node));
                 }
             }
-            IntRedex::Spine {
+            StrictRedex::Spine {
                 root,
                 used,
                 args,
@@ -2438,6 +2455,270 @@ impl Program {
             }
             let Some(step) = self.step(current_resolved, limit - steps)? else {
                 return Err(EvalError::ExpectedInt64(current_resolved));
+            };
+            steps += step.reductions;
+            self.reductions += step.reductions;
+            if !step.in_place && step.node != current_resolved {
+                self.nodes[current_resolved.0] = Node::Indir(Some(step.node));
+            }
+            current = step.node;
+        }
+    }
+
+    fn float64_result_node(&mut self, result: Float64Result) -> NodeId {
+        match result {
+            Float64Result::Float(n) => self.push_node(Node::Float64(n)),
+            Float64Result::Bool(b) => self.prim(if b { "A" } else { "K" }),
+        }
+    }
+
+    fn begin_float64_force_frame(
+        &mut self,
+        root: NodeId,
+    ) -> Result<Option<(Float64Frame, NodeId)>, EvalError> {
+        let spine = self.spine(root)?;
+        let head = spine.head;
+        let args = spine.args();
+        let Some(prim_name) = (match &self.nodes[head.0] {
+            Node::Prim(name) => Some(name.name()),
+            _ => None,
+        }) else {
+            return Ok(None);
+        };
+
+        let force = if args.len() >= 2 {
+            Float64BinOp::from_prim(prim_name)
+                .map(|op| (2, Float64FrameKind::BinSecond { op, x: args[0] }, args[1]))
+        } else {
+            None
+        }
+        .or_else(|| {
+            if args.is_empty() {
+                None
+            } else {
+                Float64UnOp::from_prim(prim_name)
+                    .map(|op| (1, Float64FrameKind::Un { op }, args[0]))
+            }
+        });
+        let Some((used, kind, next)) = force else {
+            return Ok(None);
+        };
+
+        let profile_head = if self.profile.is_some() {
+            let heap_spine = matches!(&spine.storage, SpineStorage::Heap { .. });
+            self.profile_step(head, args.len(), heap_spine)
+        } else {
+            None
+        };
+        let redex = if args.len() == used {
+            StrictRedex::Root(root)
+        } else {
+            StrictRedex::Spine {
+                root,
+                used,
+                args: args.to_vec(),
+                apps: spine.apps().to_vec(),
+            }
+        };
+        let frame = Float64Frame {
+            redex,
+            profile_head,
+            kind,
+        };
+        Ok(Some((frame, next)))
+    }
+
+    fn finish_float64_frame(
+        &mut self,
+        frame: Float64Frame,
+        value: f64,
+        stack: &mut Float64FrameStack,
+    ) -> (NodeId, usize) {
+        let node = match frame.kind {
+            Float64FrameKind::BinSecond { op, x } => {
+                let next = x;
+                let next_frame = Float64Frame {
+                    redex: frame.redex,
+                    profile_head: frame.profile_head,
+                    kind: Float64FrameKind::BinFirst { op, y: value },
+                };
+                stack.push(next_frame);
+                return (next, 0);
+            }
+            Float64FrameKind::BinFirst { op, y } => self.float64_result_node(op.apply(value, y)),
+            Float64FrameKind::Un { op } => self.push_node(Node::Float64(op.apply(value))),
+        };
+
+        if frame.profile_head.is_some() {
+            self.profile_reduction(&frame.profile_head, 1);
+        }
+        self.apply_strict_redex(frame.redex, node);
+        (node, 1)
+    }
+
+    fn force_float64(&mut self, root: NodeId, limit: usize) -> Result<f64, EvalError> {
+        let mut current = self.resolve(root)?;
+        let mut steps = 0;
+        let mut stack = Float64FrameStack::default();
+        loop {
+            let current_resolved = self.resolve(current)?;
+            if let Node::Float64(value) = self.nodes[current_resolved.0] {
+                let Some(frame) = stack.pop() else {
+                    return Ok(value);
+                };
+                let (next, reductions) = self.finish_float64_frame(frame, value, &mut stack);
+                steps += reductions;
+                self.reductions += reductions;
+                if steps >= limit {
+                    return Err(EvalError::StepLimit { limit });
+                }
+                current = next;
+                continue;
+            }
+
+            if let Some((frame, next)) = self.begin_float64_force_frame(current_resolved)? {
+                stack.push(frame);
+                current = next;
+                continue;
+            }
+
+            if steps >= limit {
+                return Err(EvalError::StepLimit { limit });
+            }
+            let Some(step) = self.step(current_resolved, limit - steps)? else {
+                return Err(EvalError::ExpectedFloat64(current_resolved));
+            };
+            steps += step.reductions;
+            self.reductions += step.reductions;
+            if !step.in_place && step.node != current_resolved {
+                self.nodes[current_resolved.0] = Node::Indir(Some(step.node));
+            }
+            current = step.node;
+        }
+    }
+
+    fn float32_result_node(&mut self, result: Float32Result) -> NodeId {
+        match result {
+            Float32Result::Float(n) => self.push_node(Node::Float32(n)),
+            Float32Result::Bool(b) => self.prim(if b { "A" } else { "K" }),
+        }
+    }
+
+    fn begin_float32_force_frame(
+        &mut self,
+        root: NodeId,
+    ) -> Result<Option<(Float32Frame, NodeId)>, EvalError> {
+        let spine = self.spine(root)?;
+        let head = spine.head;
+        let args = spine.args();
+        let Some(prim_name) = (match &self.nodes[head.0] {
+            Node::Prim(name) => Some(name.name()),
+            _ => None,
+        }) else {
+            return Ok(None);
+        };
+
+        let force = if args.len() >= 2 {
+            Float32BinOp::from_prim(prim_name)
+                .map(|op| (2, Float32FrameKind::BinSecond { op, x: args[0] }, args[1]))
+        } else {
+            None
+        }
+        .or_else(|| {
+            if args.is_empty() {
+                None
+            } else {
+                Float32UnOp::from_prim(prim_name)
+                    .map(|op| (1, Float32FrameKind::Un { op }, args[0]))
+            }
+        });
+        let Some((used, kind, next)) = force else {
+            return Ok(None);
+        };
+
+        let profile_head = if self.profile.is_some() {
+            let heap_spine = matches!(&spine.storage, SpineStorage::Heap { .. });
+            self.profile_step(head, args.len(), heap_spine)
+        } else {
+            None
+        };
+        let redex = if args.len() == used {
+            StrictRedex::Root(root)
+        } else {
+            StrictRedex::Spine {
+                root,
+                used,
+                args: args.to_vec(),
+                apps: spine.apps().to_vec(),
+            }
+        };
+        let frame = Float32Frame {
+            redex,
+            profile_head,
+            kind,
+        };
+        Ok(Some((frame, next)))
+    }
+
+    fn finish_float32_frame(
+        &mut self,
+        frame: Float32Frame,
+        value: f32,
+        stack: &mut Float32FrameStack,
+    ) -> (NodeId, usize) {
+        let node = match frame.kind {
+            Float32FrameKind::BinSecond { op, x } => {
+                let next = x;
+                let next_frame = Float32Frame {
+                    redex: frame.redex,
+                    profile_head: frame.profile_head,
+                    kind: Float32FrameKind::BinFirst { op, y: value },
+                };
+                stack.push(next_frame);
+                return (next, 0);
+            }
+            Float32FrameKind::BinFirst { op, y } => self.float32_result_node(op.apply(value, y)),
+            Float32FrameKind::Un { op } => self.push_node(Node::Float32(op.apply(value))),
+        };
+
+        if frame.profile_head.is_some() {
+            self.profile_reduction(&frame.profile_head, 1);
+        }
+        self.apply_strict_redex(frame.redex, node);
+        (node, 1)
+    }
+
+    fn force_float32(&mut self, root: NodeId, limit: usize) -> Result<f32, EvalError> {
+        let mut current = self.resolve(root)?;
+        let mut steps = 0;
+        let mut stack = Float32FrameStack::default();
+        loop {
+            let current_resolved = self.resolve(current)?;
+            if let Node::Float32(value) = self.nodes[current_resolved.0] {
+                let Some(frame) = stack.pop() else {
+                    return Ok(value);
+                };
+                let (next, reductions) = self.finish_float32_frame(frame, value, &mut stack);
+                steps += reductions;
+                self.reductions += reductions;
+                if steps >= limit {
+                    return Err(EvalError::StepLimit { limit });
+                }
+                current = next;
+                continue;
+            }
+
+            if let Some((frame, next)) = self.begin_float32_force_frame(current_resolved)? {
+                stack.push(frame);
+                current = next;
+                continue;
+            }
+
+            if steps >= limit {
+                return Err(EvalError::StepLimit { limit });
+            }
+            let Some(step) = self.step(current_resolved, limit - steps)? else {
+                return Err(EvalError::ExpectedFloat32(current_resolved));
             };
             steps += step.reductions;
             self.reductions += step.reductions;
@@ -4432,11 +4713,7 @@ impl Program {
         if let Node::Float64(n) = self.nodes[root.0] {
             return Ok(n);
         }
-        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
-        match self.nodes[self.resolve(root)?.0] {
-            Node::Float64(n) => Ok(n),
-            _ => Err(EvalError::ExpectedFloat64(root)),
-        }
+        self.force_float64(root, FORCE_REDUCTION_LIMIT)
     }
 
     fn eval_float32(&mut self, id: NodeId) -> Result<f32, EvalError> {
@@ -4444,11 +4721,7 @@ impl Program {
         if let Node::Float32(n) = self.nodes[root.0] {
             return Ok(n);
         }
-        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
-        match self.nodes[self.resolve(root)?.0] {
-            Node::Float32(n) => Ok(n),
-            _ => Err(EvalError::ExpectedFloat32(root)),
-        }
+        self.force_float32(root, FORCE_REDUCTION_LIMIT)
     }
 
     fn eval_bool(&mut self, id: NodeId) -> Result<bool, EvalError> {
