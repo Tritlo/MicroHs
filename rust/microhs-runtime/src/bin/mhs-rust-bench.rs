@@ -1001,7 +1001,7 @@ fn eval_once(
         }
         BenchMode::Main => {
             let steps = reduce_main_steps_or_panic(&mut program, "run benchmark main");
-            let sink = steps.wrapping_add(program.nodes().len());
+            let sink = main_input_sink(input);
             (steps, sink)
         }
     }
@@ -1033,7 +1033,7 @@ fn profile_eval(
         }
         BenchMode::Main => {
             let steps = reduce_main_steps_or_panic(&mut program, "profile run benchmark main");
-            let sink = steps.wrapping_add(program.nodes().len());
+            let sink = main_input_sink(input);
             (steps, sink)
         }
     };
@@ -1124,6 +1124,10 @@ fn bytes_sink(bytes: &[u8]) -> usize {
         sink = sink.wrapping_add(*first as usize);
     }
     sink
+}
+
+fn main_input_sink(input: &[u8]) -> usize {
+    bytes_sink(input)
 }
 
 fn reduce_main_steps_or_panic(program: &mut Program, context: &str) -> usize {
