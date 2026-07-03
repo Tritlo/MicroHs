@@ -143,6 +143,7 @@ representation and update mechanics together, not another narrow cache.
 | app-result-only tail reuse | removed writes but lost useful extra-arg compression |
 | guarded `App` writes | branch/read cost beat avoided stores |
 | static `Prim` names for current runtime prims | scalar microbench win, self-host regression |
+| evaluator first-indirection compression | reduced profiled indirections, but worsened profile time from about 76 ms to 82 ms and self-host proxy from about 51.5 ms to 52.7 ms |
 | older one-off caches/layout probes | measured no clear win; only revisit as part of a wider representation/evaluator change |
 
 ## Next
