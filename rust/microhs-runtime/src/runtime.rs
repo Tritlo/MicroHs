@@ -718,6 +718,18 @@ struct StepResult {
     reductions: usize,
 }
 
+struct WhnfFrame {
+    redex: StrictRedex,
+    profile_head: Option<String>,
+    kind: WhnfFrameKind,
+}
+
+enum WhnfFrameKind {
+    Seq { result: NodeId },
+    IoStrict { action: NodeId, value: NodeId },
+    IsInt,
+}
+
 struct IntFrame {
     redex: StrictRedex,
     profile_head: Option<String>,
@@ -816,6 +828,7 @@ impl<T> FrameStack<T> {
     }
 }
 
+type WhnfFrameStack = FrameStack<WhnfFrame>;
 type IntFrameStack = FrameStack<IntFrame>;
 type Int64FrameStack = FrameStack<Int64Frame>;
 type Float64FrameStack = FrameStack<Float64Frame>;
@@ -929,22 +942,9 @@ impl Program {
     }
 
     pub fn reduce_whnf(&mut self, limit: usize) -> Result<(NodeId, usize), EvalError> {
-        let mut root = self.root;
-        let mut steps = 0;
-        while steps < limit {
-            let current = self.resolve_profiled(root)?;
-            let Some(step) = self.step(current, limit - steps)? else {
-                self.root = current;
-                return Ok((current, steps));
-            };
-            steps += step.reductions;
-            self.reductions += step.reductions;
-            if !step.in_place && step.node != current {
-                self.nodes[current.0] = Node::Indir(Some(step.node));
-            }
-            root = step.node;
-        }
-        Err(EvalError::StepLimit { limit })
+        let (root, steps) = self.reduce_whnf_from(self.root, limit, true, false)?;
+        self.root = root;
+        Ok((root, steps))
     }
 
     pub fn reduce_main(&mut self, limit: usize) -> Result<(NodeId, usize), EvalError> {
@@ -1318,7 +1318,7 @@ impl Program {
                 Some((3, n))
             }
             Some(IoStrict) if args.len() >= 2 => {
-                self.reduce_node_whnf(args[1], FORCE_REDUCTION_LIMIT)?;
+                self.reduce_node_whnf_with_frames(args[1], FORCE_REDUCTION_LIMIT)?;
                 let n = self.app(args[0], args[1]);
                 Some((2, n))
             }
@@ -1446,11 +1446,11 @@ impl Program {
                 Some((2, self.prim("I")))
             }
             Some(Seq) if args.len() >= 2 => {
-                self.reduce_node_whnf(args[0], FORCE_REDUCTION_LIMIT)?;
+                self.reduce_node_whnf_with_frames(args[0], FORCE_REDUCTION_LIMIT)?;
                 Some((2, args[1]))
             }
             Some(IsInt) if !args.is_empty() => {
-                let root = self.reduce_node_whnf(args[0], FORCE_REDUCTION_LIMIT)?;
+                let root = self.reduce_node_whnf_with_frames(args[0], FORCE_REDUCTION_LIMIT)?;
                 let n = match self.nodes[self.resolve(root)?.0] {
                     Node::Int(n) => n,
                     _ => -1,
@@ -2416,11 +2416,11 @@ impl Program {
         if frame.profile_head.is_some() {
             self.profile_reduction(&frame.profile_head, 1);
         }
-        self.apply_strict_redex(frame.redex, node);
+        let node = self.apply_strict_redex(frame.redex, node);
         Ok((node, 1))
     }
 
-    fn apply_strict_redex(&mut self, redex: StrictRedex, mut node: NodeId) {
+    fn apply_strict_redex(&mut self, redex: StrictRedex, mut node: NodeId) -> NodeId {
         match redex {
             StrictRedex::Root(root) => {
                 if node != root {
@@ -2439,6 +2439,143 @@ impl Program {
                 }
             }
         }
+        node
+    }
+
+    fn begin_whnf_force_frame(
+        &mut self,
+        root: NodeId,
+    ) -> Result<Option<(WhnfFrame, NodeId)>, EvalError> {
+        let spine = self.spine(root)?;
+        let head = spine.head;
+        let args = spine.args();
+        let Some(known) = (match &self.nodes[head.0] {
+            Node::Prim(prim) => prim.known(),
+            _ => None,
+        }) else {
+            return Ok(None);
+        };
+        use KnownPrim::*;
+        let force = match known {
+            Seq if args.len() >= 2 => Some((2, WhnfFrameKind::Seq { result: args[1] }, args[0])),
+            IoStrict if args.len() >= 2 => Some((
+                2,
+                WhnfFrameKind::IoStrict {
+                    action: args[0],
+                    value: args[1],
+                },
+                args[1],
+            )),
+            IsInt if !args.is_empty() => Some((1, WhnfFrameKind::IsInt, args[0])),
+            _ => None,
+        };
+        let Some((used, kind, next)) = force else {
+            return Ok(None);
+        };
+
+        let profile_head = if self.profile.is_some() {
+            let heap_spine = matches!(&spine.storage, SpineStorage::Heap { .. });
+            self.profile_step(head, args.len(), heap_spine)
+        } else {
+            None
+        };
+        let redex = if args.len() == used {
+            StrictRedex::Root(root)
+        } else {
+            StrictRedex::Spine {
+                root,
+                used,
+                args: args.to_vec(),
+                apps: spine.apps().to_vec(),
+            }
+        };
+        Ok(Some((
+            WhnfFrame {
+                redex,
+                profile_head,
+                kind,
+            },
+            next,
+        )))
+    }
+
+    fn finish_whnf_frame(
+        &mut self,
+        frame: WhnfFrame,
+        value: NodeId,
+    ) -> Result<(NodeId, usize), EvalError> {
+        let node = match frame.kind {
+            WhnfFrameKind::Seq { result } => result,
+            WhnfFrameKind::IoStrict { action, value } => self.app(action, value),
+            WhnfFrameKind::IsInt => {
+                let value = self.resolve(value)?;
+                let n = match self.nodes[value.0] {
+                    Node::Int(n) => n,
+                    _ => -1,
+                };
+                self.int(n)
+            }
+        };
+
+        if frame.profile_head.is_some() {
+            self.profile_reduction(&frame.profile_head, 1);
+        }
+        let node = self.apply_strict_redex(frame.redex, node);
+        Ok((node, 1))
+    }
+
+    fn resolve_for_whnf(
+        &mut self,
+        root: NodeId,
+        profile_resolve: bool,
+    ) -> Result<NodeId, EvalError> {
+        if profile_resolve {
+            self.resolve_profiled(root)
+        } else {
+            self.resolve(root)
+        }
+    }
+
+    fn reduce_whnf_from(
+        &mut self,
+        mut root: NodeId,
+        limit: usize,
+        profile_resolve: bool,
+        whnf_frames: bool,
+    ) -> Result<(NodeId, usize), EvalError> {
+        let mut steps = 0;
+        let mut stack = WhnfFrameStack::default();
+        while steps < limit {
+            let current = self.resolve_for_whnf(root, profile_resolve)?;
+            if whnf_frames {
+                if let Some((frame, next)) = self.begin_whnf_force_frame(current)? {
+                    stack.push(frame);
+                    root = next;
+                    continue;
+                }
+            }
+
+            let Some(step) = self.step(current, limit - steps)? else {
+                let Some(frame) = stack.pop() else {
+                    return Ok((current, steps));
+                };
+                let (next, reductions) = self.finish_whnf_frame(frame, current)?;
+                steps += reductions;
+                self.reductions += reductions;
+                if steps >= limit {
+                    return Err(EvalError::StepLimit { limit });
+                }
+                root = next;
+                continue;
+            };
+            steps += step.reductions;
+            self.reductions += step.reductions;
+            if !step.in_place && step.node != current {
+                self.nodes[current.0] = Node::Indir(Some(step.node));
+            }
+            root = step.node;
+        }
+        Err(EvalError::StepLimit { limit })
     }
 
     fn force_int64(&mut self, root: NodeId, limit: usize) -> Result<i64, EvalError> {
@@ -2569,7 +2706,7 @@ impl Program {
         if frame.profile_head.is_some() {
             self.profile_reduction(&frame.profile_head, 1);
         }
-        self.apply_strict_redex(frame.redex, node);
+        let node = self.apply_strict_redex(frame.redex, node);
         (node, 1)
     }
 
@@ -2701,7 +2838,7 @@ impl Program {
         if frame.profile_head.is_some() {
             self.profile_reduction(&frame.profile_head, 1);
         }
-        self.apply_strict_redex(frame.redex, node);
+        let node = self.apply_strict_redex(frame.redex, node);
         (node, 1)
     }
 
@@ -2854,7 +2991,7 @@ impl Program {
         if frame.profile_head.is_some() {
             self.profile_reduction(&frame.profile_head, 1);
         }
-        self.apply_strict_redex(frame.redex, node);
+        let node = self.apply_strict_redex(frame.redex, node);
         Ok((node, 1))
     }
 
@@ -7815,21 +7952,18 @@ impl Program {
         array
     }
 
-    fn reduce_node_whnf(&mut self, mut root: NodeId, limit: usize) -> Result<NodeId, EvalError> {
-        let mut steps = 0;
-        while steps < limit {
-            let current = self.resolve(root)?;
-            let Some(step) = self.step(current, limit - steps)? else {
-                return Ok(current);
-            };
-            steps += step.reductions;
-            self.reductions += step.reductions;
-            if !step.in_place && step.node != current {
-                self.nodes[current.0] = Node::Indir(Some(step.node));
-            }
-            root = step.node;
-        }
-        Err(EvalError::StepLimit { limit })
+    fn reduce_node_whnf(&mut self, root: NodeId, limit: usize) -> Result<NodeId, EvalError> {
+        self.reduce_whnf_from(root, limit, false, false)
+            .map(|(root, _)| root)
+    }
+
+    fn reduce_node_whnf_with_frames(
+        &mut self,
+        root: NodeId,
+        limit: usize,
+    ) -> Result<NodeId, EvalError> {
+        self.reduce_whnf_from(root, limit, false, true)
+            .map(|(root, _)| root)
     }
 
     fn rnf(&mut self, noerr: bool, root: NodeId) -> Result<(), EvalError> {

@@ -11,23 +11,23 @@ performance, or benchmark classification changes.
 |---|---|
 | branch | `microhs-rust` |
 | upstream tracking | `origin/microhs-rust` |
-| local commits ahead after this snapshot commit | 102 |
-| runtime code baseline | F2 strict primitive continuation-stack checkpoint plus C-compatible main benchmark sink |
+| local commits ahead after this snapshot commit | 103 |
+| runtime code baseline | F2 WHNF continuation-frame slice |
 | dirty files after this snapshot commit | none expected |
 | dirty work | none in tracked runtime files |
 | matrix file | `MATRIX.md`, tracked from this snapshot |
 
 ## Verification Baseline
 
-Last fully verified state: F2 strict primitive continuation-stack checkpoint.
+Last fully verified state: F2 WHNF continuation-frame checkpoint.
 
 | gate | status |
 |---|---|
-| `cargo test -p microhs-runtime --quiet` | passed before F2 strict primitive continuation-stack commit; 34 tests |
-| `cargo check -p microhs-runtime --lib --quiet` | passed before F2 strict primitive continuation-stack commit |
-| `cargo check -p microhs-runtime --bins --quiet` | passed before F2 strict primitive continuation-stack commit |
-| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before F2 strict primitive continuation-stack commit |
-| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before F2 strict primitive continuation-stack commit |
+| `cargo test -p microhs-runtime --quiet` | passed before F2 WHNF continuation-frame commit; 34 tests |
+| `cargo check -p microhs-runtime --lib --quiet` | passed before F2 WHNF continuation-frame commit |
+| `cargo check -p microhs-runtime --bins --quiet` | passed before F2 WHNF continuation-frame commit |
+| `cargo check --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before F2 WHNF continuation-frame commit |
+| `cargo build --target wasm32-unknown-unknown -p microhs-runtime --lib --quiet` | passed before F2 WHNF continuation-frame commit |
 | `node --check rust/microhs-runtime/js/host.mjs` | passed at `f8b9e1d5` |
 | Node wasm core render smoke | passed at `9cbef47e`; host shim instantiated wasm, reduced `v8.4\n0\nI #5 @ }\n`, and rendered `5` |
 | Node wasm dynamic `~I` JS FFI smoke | passed at `58280b6e`; path-loaded wasm reduced `IO.performIO ~I "return 40 + 2" @` and rendered `42` |
@@ -36,10 +36,10 @@ Last fully verified state: F2 strict primitive continuation-stack checkpoint.
 | Node wasm wrapper tag coverage smoke | passed at `f8b9e1d5`; `II`, `UU`, `DD`, `FF`, `BB`, `SS`, `JJ`, and `PP` wrappers round-trip through JS and render expected values |
 | Node wasm unsigned/high-bit JS smoke | passed at `f8b9e1d5`; direct `~U` rendered `4294967295`; direct and wrapper `~P` rendered `Ptr#2147483648` |
 | Node wasm Response-source smoke | passed at `58280b6e`; `Response(bytes)` source reduced `~S "return 'hi'"` and rendered `"hi"` |
-| `cargo fmt --all --check` | passed before F2 strict primitive continuation-stack commit |
-| `git diff --check` | passed before F2 strict primitive continuation-stack commit |
+| `cargo fmt --all --check` | passed before F2 WHNF continuation-frame commit |
+| `git diff --check` | passed before F2 WHNF continuation-frame commit |
 | `make bin/mhsbench` | passed/up to date at `70eabf4d` |
-| `cargo build --release -p microhs-runtime --bins --quiet` | passed before F2 strict primitive continuation-stack commit |
+| `cargo build --release -p microhs-runtime --bins --quiet` | passed before F2 WHNF continuation-frame commit |
 | signed `i64::MIN` comb parser smoke | passed before checkpoint commit; Rust now parses the self-host compiler comb containing `##-9223372036854775808` |
 | unbounded internal force budget smoke | passed before checkpoint commit; self-hosting no longer trips the old internal `10_000` WHNF cap |
 | main-mode benchmark harness smoke | passed before checkpoint commit; Rust and C support `--mode main -- PROGRAM ARGS...`; main mode measures execution and validates external output instead of serializing the whole root graph |
@@ -84,6 +84,7 @@ Last fully verified state: F2 strict primitive continuation-stack checkpoint.
 | strict WHNF coercion fast-path perf probe | passed before checkpoint commit; strict coercion helpers now return immediately when their argument already resolves to the expected WHNF tag, matching eval.c's fast operand checks before the full marker-continuation rewrite; canaries sink-match C (`arith-chain:200` Rust `60,494` vs C `111,854`, `bytes-chain:200` Rust `87,891` vs C `170,867`, `io-chain:200` Rust `69,336` vs C `130,358`), and self-host `--help` improves to `67,006,399` ns/iter with unchanged 297,417 steps and sink `913271`; profile step attempts drop from `322,900` to `305,865` and resolve calls from `5,334,783` to `5,317,748`, with unchanged `350,676` node growth |
 | F2 strict primitive continuation-stack probe | passed before checkpoint commit; `eval_int`, `eval_int64` including mixed Int64 shifts, `eval_float64`, `eval_float32`, and binary ByteString marker ops now force nested strict primops through explicit inline-one-frame continuation stacks instead of recursively calling `reduce_node_whnf`; `arith-chain:200` is Rust `36,122` ns/iter vs C `108,853`, `int64-chain:200` is Rust `38,175` ns/iter vs C `108,656`, `float64-chain:200` is Rust `40,276` ns/iter vs C `120,763`, `float32-chain:200` is Rust `48,362` ns/iter vs C `111,033`, `bytes-chain:200` is Rust `49,465` ns/iter vs C `164,437`, and self-host `--help` is `69,801,418` ns/iter after the mixed-shift closure; still a structural checkpoint rather than a full compiler-speed win |
 | post-F2 self-host profile refresh | passed before matrix-only probe commit; self-host `--help` still has 297,417 reductions, 300,279 step attempts, 347,838 app allocations, 1,302 heap spines, 5,353,612 resolve calls, max resolve chain 4, and 350,676 node growth; top reducers remain `B`, `C`, `C'`, `P`, `C'B`, `K`, `S`, `Z`, `O`, and `A`, confirming the next real work is reducer/spine structure rather than more strict primitive forcing |
+| F2 WHNF continuation-frame probe | passed before checkpoint commit; `seq`, `IO.strict`, and `isInt` now force their strict WHNF operands through explicit continuation frames when entered from those reducer arms, avoiding native recursion through nested `seq`/`IO.strict`/`isInt` chains while keeping the normal hot reducer loop free of an extra pre-step spine walk; throwaway `seq^20000` comb sink-matched C at `130`, with Rust `7,090,462` ns/iter vs C `1,365,349`; canaries sink-match (`arith-chain:200` Rust `35,872` vs C `125,945`, `bytes-chain:200` Rust `58,048` vs C `178,207`, `io-control-chain:200` Rust `59,537` vs C `142,261`) and self-host `--help` is `78,599,301` ns/iter vs C `10,679,790` with matching main sink |
 | ignored IO action shortcut perf probe | passed before checkpoint commit; `io-chain`, `io-control-chain`, `argref-chain`, `ffi-chain`, `ffi-math-chain`, `ffi-const-chain`, `env-set-chain`, and `remove-missing-chain` improved with matching sinks; `ffi-mem-chain` and `bfile-read-chain` canaries stayed in the same band |
 | direct lazyBind FFI-continuation perf probe | passed before checkpoint commit; against a clean `50e11139` temp worktree, `ffi-mem-chain` improved from ~1.31 ms to ~0.18 ms and `bfile-read-chain` improved from ~1.50 ms to ~0.34 ms with matching sinks; direct BFILE/env rows improved, while complex continuation canaries stayed in the same noisy band |
 | reducer inline-spine perf probe | passed at `63d03844`; against `f8b9e1d5` temp build, current Rust improved `arith-chain`, `io-chain`, `ffi-chain`, `ffi-mem-chain`, and `bfile-read-chain` by roughly 4-13% |
@@ -158,7 +159,7 @@ Last fully verified state: F2 strict primitive continuation-stack checkpoint.
 | C-compatible graph serializer spacing | passed at `6438ec82`; `argref-chain`, `mvar-chain`, `weak-chain` sinks match |
 | benchmark StablePtr harness reset | passed at `6438ec82`; `stableptr-chain` sink matches |
 
-Latest tracked runtime behavior change is the current F2 strict marker-continuation slice: `eval_int`, `eval_int64` including mixed Int64 shifts, `eval_float64`, `eval_float32`, and binary ByteString marker ops handle nested strict primops with explicit continuation stacks instead of native recursive reducer calls. Latest benchmark harness change makes Rust main-mode sinks C-compatible by using the input-byte sink instead of graph-size-dependent output.
+Latest tracked runtime behavior change is the current F2 WHNF continuation-frame slice: `eval_int`, `eval_int64` including mixed Int64 shifts, `eval_float64`, `eval_float32`, binary ByteString marker ops, and the strict WHNF arms `seq`, `IO.strict`, and `isInt` now have explicit continuation-frame paths instead of unbounded native recursion for nested chains. Latest benchmark harness change makes Rust main-mode sinks C-compatible by using the input-byte sink instead of graph-size-dependent output.
 
 ## Tier Status
 
@@ -219,11 +220,11 @@ runtime primitives.
 | scenario | Rust ns/iter | C ns/iter | ratio | sink match |
 |---|---:|---:|---:|---|
 | `identity-chain:1000` | 37,794 | 140,241 | 0.27 | yes |
-| `arith-chain:200` | 36,122 | 108,853 | 0.33 | yes |
+| `arith-chain:200` | 35,872 | 125,945 | 0.28 | yes |
 | `int64-chain:200` | 38,175 | 108,656 | 0.35 | yes |
 | `float64-chain:200` | 40,276 | 120,763 | 0.33 | yes |
 | `float32-chain:200` | 48,362 | 111,033 | 0.44 | yes |
-| `bytes-chain:200` | 49,465 | 164,437 | 0.30 | yes |
+| `bytes-chain:200` | 58,048 | 178,207 | 0.33 | yes |
 | `cstring-pack:200` | 1,706 | 102,501 | 0.02 | yes |
 | `foreignptr-slice:200` | 1,494 | 94,820 | 0.02 | yes |
 | `unpack-chain:200` | 8,678 | 97,157 | 0.09 | yes |
@@ -232,7 +233,7 @@ runtime primitives.
 | `io-chain:200` | 69,336 | 130,358 | 0.53 | yes |
 | `io-array-chain:200` | 3,747 | 92,561 | 0.04 | yes |
 | `io-bytes-chain:200` | 1,814 | 90,873 | 0.02 | yes |
-| `io-control-chain:200` | 59,303 | 131,295 | 0.45 | yes |
+| `io-control-chain:200` | 59,537 | 142,261 | 0.42 | yes |
 | `performio-apply-chain:200` | 77,333 | 117,888 | 0.66 | yes |
 | `argref-chain:200` | 55,481 | 128,597 | 0.43 | yes |
 | `stdio-chain:200` | 143,397 | 112,014 | 1.28 | yes |
@@ -288,7 +289,7 @@ section only measures the C and Rust runtimes executing that compiler.
 | check | C runtime | Rust runtime | status |
 |---|---:|---:|---|
 | compiler comb input | 647 KiB `/tmp/mhs-selfhost.comb`; generated by native `bin/mhs` | parses after signed-`i64::MIN` parser fix | input ready |
-| `--help` main smoke | 12,585,061 ns/iter; sink `661902` per iter | 80,608,656 ns/iter; sink `661902` per iter | both run and print identical usage text; not a full compile; refreshed with `--warmup-iters 1 --iters 3` after the C-compatible Rust main sink fix; byte-chain improves sharply, but this compiler-shaped proxy still needs the broader F2 single-stack reducer work |
+| `--help` main smoke | 10,679,790 ns/iter; sink `661902` per iter | 78,599,301 ns/iter; sink `661902` per iter | both run and print identical usage text; not a full compile; refreshed with `--warmup-iters 1 --iters 3` after the F2 WHNF-frame slice; this compiler-shaped proxy still needs the broader single-stack reducer work |
 | self-host compiler smoke | 56,387,928,187 ns/iter; output `/tmp/mhs-selfhost-c-refresh.comb` is a 647 KiB `v8.4` comb | latest full run before structural rewrites hit `timeout 900s` with exit `124`; only `/tmp/mhs-selfhost-rust-900s.out` warning was produced, stderr was empty, and no output comb existed at `/tmp/mhs-selfhost-rust-900s.comb` | not at parity |
 
 ### Self-Host Comb Static Profile
@@ -433,7 +434,7 @@ performance idea, not merely whether it has matching behavior.
 | Rewrite the consumed redex cell and continue | `GOIND`, `GOAP`, and `GOAP2` mutate the current node/root app and jump back to `top`/`ap` | App-reuse work moved in this direction, but Rust still returns `StepResult` and rebuilds extra arguments through helper slices instead of staying in one tight evaluator loop | partial |
 | Tie fixpoint knots in the consumed redex | `T_Y` does `GOAP(x, n)`, so `n@(Y x)` becomes `x n` instead of allocating a fresh `(Y x)` | Rust now reuses `apps[0]` as the recursive argument for `Y`, which preserves sharing and reduces self-host `--help` reductions/nodes; no-op self-updates avoid self-indirection hangs for divergent cycles like `Y I` | yes |
 | Treat common values as permanent/cached nodes | `init_nodes` creates permanent primitive nodes, small ints live in `intTable`, and helpers reuse `combK`, `combB`, `combIOBIND`, `combWorld`, etc. | Rust has `PrimCache` for a small set of heads, reuses the world token, and caches runtime-created small Ints seeded from parsed literals; it still lacks permanent parsed primitive singletons, and the small-int cache trimmed self-host graph size without a raw speed win | partial |
-| Use marker continuations for strict primitive forcing | Binary/unary int, int64, float, double, and bytes primops push nodes such as `T_BININT2`/`T_BININT1` and finish in `ret`, with fast paths when operands are already boxed values | Rust now has cheap fast paths for already-WHNF coercion arguments plus explicit continuation stacks for nested Int, Int64 including mixed shifts, Float64, Float32, and binary ByteString marker forcing; the main reducer loop still needs the same treatment | partial |
+| Use marker continuations for strict primitive forcing | Binary/unary int, int64, float, double, and bytes primops push nodes such as `T_BININT2`/`T_BININT1` and finish in `ret`, with fast paths when operands are already boxed values | Rust now has cheap fast paths for already-WHNF coercion arguments plus explicit continuation stacks for nested Int, Int64 including mixed shifts, Float64, Float32, binary ByteString marker forcing, and the strict WHNF arms `seq`, `IO.strict`, and `isInt`; the main reducer loop still needs the same treatment | partial |
 | Hand-shape arity-specific rewrites | `T_T3`..`T_T16`, `T_TAG0`..`T_TAG32`, `B`, `C`, `C'B`, `P`, and partial `K2`/`K3`/`K4` have direct switch arms | Rust has direct `KnownPrim` arms, reducer macros, tuple first-field shortcuts, and app reuse, but generic spine rebuild still costs more than C's macro-shaped rewrites | partial |
 | Simplify graph fragments when traversal is already happening | `GCRED` folds `A/K/I`, `B I`, `B x I`, `C op`, `C' I`, and related shapes while marking | Rust has no parse/GC simplification pass; current profiles point to reducer shape first, so this is a remembered later option rather than an active target | no |
 | Encode ordinary IO combinators as combinator rewrites | `T_IO_BIND` jumps to `T_C`, `T_IO_RETURN` jumps to `T_P`, and `T_IO_THEN` builds bind plus `K` | Rust mirrors the behavior and adds profiled shortcuts for ignored actions, direct returned binds, and lazyBind/FFI cases; more IO work needs profile evidence | partial |
@@ -464,7 +465,7 @@ Rows in this section are generated from temporary pure Haskell programs compiled
 | compression BFILE write-path benchmarks | decompressor rows existed; compiler-generated high-level compressor smokes now cover RLE/LZ77/BWT/LZMA write paths | partial done; built-in repeat scenarios still pending |
 | MD5 broader coverage | committed runtime covers all three FFI names; only `md5String` has a repeat benchmark | pending full high-level `System.IO.MD5` test once the compiler binary is available |
 | directory iteration FFI | committed runtime covers `opendir`, `readdir`, `closedir`, `c_d_name` | pending full high-level `System.Directory` test once the compiler binary is available |
-| self-hosting parity | C runtime can execute the compiler comb and produce a new compiler comb | Rust main-mode harness exists and lazy file IO now matches the C CPP scan smoke; latest full-compile run still hit the 900s timeout with no output comb; inline spine work removed almost all `--help` heap-spine spills, generalized combinator app reuse cuts self-host `--help` node growth by ~27%, direct known-head/helper dispatch plus C-style `Y` sharing keep the short self-host proxy in the ~70-80 ms band, small-int caching trims final profile nodes to 615,854 without speeding the proxy, strict WHNF coercion fast paths improved the proxy before noisy reruns, F2 numeric slices now speed arithmetic/int64/float rows, and the F2 ByteString slice speeds `bytes-chain` but leaves the compiler-shaped proxy still far behind C at 80,608,656 ns/iter vs 12,585,061 with matching sink; full self-host parity needs broader F2 single-stack reducer/marker-machine work |
+| self-hosting parity | C runtime can execute the compiler comb and produce a new compiler comb | Rust main-mode harness exists and lazy file IO now matches the C CPP scan smoke; latest full-compile run still hit the 900s timeout with no output comb; inline spine work removed almost all `--help` heap-spine spills, generalized combinator app reuse cuts self-host `--help` node growth by ~27%, direct known-head/helper dispatch plus C-style `Y` sharing keep the short self-host proxy in the ~70-80 ms band, small-int caching trims final profile nodes to 615,854 without speeding the proxy, strict WHNF coercion fast paths improved the proxy before noisy reruns, F2 numeric/ByteString slices speed the relevant common rows, and the F2 WHNF-frame slice removes nested `seq`/`IO.strict`/`isInt` native recursion while leaving the compiler-shaped proxy still far behind C at 78,599,301 ns/iter vs 10,679,790 with matching sink; full self-host parity needs broader F2 single-stack reducer/marker-machine work |
 | high-level environment tests | runtime now covers `getenv`, `setenv`, `unsetenv`, `environ`; benchmark covers mutation plus lookup | pending full high-level `System.Environment` test once the compiler binary is available |
 | high-level errno/error tests | runtime now covers errno constants, `&errno`, `strerror_r`, and errno recording for implemented host failures | pending full high-level `Foreign.C.Error` / `throwErrnoIf*` tests once the compiler binary is available |
 | high-level temp/CPU tests | runtime now covers `tmpname` and `getcpu`; direct smokes cover the raw FFI actions only | pending full high-level `System.IO.openTmpFile` / `System.CPUTime` tests once the compiler binary is available |
