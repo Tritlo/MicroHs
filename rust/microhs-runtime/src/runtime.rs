@@ -1411,7 +1411,6 @@ impl Program {
     ) -> Result<NodeId, EvalError> {
         spine.clear();
         while let Node::App(fun, arg) = self.nodes[node.0] {
-            let arg = self.resolve_profiled(arg)?;
             spine.push_desc(arg, node);
             node = self.resolve_profiled(fun)?;
         }
@@ -2459,7 +2458,6 @@ impl Program {
         let mut inline_len = 0;
         let mut heap: Option<(Vec<NodeId>, Vec<NodeId>)> = None;
         while let Node::App(fun, arg) = self.nodes[node.0] {
-            let arg = self.resolve_profiled(arg)?;
             if let Some((args, apps)) = &mut heap {
                 args.push(arg);
                 apps.push(node);
