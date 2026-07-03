@@ -1433,6 +1433,11 @@ impl Program {
         scratch_args: &mut Vec<NodeId>,
         scratch_apps: &mut Vec<NodeId>,
         int_stack: &mut IntFrameStack,
+        int64_stack: &mut Int64FrameStack,
+        float64_stack: &mut Float64FrameStack,
+        float32_stack: &mut Float32FrameStack,
+        bytes_stack: &mut BytesFrameStack,
+        strict_markers: bool,
     ) -> Result<Option<EvalLoopStep>, EvalError> {
         let head = self.fill_eval_spine(root, spine)?;
         let args_len = spine.len();
@@ -1468,6 +1473,26 @@ impl Program {
                     node,
                     $reductions,
                 )));
+            }};
+        }
+        macro_rules! strict_marker_step {
+            ($stack:expr, $used:expr, $frame:ident, $kind:expr, $next:expr) => {{
+                let redex = Self::strict_redex_from_eval_spine(
+                    root,
+                    $used,
+                    spine,
+                    scratch_args,
+                    scratch_apps,
+                );
+                $stack.push($frame {
+                    redex,
+                    profile_head,
+                    kind: $kind,
+                });
+                return Ok(Some(EvalLoopStep {
+                    node: $next,
+                    reductions: 0,
+                }));
             }};
         }
 
@@ -1533,48 +1558,124 @@ impl Program {
                     }
                 }
 
-                if known.is_none() {
+                if strict_markers && known.is_none() {
                     if args_len >= 2 {
                         if let Some(op) = IntBinOp::from_prim(prim.name()) {
                             if op.driver_marker_safe() {
-                                let redex = Self::strict_redex_from_eval_spine(
-                                    root,
+                                strict_marker_step!(
+                                    int_stack,
                                     2,
-                                    spine,
-                                    scratch_args,
-                                    scratch_apps,
+                                    IntFrame,
+                                    IntFrameKind::BinSecond { op, x: arg!(0) },
+                                    arg!(1)
                                 );
-                                int_stack.push(IntFrame {
-                                    redex,
-                                    profile_head,
-                                    kind: IntFrameKind::BinSecond { op, x: arg!(0) },
-                                });
-                                return Ok(Some(EvalLoopStep {
-                                    node: arg!(1),
-                                    reductions: 0,
-                                }));
                             }
                         }
                     }
 
                     if args_len >= 1 {
                         if let Some(op) = IntUnOp::from_prim(prim.name()) {
-                            let redex = Self::strict_redex_from_eval_spine(
-                                root,
+                            strict_marker_step!(
+                                int_stack,
                                 1,
-                                spine,
-                                scratch_args,
-                                scratch_apps,
+                                IntFrame,
+                                IntFrameKind::Un { op },
+                                arg!(0)
                             );
-                            int_stack.push(IntFrame {
-                                redex,
-                                profile_head,
-                                kind: IntFrameKind::Un { op },
-                            });
-                            return Ok(Some(EvalLoopStep {
-                                node: arg!(0),
-                                reductions: 0,
-                            }));
+                        }
+                    }
+
+                    if args_len >= 2 {
+                        if let Some(op) = Int64BinOp::from_prim(prim.name()) {
+                            if op.driver_marker_safe() {
+                                strict_marker_step!(
+                                    int64_stack,
+                                    2,
+                                    Int64Frame,
+                                    Int64FrameKind::BinSecond { op, x: arg!(0) },
+                                    arg!(1)
+                                );
+                            }
+                        }
+                    }
+
+                    if args_len >= 1 {
+                        if let Some(op) = Int64UnOp::from_prim(prim.name()) {
+                            if op.driver_marker_safe() {
+                                strict_marker_step!(
+                                    int64_stack,
+                                    1,
+                                    Int64Frame,
+                                    Int64FrameKind::Un { op },
+                                    arg!(0)
+                                );
+                            }
+                        }
+                    }
+
+                    if args_len >= 2 {
+                        if let Some(op) = Float64BinOp::from_prim(prim.name()) {
+                            if op.driver_marker_safe() {
+                                strict_marker_step!(
+                                    float64_stack,
+                                    2,
+                                    Float64Frame,
+                                    Float64FrameKind::BinSecond { op, x: arg!(0) },
+                                    arg!(1)
+                                );
+                            }
+                        }
+                    }
+
+                    if args_len >= 1 {
+                        if let Some(op) = Float64UnOp::from_prim(prim.name()) {
+                            strict_marker_step!(
+                                float64_stack,
+                                1,
+                                Float64Frame,
+                                Float64FrameKind::Un { op },
+                                arg!(0)
+                            );
+                        }
+                    }
+
+                    if args_len >= 2 {
+                        if let Some(op) = Float32BinOp::from_prim(prim.name()) {
+                            if op.driver_marker_safe() {
+                                strict_marker_step!(
+                                    float32_stack,
+                                    2,
+                                    Float32Frame,
+                                    Float32FrameKind::BinSecond { op, x: arg!(0) },
+                                    arg!(1)
+                                );
+                            }
+                        }
+                    }
+
+                    if args_len >= 1 {
+                        if let Some(op) = Float32UnOp::from_prim(prim.name()) {
+                            strict_marker_step!(
+                                float32_stack,
+                                1,
+                                Float32Frame,
+                                Float32FrameKind::Un { op },
+                                arg!(0)
+                            );
+                        }
+                    }
+
+                    if args_len >= 2 {
+                        if let Some(op) = BytesBinOp::from_prim(prim.name()) {
+                            if op.driver_marker_safe() {
+                                strict_marker_step!(
+                                    bytes_stack,
+                                    2,
+                                    BytesFrame,
+                                    BytesFrameKind::BinSecond { op, x: arg!(0) },
+                                    arg!(1)
+                                );
+                            }
                         }
                     }
                 }
@@ -3342,24 +3443,61 @@ impl Program {
         let mut steps = 0;
         let mut stack = WhnfFrameStack::default();
         let mut int_stack = IntFrameStack::default();
+        let mut int64_stack = Int64FrameStack::default();
+        let mut float64_stack = Float64FrameStack::default();
+        let mut float32_stack = Float32FrameStack::default();
+        let mut bytes_stack = BytesFrameStack::default();
         let mut eval_spine = EvalSpine::default();
         let mut scratch_args = Vec::new();
         let mut scratch_apps = Vec::new();
         while steps < limit {
             let current = self.resolve_for_whnf(root, profile_resolve)?;
-            if stack.is_empty() {
-                if let Node::Int(value) = self.nodes[current.0] {
-                    if let Some(frame) = int_stack.pop() {
-                        let (next, reductions) =
-                            self.finish_int_frame(frame, value, &mut int_stack)?;
-                        steps += reductions;
-                        self.reductions += reductions;
-                        if steps >= limit {
-                            return Err(EvalError::StepLimit { limit });
+            if !whnf_frames {
+                if let Some((next, reductions)) = match self.nodes[current.0] {
+                    Node::Int(value) => {
+                        if let Some(frame) = int_stack.pop() {
+                            Some(self.finish_int_frame(frame, value, &mut int_stack)?)
+                        } else {
+                            None
                         }
-                        root = next;
-                        continue;
                     }
+                    Node::Int64(value) => {
+                        if let Some(frame) = int64_stack.pop() {
+                            Some(self.finish_int64_frame(frame, value, &mut int64_stack)?)
+                        } else {
+                            None
+                        }
+                    }
+                    Node::Float64(value) => {
+                        if let Some(frame) = float64_stack.pop() {
+                            Some(self.finish_float64_frame(frame, value, &mut float64_stack))
+                        } else {
+                            None
+                        }
+                    }
+                    Node::Float32(value) => {
+                        if let Some(frame) = float32_stack.pop() {
+                            Some(self.finish_float32_frame(frame, value, &mut float32_stack))
+                        } else {
+                            None
+                        }
+                    }
+                    Node::Bytes(_) => {
+                        if let Some(frame) = bytes_stack.pop() {
+                            Some(self.finish_bytes_frame(frame, current, &mut bytes_stack)?)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                } {
+                    steps += reductions;
+                    self.reductions += reductions;
+                    if steps >= limit {
+                        return Err(EvalError::StepLimit { limit });
+                    }
+                    root = next;
+                    continue;
                 }
             }
 
@@ -3378,11 +3516,28 @@ impl Program {
                 &mut scratch_args,
                 &mut scratch_apps,
                 &mut int_stack,
+                &mut int64_stack,
+                &mut float64_stack,
+                &mut float32_stack,
+                &mut bytes_stack,
+                !whnf_frames,
             )?
             else {
                 let Some(frame) = stack.pop() else {
                     if !int_stack.is_empty() {
                         return Err(EvalError::ExpectedInt(current));
+                    }
+                    if !int64_stack.is_empty() {
+                        return Err(EvalError::ExpectedInt64(current));
+                    }
+                    if !float64_stack.is_empty() {
+                        return Err(EvalError::ExpectedFloat64(current));
+                    }
+                    if !float32_stack.is_empty() {
+                        return Err(EvalError::ExpectedFloat32(current));
+                    }
+                    if !bytes_stack.is_empty() {
+                        return Err(EvalError::ExpectedBytes(current));
                     }
                     return Ok((current, steps));
                 };
@@ -9153,6 +9308,25 @@ impl Int64BinOp {
         matches!(self, Self::Shl | Self::Shr | Self::Ashr)
     }
 
+    fn driver_marker_safe(self) -> bool {
+        !self.rhs_is_shift()
+            && !matches!(
+                self,
+                Self::Eq
+                    | Self::Ne
+                    | Self::Lt
+                    | Self::Le
+                    | Self::Gt
+                    | Self::Ge
+                    | Self::Ult
+                    | Self::Ule
+                    | Self::Ugt
+                    | Self::Uge
+                    | Self::ICmp
+                    | Self::UCmp
+            )
+    }
+
     fn apply(self, x: i64, y: i64) -> Result<Int64Result, EvalError> {
         let xu = x as u64;
         let yu = y as u64;
@@ -9240,6 +9414,10 @@ impl Int64UnOp {
         })
     }
 
+    fn driver_marker_safe(self) -> bool {
+        matches!(self, Self::Neg | Self::UNeg | Self::Inv)
+    }
+
     fn apply(self, x: i64) -> Result<Int64UnResult, EvalError> {
         let xu = x as u64;
         Ok(match self {
@@ -9287,6 +9465,10 @@ impl Float64BinOp {
             "d>=" => Self::Ge,
             _ => return None,
         })
+    }
+
+    fn driver_marker_safe(self) -> bool {
+        matches!(self, Self::Add | Self::Sub | Self::Mul | Self::Div)
     }
 
     fn apply(self, x: f64, y: f64) -> Float64Result {
@@ -9361,6 +9543,10 @@ impl Float32BinOp {
         })
     }
 
+    fn driver_marker_safe(self) -> bool {
+        matches!(self, Self::Add | Self::Sub | Self::Mul | Self::Div)
+    }
+
     fn apply(self, x: f32, y: f32) -> Float32Result {
         match self {
             Self::Add => Float32Result::Float(x + y),
@@ -9424,6 +9610,10 @@ impl BytesBinOp {
             "bscmp" => Self::Cmp,
             _ => return None,
         })
+    }
+
+    fn driver_marker_safe(self) -> bool {
+        matches!(self, Self::Append | Self::AppendDot)
     }
 }
 
