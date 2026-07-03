@@ -4,4 +4,6 @@ pub mod runtime;
 mod wasm;
 
 pub use parse::{ParseError, parse_program};
-pub use runtime::{EvalError, EvalProfile, JsValue, KnownPrim, Node, NodeId, Prim, Program};
+pub use runtime::{
+    EvalError, EvalProfile, GcStats, JsValue, KnownPrim, Node, NodeId, Prim, Program,
+};

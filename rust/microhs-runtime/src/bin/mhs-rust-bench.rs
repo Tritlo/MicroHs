@@ -5,7 +5,7 @@ use std::process::Command;
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use microhs_runtime::{EvalError, EvalProfile, Program, parse_program};
+use microhs_runtime::{EvalError, EvalProfile, GcStats, Program, parse_program};
 
 const DEFAULT_ITERS: usize = 1_000;
 const DEFAULT_WARMUP_ITERS: usize = 0;
@@ -117,6 +117,13 @@ fn main() -> ExitCode {
     );
     println!("step_limited_iters: {}", eval.step_limited_iters);
     println!("serialize_sink: {}", eval.serialize_sink);
+    println!("gc_collections: {}", eval.gc.collections);
+    println!("gc_freed_nodes_total: {}", eval.gc.freed_nodes_total);
+    println!("gc_last_live_nodes: {}", eval.gc.last_live_nodes);
+    println!("gc_last_free_nodes: {}", eval.gc.last_free_nodes);
+    println!("gc_high_water_nodes: {}", eval.gc.high_water_nodes);
+    println!("gc_current_nodes: {}", eval.gc.current_nodes);
+    println!("gc_current_free_nodes: {}", eval.gc.current_free_nodes);
 
     if config.profile {
         let profile = profile_eval(
@@ -960,6 +967,7 @@ struct EvalBench {
     steps: usize,
     serialize_sink: usize,
     step_limited_iters: usize,
+    gc: GcStats,
 }
 
 struct ProfileBench {
@@ -969,6 +977,7 @@ struct ProfileBench {
     step_limited: bool,
     nodes_before: usize,
     nodes_after: usize,
+    gc: GcStats,
     profile: EvalProfile,
 }
 
@@ -995,6 +1004,7 @@ fn bench_eval(
     let mut steps = 0;
     let mut serialize_sink = 0usize;
     let mut step_limited_iters = 0usize;
+    let mut gc = GcStats::default();
     for _ in 0..iters {
         let run = eval_once(input, mode, program_args, executable_path, step_limit);
         steps += run.steps;
@@ -1003,6 +1013,15 @@ fn bench_eval(
         }
         let sink = run.serialize_sink;
         serialize_sink = serialize_sink.wrapping_add(sink);
+        gc.collections = gc.collections.saturating_add(run.gc.collections);
+        gc.freed_nodes_total = gc
+            .freed_nodes_total
+            .saturating_add(run.gc.freed_nodes_total);
+        gc.last_live_nodes = run.gc.last_live_nodes;
+        gc.last_free_nodes = run.gc.last_free_nodes;
+        gc.high_water_nodes = gc.high_water_nodes.max(run.gc.high_water_nodes);
+        gc.current_nodes = run.gc.current_nodes;
+        gc.current_free_nodes = run.gc.current_free_nodes;
     }
     black_box(serialize_sink);
     EvalBench {
@@ -1010,6 +1029,7 @@ fn bench_eval(
         steps,
         serialize_sink,
         step_limited_iters,
+        gc,
     }
 }
 
@@ -1017,6 +1037,7 @@ struct RunOnce {
     steps: usize,
     serialize_sink: usize,
     step_limited: bool,
+    gc: GcStats,
 }
 
 fn eval_once(
@@ -1030,7 +1051,7 @@ fn eval_once(
     program.set_program_args(program_args.to_vec());
     program.set_executable_path(executable_path.map(Vec::from));
     let limit = step_limit.unwrap_or(usize::MAX);
-    match mode {
+    let mut run = match mode {
         BenchMode::Whnf => {
             let reductions = program.reduction_count();
             match program.reduce_whnf(limit) {
@@ -1044,18 +1065,22 @@ fn eval_once(
                         steps,
                         serialize_sink: sink,
                         step_limited: false,
+                        gc: GcStats::default(),
                     }
                 }
                 Err(EvalError::StepLimit { .. }) => RunOnce {
                     steps: program.reduction_count().saturating_sub(reductions),
                     serialize_sink: main_input_sink(input),
                     step_limited: true,
+                    gc: GcStats::default(),
                 },
                 Err(err) => panic!("reduce benchmark input: {err}"),
             }
         }
         BenchMode::Main => reduce_main_or_panic(&mut program, limit, "run benchmark main", input),
-    }
+    };
+    run.gc = program.gc_stats();
+    run
 }
 
 fn profile_eval(
@@ -1086,12 +1111,14 @@ fn profile_eval(
                         steps,
                         serialize_sink: sink,
                         step_limited: false,
+                        gc: GcStats::default(),
                     }
                 }
                 Err(EvalError::StepLimit { .. }) => RunOnce {
                     steps: program.reduction_count().saturating_sub(reductions),
                     serialize_sink: main_input_sink(input),
                     step_limited: true,
+                    gc: GcStats::default(),
                 },
                 Err(err) => panic!("profile reduce benchmark input: {err}"),
             }
@@ -1102,6 +1129,7 @@ fn profile_eval(
     };
     let elapsed = started.elapsed();
     let nodes_after = program.nodes().len();
+    let gc = program.gc_stats();
     let profile = program.take_profile().expect("profile enabled");
     ProfileBench {
         elapsed,
@@ -1110,6 +1138,7 @@ fn profile_eval(
         step_limited: run.step_limited,
         nodes_before,
         nodes_after,
+        gc,
         profile,
     }
 }
@@ -1121,6 +1150,22 @@ fn print_profile(profile: &ProfileBench, top: usize) {
     println!("profile_step_limited: {}", profile.step_limited);
     println!("profile_nodes_before: {}", profile.nodes_before);
     println!("profile_nodes_after: {}", profile.nodes_after);
+    println!("profile_gc_collections: {}", profile.gc.collections);
+    println!(
+        "profile_gc_freed_nodes_total: {}",
+        profile.gc.freed_nodes_total
+    );
+    println!("profile_gc_last_live_nodes: {}", profile.gc.last_live_nodes);
+    println!("profile_gc_last_free_nodes: {}", profile.gc.last_free_nodes);
+    println!(
+        "profile_gc_high_water_nodes: {}",
+        profile.gc.high_water_nodes
+    );
+    println!("profile_gc_current_nodes: {}", profile.gc.current_nodes);
+    println!(
+        "profile_gc_current_free_nodes: {}",
+        profile.gc.current_free_nodes
+    );
     println!(
         "profile_node_growth: {}",
         profile.nodes_after.saturating_sub(profile.nodes_before)
@@ -1199,6 +1244,22 @@ fn print_profile(profile: &ProfileBench, top: usize) {
     for (shortcut, count) in profile.profile.top_shortcut_hits(top) {
         println!("  {shortcut}: {count}");
     }
+    println!("profile_primitive_dispatch_probes:");
+    for (probe, count) in profile.profile.top_primitive_dispatch_probes(top) {
+        println!("  {probe}: {count}");
+    }
+    println!("profile_primitive_dispatch_hits:");
+    for (hit, count) in profile.profile.top_primitive_dispatch_hits(top) {
+        println!("  {hit}: {count}");
+    }
+    println!("profile_node_allocations:");
+    for (kind, count) in profile.profile.top_node_allocations(top) {
+        println!("  {kind}: {count}");
+    }
+    println!("profile_app_allocation_sites:");
+    for (site, count) in profile.profile.top_app_allocation_sites(top) {
+        println!("  {site}: {count}");
+    }
 }
 
 fn bytes_sink(bytes: &[u8]) -> usize {
@@ -1225,6 +1286,7 @@ fn reduce_main_or_panic(
             steps,
             serialize_sink: main_input_sink(input),
             step_limited: false,
+            gc: GcStats::default(),
         },
         Err(EvalError::Raised(exn)) => {
             let message = program
@@ -1235,6 +1297,7 @@ fn reduce_main_or_panic(
                     steps: program.reduction_count().saturating_sub(reductions),
                     serialize_sink: main_input_sink(input),
                     step_limited: false,
+                    gc: GcStats::default(),
                 }
             } else {
                 panic!("{context}: {}", String::from_utf8_lossy(&message));
@@ -1244,6 +1307,7 @@ fn reduce_main_or_panic(
             steps: program.reduction_count().saturating_sub(reductions),
             serialize_sink: main_input_sink(input),
             step_limited: true,
+            gc: GcStats::default(),
         },
         Err(err) => panic!("{context}: {err}"),
     }
