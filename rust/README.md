@@ -96,7 +96,8 @@ is `c_parse_eval_serialize_ns_per_iter`; the comparable Rust number is
 `.comb` fragment before updating the sink. Rust `whnf_steps` counts
 driver-visible WHNF rewrites. Strict primitive forcing that still happens inside
 helper evaluators is included in elapsed time but not always counted as
-separate steps; F2 strict-result marker forcing is counted in the driver.
+separate steps; F2 strict-result marker forcing through the unified WHNF driver
+stack is counted in the driver.
 
 For main-program benchmarks, pass exact program argv after `--`, including
 `argv[0]`, for example:

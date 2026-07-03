@@ -891,6 +891,13 @@ enum Int64FrameKind {
     Un { op: Int64UnOp },
 }
 
+struct Int64ShiftFrame {
+    redex: StrictRedex,
+    profile_head: Option<String>,
+    op: Int64BinOp,
+    x: NodeId,
+}
+
 struct Float64Frame {
     redex: StrictRedex,
     profile_head: Option<String>,
@@ -926,6 +933,16 @@ enum BytesFrameKind {
     BinFirst { op: BytesBinOp, y: NodeId },
 }
 
+enum EvalFrame {
+    Whnf(WhnfFrame),
+    Int(IntFrame),
+    Int64(Int64Frame),
+    Int64Shift(Int64ShiftFrame),
+    Float64(Float64Frame),
+    Float32(Float32Frame),
+    Bytes(BytesFrame),
+}
+
 struct FrameStack<T> {
     top: Option<T>,
     rest: Vec<T>,
@@ -953,17 +970,97 @@ impl<T> FrameStack<T> {
         Some(frame)
     }
 
-    fn is_empty(&self) -> bool {
-        self.top.is_none()
+    fn peek(&self) -> Option<&T> {
+        self.top.as_ref()
     }
 }
 
-type WhnfFrameStack = FrameStack<WhnfFrame>;
 type IntFrameStack = FrameStack<IntFrame>;
 type Int64FrameStack = FrameStack<Int64Frame>;
 type Float64FrameStack = FrameStack<Float64Frame>;
 type Float32FrameStack = FrameStack<Float32Frame>;
 type BytesFrameStack = FrameStack<BytesFrame>;
+type EvalFrameStack = FrameStack<EvalFrame>;
+
+trait PushIntFrame {
+    fn push_int_frame(&mut self, frame: IntFrame);
+}
+
+trait PushInt64Frame {
+    fn push_int64_frame(&mut self, frame: Int64Frame);
+}
+
+trait PushFloat64Frame {
+    fn push_float64_frame(&mut self, frame: Float64Frame);
+}
+
+trait PushFloat32Frame {
+    fn push_float32_frame(&mut self, frame: Float32Frame);
+}
+
+trait PushBytesFrame {
+    fn push_bytes_frame(&mut self, frame: BytesFrame);
+}
+
+impl PushIntFrame for IntFrameStack {
+    fn push_int_frame(&mut self, frame: IntFrame) {
+        self.push(frame);
+    }
+}
+
+impl PushIntFrame for EvalFrameStack {
+    fn push_int_frame(&mut self, frame: IntFrame) {
+        self.push(EvalFrame::Int(frame));
+    }
+}
+
+impl PushInt64Frame for Int64FrameStack {
+    fn push_int64_frame(&mut self, frame: Int64Frame) {
+        self.push(frame);
+    }
+}
+
+impl PushInt64Frame for EvalFrameStack {
+    fn push_int64_frame(&mut self, frame: Int64Frame) {
+        self.push(EvalFrame::Int64(frame));
+    }
+}
+
+impl PushFloat64Frame for Float64FrameStack {
+    fn push_float64_frame(&mut self, frame: Float64Frame) {
+        self.push(frame);
+    }
+}
+
+impl PushFloat64Frame for EvalFrameStack {
+    fn push_float64_frame(&mut self, frame: Float64Frame) {
+        self.push(EvalFrame::Float64(frame));
+    }
+}
+
+impl PushFloat32Frame for Float32FrameStack {
+    fn push_float32_frame(&mut self, frame: Float32Frame) {
+        self.push(frame);
+    }
+}
+
+impl PushFloat32Frame for EvalFrameStack {
+    fn push_float32_frame(&mut self, frame: Float32Frame) {
+        self.push(EvalFrame::Float32(frame));
+    }
+}
+
+impl PushBytesFrame for BytesFrameStack {
+    fn push_bytes_frame(&mut self, frame: BytesFrame) {
+        self.push(frame);
+    }
+}
+
+impl PushBytesFrame for EvalFrameStack {
+    fn push_bytes_frame(&mut self, frame: BytesFrame) {
+        self.push(EvalFrame::Bytes(frame));
+    }
+}
 
 impl Program {
     pub fn new(nodes: Vec<Node>, root: NodeId, labels: HashMap<usize, NodeId>) -> Self {
@@ -1432,11 +1529,7 @@ impl Program {
         spine: &mut EvalSpine,
         scratch_args: &mut Vec<NodeId>,
         scratch_apps: &mut Vec<NodeId>,
-        int_stack: &mut IntFrameStack,
-        int64_stack: &mut Int64FrameStack,
-        float64_stack: &mut Float64FrameStack,
-        float32_stack: &mut Float32FrameStack,
-        bytes_stack: &mut BytesFrameStack,
+        frame_stack: &mut EvalFrameStack,
         strict_markers: bool,
     ) -> Result<Option<EvalLoopStep>, EvalError> {
         let head = self.fill_eval_spine(root, spine)?;
@@ -1476,7 +1569,7 @@ impl Program {
             }};
         }
         macro_rules! strict_marker_step {
-            ($stack:expr, $used:expr, $frame:ident, $kind:expr, $next:expr) => {{
+            ($used:expr, $variant:ident, $frame:ident, $kind:expr, $next:expr) => {{
                 let redex = Self::strict_redex_from_eval_spine(
                     root,
                     $used,
@@ -1484,11 +1577,32 @@ impl Program {
                     scratch_args,
                     scratch_apps,
                 );
-                $stack.push($frame {
+                frame_stack.push(EvalFrame::$variant($frame {
                     redex,
                     profile_head,
                     kind: $kind,
-                });
+                }));
+                return Ok(Some(EvalLoopStep {
+                    node: $next,
+                    reductions: 0,
+                }));
+            }};
+        }
+        macro_rules! strict_int64_shift_marker_step {
+            ($used:expr, $op:expr, $x:expr, $next:expr) => {{
+                let redex = Self::strict_redex_from_eval_spine(
+                    root,
+                    $used,
+                    spine,
+                    scratch_args,
+                    scratch_apps,
+                );
+                frame_stack.push(EvalFrame::Int64Shift(Int64ShiftFrame {
+                    redex,
+                    profile_head,
+                    op: $op,
+                    x: $x,
+                }));
                 return Ok(Some(EvalLoopStep {
                     node: $next,
                     reductions: 0,
@@ -1563,8 +1677,8 @@ impl Program {
                         if let Some(op) = IntBinOp::from_prim(prim.name()) {
                             if op.driver_marker_safe() {
                                 strict_marker_step!(
-                                    int_stack,
                                     2,
+                                    Int,
                                     IntFrame,
                                     IntFrameKind::BinSecond { op, x: arg!(0) },
                                     arg!(1)
@@ -1575,22 +1689,18 @@ impl Program {
 
                     if args_len >= 1 {
                         if let Some(op) = IntUnOp::from_prim(prim.name()) {
-                            strict_marker_step!(
-                                int_stack,
-                                1,
-                                IntFrame,
-                                IntFrameKind::Un { op },
-                                arg!(0)
-                            );
+                            strict_marker_step!(1, Int, IntFrame, IntFrameKind::Un { op }, arg!(0));
                         }
                     }
 
                     if args_len >= 2 {
                         if let Some(op) = Int64BinOp::from_prim(prim.name()) {
-                            if op.driver_marker_safe() {
+                            if op.rhs_is_shift() {
+                                strict_int64_shift_marker_step!(2, op, arg!(0), arg!(1));
+                            } else if op.driver_marker_safe() {
                                 strict_marker_step!(
-                                    int64_stack,
                                     2,
+                                    Int64,
                                     Int64Frame,
                                     Int64FrameKind::BinSecond { op, x: arg!(0) },
                                     arg!(1)
@@ -1603,8 +1713,8 @@ impl Program {
                         if let Some(op) = Int64UnOp::from_prim(prim.name()) {
                             if op.driver_marker_safe() {
                                 strict_marker_step!(
-                                    int64_stack,
                                     1,
+                                    Int64,
                                     Int64Frame,
                                     Int64FrameKind::Un { op },
                                     arg!(0)
@@ -1617,8 +1727,8 @@ impl Program {
                         if let Some(op) = Float64BinOp::from_prim(prim.name()) {
                             if op.driver_marker_safe() {
                                 strict_marker_step!(
-                                    float64_stack,
                                     2,
+                                    Float64,
                                     Float64Frame,
                                     Float64FrameKind::BinSecond { op, x: arg!(0) },
                                     arg!(1)
@@ -1630,8 +1740,8 @@ impl Program {
                     if args_len >= 1 {
                         if let Some(op) = Float64UnOp::from_prim(prim.name()) {
                             strict_marker_step!(
-                                float64_stack,
                                 1,
+                                Float64,
                                 Float64Frame,
                                 Float64FrameKind::Un { op },
                                 arg!(0)
@@ -1643,8 +1753,8 @@ impl Program {
                         if let Some(op) = Float32BinOp::from_prim(prim.name()) {
                             if op.driver_marker_safe() {
                                 strict_marker_step!(
-                                    float32_stack,
                                     2,
+                                    Float32,
                                     Float32Frame,
                                     Float32FrameKind::BinSecond { op, x: arg!(0) },
                                     arg!(1)
@@ -1656,8 +1766,8 @@ impl Program {
                     if args_len >= 1 {
                         if let Some(op) = Float32UnOp::from_prim(prim.name()) {
                             strict_marker_step!(
-                                float32_stack,
                                 1,
+                                Float32,
                                 Float32Frame,
                                 Float32FrameKind::Un { op },
                                 arg!(0)
@@ -1669,8 +1779,8 @@ impl Program {
                         if let Some(op) = BytesBinOp::from_prim(prim.name()) {
                             if op.driver_marker_safe() {
                                 strict_marker_step!(
-                                    bytes_stack,
                                     2,
+                                    Bytes,
                                     BytesFrame,
                                     BytesFrameKind::BinSecond { op, x: arg!(0) },
                                     arg!(1)
@@ -3110,7 +3220,7 @@ impl Program {
         &mut self,
         frame: IntFrame,
         value: i64,
-        stack: &mut IntFrameStack,
+        stack: &mut impl PushIntFrame,
     ) -> Result<(NodeId, usize), EvalError> {
         let result = match frame.kind {
             IntFrameKind::BinSecond { op, x } => {
@@ -3120,7 +3230,7 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: IntFrameKind::BinFirst { op, y: value },
                 };
-                stack.push(next_frame);
+                stack.push_int_frame(next_frame);
                 return Ok((next, 0));
             }
             IntFrameKind::BinFirst { op, y } => op
@@ -3277,7 +3387,7 @@ impl Program {
         &mut self,
         frame: Int64Frame,
         value: i64,
-        stack: &mut Int64FrameStack,
+        stack: &mut impl PushInt64Frame,
     ) -> Result<(NodeId, usize), EvalError> {
         let node = match frame.kind {
             Int64FrameKind::BinSecond { op, x } => {
@@ -3287,7 +3397,7 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: Int64FrameKind::BinFirst { op, y: value },
                 };
-                stack.push(next_frame);
+                stack.push_int64_frame(next_frame);
                 return Ok((next, 0));
             }
             Int64FrameKind::BinFirst { op, y } => {
@@ -3421,6 +3531,95 @@ impl Program {
         Ok((node, 1))
     }
 
+    fn finish_ready_eval_frame(
+        &mut self,
+        stack: &mut EvalFrameStack,
+        current: NodeId,
+    ) -> Result<Option<(NodeId, usize)>, EvalError> {
+        enum ReadyFrame {
+            Int(i64),
+            Int64Shift(i64),
+            Int64(i64),
+            Float64(f64),
+            Float32(f32),
+            Bytes,
+        }
+
+        let ready = match (stack.peek(), &self.nodes[current.0]) {
+            (Some(EvalFrame::Int(_)), Node::Int(value)) => Some(ReadyFrame::Int(*value)),
+            (Some(EvalFrame::Int64Shift(_)), Node::Int(value)) => {
+                Some(ReadyFrame::Int64Shift(*value))
+            }
+            (Some(EvalFrame::Int64(_)), Node::Int64(value)) => Some(ReadyFrame::Int64(*value)),
+            (Some(EvalFrame::Float64(_)), Node::Float64(value)) => {
+                Some(ReadyFrame::Float64(*value))
+            }
+            (Some(EvalFrame::Float32(_)), Node::Float32(value)) => {
+                Some(ReadyFrame::Float32(*value))
+            }
+            (Some(EvalFrame::Bytes(_)), Node::Bytes(_) | Node::MutableBytes { .. }) => {
+                Some(ReadyFrame::Bytes)
+            }
+            _ => None,
+        };
+        let Some(ready) = ready else {
+            return Ok(None);
+        };
+
+        let frame = stack.pop().expect("ready eval frame must have a frame");
+        let result = match (frame, ready) {
+            (EvalFrame::Int(frame), ReadyFrame::Int(value)) => {
+                self.finish_int_frame(frame, value, stack)?
+            }
+            (EvalFrame::Int64(frame), ReadyFrame::Int64(value)) => {
+                self.finish_int64_frame(frame, value, stack)?
+            }
+            (EvalFrame::Int64Shift(frame), ReadyFrame::Int64Shift(value)) => {
+                let next = frame.x;
+                stack.push(EvalFrame::Int64(Int64Frame {
+                    redex: frame.redex,
+                    profile_head: frame.profile_head,
+                    kind: Int64FrameKind::ShiftFirst {
+                        op: frame.op,
+                        y: value,
+                    },
+                }));
+                (next, 0)
+            }
+            (EvalFrame::Float64(frame), ReadyFrame::Float64(value)) => {
+                self.finish_float64_frame(frame, value, stack)
+            }
+            (EvalFrame::Float32(frame), ReadyFrame::Float32(value)) => {
+                self.finish_float32_frame(frame, value, stack)
+            }
+            (EvalFrame::Bytes(frame), ReadyFrame::Bytes) => {
+                self.finish_bytes_frame(frame, current, stack)?
+            }
+            _ => unreachable!("ready eval frame kind changed before pop"),
+        };
+        Ok(Some(result))
+    }
+
+    fn finish_whnf_eval_frame(
+        &mut self,
+        stack: &mut EvalFrameStack,
+        current: NodeId,
+    ) -> Result<Option<(NodeId, usize)>, EvalError> {
+        let Some(frame) = stack.pop() else {
+            return Ok(None);
+        };
+        let result = match frame {
+            EvalFrame::Whnf(frame) => self.finish_whnf_frame(frame, current)?,
+            EvalFrame::Int(_) => return Err(EvalError::ExpectedInt(current)),
+            EvalFrame::Int64Shift(_) => return Err(EvalError::ExpectedInt(current)),
+            EvalFrame::Int64(_) => return Err(EvalError::ExpectedInt64(current)),
+            EvalFrame::Float64(_) => return Err(EvalError::ExpectedFloat64(current)),
+            EvalFrame::Float32(_) => return Err(EvalError::ExpectedFloat32(current)),
+            EvalFrame::Bytes(_) => return Err(EvalError::ExpectedBytes(current)),
+        };
+        Ok(Some(result))
+    }
+
     fn resolve_for_whnf(
         &mut self,
         root: NodeId,
@@ -3441,69 +3640,27 @@ impl Program {
         whnf_frames: bool,
     ) -> Result<(NodeId, usize), EvalError> {
         let mut steps = 0;
-        let mut stack = WhnfFrameStack::default();
-        let mut int_stack = IntFrameStack::default();
-        let mut int64_stack = Int64FrameStack::default();
-        let mut float64_stack = Float64FrameStack::default();
-        let mut float32_stack = Float32FrameStack::default();
-        let mut bytes_stack = BytesFrameStack::default();
+        let mut frame_stack = EvalFrameStack::default();
         let mut eval_spine = EvalSpine::default();
         let mut scratch_args = Vec::new();
         let mut scratch_apps = Vec::new();
         while steps < limit {
             let current = self.resolve_for_whnf(root, profile_resolve)?;
-            if !whnf_frames {
-                if let Some((next, reductions)) = match self.nodes[current.0] {
-                    Node::Int(value) => {
-                        if let Some(frame) = int_stack.pop() {
-                            Some(self.finish_int_frame(frame, value, &mut int_stack)?)
-                        } else {
-                            None
-                        }
-                    }
-                    Node::Int64(value) => {
-                        if let Some(frame) = int64_stack.pop() {
-                            Some(self.finish_int64_frame(frame, value, &mut int64_stack)?)
-                        } else {
-                            None
-                        }
-                    }
-                    Node::Float64(value) => {
-                        if let Some(frame) = float64_stack.pop() {
-                            Some(self.finish_float64_frame(frame, value, &mut float64_stack))
-                        } else {
-                            None
-                        }
-                    }
-                    Node::Float32(value) => {
-                        if let Some(frame) = float32_stack.pop() {
-                            Some(self.finish_float32_frame(frame, value, &mut float32_stack))
-                        } else {
-                            None
-                        }
-                    }
-                    Node::Bytes(_) => {
-                        if let Some(frame) = bytes_stack.pop() {
-                            Some(self.finish_bytes_frame(frame, current, &mut bytes_stack)?)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                } {
-                    steps += reductions;
-                    self.reductions += reductions;
-                    if steps >= limit {
-                        return Err(EvalError::StepLimit { limit });
-                    }
-                    root = next;
-                    continue;
+            if let Some((next, reductions)) =
+                self.finish_ready_eval_frame(&mut frame_stack, current)?
+            {
+                steps += reductions;
+                self.reductions += reductions;
+                if steps >= limit {
+                    return Err(EvalError::StepLimit { limit });
                 }
+                root = next;
+                continue;
             }
 
             if whnf_frames {
                 if let Some((frame, next)) = self.begin_whnf_force_frame(current)? {
-                    stack.push(frame);
+                    frame_stack.push(EvalFrame::Whnf(frame));
                     root = next;
                     continue;
                 }
@@ -3515,33 +3672,15 @@ impl Program {
                 &mut eval_spine,
                 &mut scratch_args,
                 &mut scratch_apps,
-                &mut int_stack,
-                &mut int64_stack,
-                &mut float64_stack,
-                &mut float32_stack,
-                &mut bytes_stack,
-                !whnf_frames,
+                &mut frame_stack,
+                true,
             )?
             else {
-                let Some(frame) = stack.pop() else {
-                    if !int_stack.is_empty() {
-                        return Err(EvalError::ExpectedInt(current));
-                    }
-                    if !int64_stack.is_empty() {
-                        return Err(EvalError::ExpectedInt64(current));
-                    }
-                    if !float64_stack.is_empty() {
-                        return Err(EvalError::ExpectedFloat64(current));
-                    }
-                    if !float32_stack.is_empty() {
-                        return Err(EvalError::ExpectedFloat32(current));
-                    }
-                    if !bytes_stack.is_empty() {
-                        return Err(EvalError::ExpectedBytes(current));
-                    }
+                let Some((next, reductions)) =
+                    self.finish_whnf_eval_frame(&mut frame_stack, current)?
+                else {
                     return Ok((current, steps));
                 };
-                let (next, reductions) = self.finish_whnf_frame(frame, current)?;
                 steps += reductions;
                 self.reductions += reductions;
                 if steps >= limit {
@@ -3665,7 +3804,7 @@ impl Program {
         &mut self,
         frame: Float64Frame,
         value: f64,
-        stack: &mut Float64FrameStack,
+        stack: &mut impl PushFloat64Frame,
     ) -> (NodeId, usize) {
         let node = match frame.kind {
             Float64FrameKind::BinSecond { op, x } => {
@@ -3675,7 +3814,7 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: Float64FrameKind::BinFirst { op, y: value },
                 };
-                stack.push(next_frame);
+                stack.push_float64_frame(next_frame);
                 return (next, 0);
             }
             Float64FrameKind::BinFirst { op, y } => self.float64_result_node(op.apply(value, y)),
@@ -3797,7 +3936,7 @@ impl Program {
         &mut self,
         frame: Float32Frame,
         value: f32,
-        stack: &mut Float32FrameStack,
+        stack: &mut impl PushFloat32Frame,
     ) -> (NodeId, usize) {
         let node = match frame.kind {
             Float32FrameKind::BinSecond { op, x } => {
@@ -3807,7 +3946,7 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: Float32FrameKind::BinFirst { op, y: value },
                 };
-                stack.push(next_frame);
+                stack.push_float32_frame(next_frame);
                 return (next, 0);
             }
             Float32FrameKind::BinFirst { op, y } => self.float32_result_node(op.apply(value, y)),
@@ -3951,7 +4090,7 @@ impl Program {
         &mut self,
         frame: BytesFrame,
         value: NodeId,
-        stack: &mut BytesFrameStack,
+        stack: &mut impl PushBytesFrame,
     ) -> Result<(NodeId, usize), EvalError> {
         let node = match frame.kind {
             BytesFrameKind::BinSecond { op, x } => {
@@ -3961,7 +4100,7 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: BytesFrameKind::BinFirst { op, y: value },
                 };
-                stack.push(next_frame);
+                stack.push_bytes_frame(next_frame);
                 return Ok((next, 0));
             }
             BytesFrameKind::BinFirst { op, y } => self.bytes_bin_result_node(op, value, y)?,
@@ -9149,23 +9288,7 @@ impl IntBinOp {
     }
 
     fn driver_marker_safe(self) -> bool {
-        // Comparison/ordering markers reached self-host parser layout failures;
-        // keep them on the older helper path until that is isolated.
-        !matches!(
-            self,
-            Self::Eq
-                | Self::Ne
-                | Self::Lt
-                | Self::Le
-                | Self::Gt
-                | Self::Ge
-                | Self::Ult
-                | Self::Ule
-                | Self::Ugt
-                | Self::Uge
-                | Self::ICmp
-                | Self::UCmp
-        )
+        true
     }
 
     fn apply(self, x: i64, y: i64) -> Result<IntResult, EvalError> {
@@ -9310,21 +9433,6 @@ impl Int64BinOp {
 
     fn driver_marker_safe(self) -> bool {
         !self.rhs_is_shift()
-            && !matches!(
-                self,
-                Self::Eq
-                    | Self::Ne
-                    | Self::Lt
-                    | Self::Le
-                    | Self::Gt
-                    | Self::Ge
-                    | Self::Ult
-                    | Self::Ule
-                    | Self::Ugt
-                    | Self::Uge
-                    | Self::ICmp
-                    | Self::UCmp
-            )
     }
 
     fn apply(self, x: i64, y: i64) -> Result<Int64Result, EvalError> {
@@ -9415,7 +9523,7 @@ impl Int64UnOp {
     }
 
     fn driver_marker_safe(self) -> bool {
-        matches!(self, Self::Neg | Self::UNeg | Self::Inv)
+        true
     }
 
     fn apply(self, x: i64) -> Result<Int64UnResult, EvalError> {
@@ -9468,7 +9576,7 @@ impl Float64BinOp {
     }
 
     fn driver_marker_safe(self) -> bool {
-        matches!(self, Self::Add | Self::Sub | Self::Mul | Self::Div)
+        true
     }
 
     fn apply(self, x: f64, y: f64) -> Float64Result {
@@ -9544,7 +9652,7 @@ impl Float32BinOp {
     }
 
     fn driver_marker_safe(self) -> bool {
-        matches!(self, Self::Add | Self::Sub | Self::Mul | Self::Div)
+        true
     }
 
     fn apply(self, x: f32, y: f32) -> Float32Result {
@@ -9613,7 +9721,7 @@ impl BytesBinOp {
     }
 
     fn driver_marker_safe(self) -> bool {
-        matches!(self, Self::Append | Self::AppendDot)
+        true
     }
 }
 
