@@ -7968,27 +7968,21 @@ impl Program {
 
     fn rnf(&mut self, noerr: bool, root: NodeId) -> Result<(), EvalError> {
         let mut seen = HashSet::new();
-        self.rnf_rec(noerr, root, &mut seen)
-    }
-
-    fn rnf_rec(
-        &mut self,
-        noerr: bool,
-        root: NodeId,
-        seen: &mut HashSet<NodeId>,
-    ) -> Result<(), EvalError> {
-        let root = self.resolve(root)?;
-        if !seen.insert(root) {
-            return Ok(());
-        }
-        let root = match self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT) {
-            Ok(root) => self.resolve(root)?,
-            Err(EvalError::Raised(_)) if noerr => return Ok(()),
-            Err(err) => return Err(err),
-        };
-        if let Node::App(fun, arg) = self.nodes[root.0] {
-            self.rnf_rec(noerr, fun, seen)?;
-            self.rnf_rec(noerr, arg, seen)?;
+        let mut stack = vec![root];
+        while let Some(root) = stack.pop() {
+            let root = self.resolve(root)?;
+            if !seen.insert(root) {
+                continue;
+            }
+            let root = match self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT) {
+                Ok(root) => self.resolve(root)?,
+                Err(EvalError::Raised(_)) if noerr => continue,
+                Err(err) => return Err(err),
+            };
+            if let Node::App(fun, arg) = self.nodes[root.0] {
+                stack.push(arg);
+                stack.push(fun);
+            }
         }
         Ok(())
     }
