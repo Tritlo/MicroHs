@@ -111,8 +111,7 @@ impl<'a> Parser<'a> {
                 }
                 b'&' => {
                     let is32 = self.gobble(b'&');
-                    let token = self.token_after_prefix();
-                    let text = std::str::from_utf8(&token).map_err(|_| ParseError::InvalidUtf8)?;
+                    let text = self.token_after_prefix_str()?;
                     let node = if is32 {
                         Node::Float32(text.parse().map_err(|_| ParseError::InvalidNumber)?)
                     } else {
@@ -200,11 +199,12 @@ impl<'a> Parser<'a> {
                     self.stack.push(id);
                 }
                 _ => {
-                    let name = self.token_string(c)?;
-                    if !is_runtime_prim_name(&name) {
-                        return Err(ParseError::UnknownPrim(name));
+                    let start = self.pos - 1;
+                    let name = self.token_str_from(start)?;
+                    if !is_runtime_prim_name(name) {
+                        return Err(ParseError::UnknownPrim(name.to_owned()));
                     }
-                    let id = self.push(Node::prim(&name));
+                    let id = self.push(Node::prim(name));
                     self.stack.push(id);
                 }
             }
@@ -253,31 +253,35 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn token_string(&mut self, first: u8) -> Result<String, ParseError> {
-        String::from_utf8(self.token(first)).map_err(|_| ParseError::InvalidUtf8)
-    }
-
-    fn token(&mut self, first: u8) -> Vec<u8> {
-        let mut token = vec![first];
-        token.extend(self.token_after_prefix());
-        token
-    }
-
     fn token_after_prefix_string(&mut self) -> Result<String, ParseError> {
-        String::from_utf8(self.token_after_prefix()).map_err(|_| ParseError::InvalidUtf8)
+        Ok(self.token_after_prefix_str()?.to_owned())
     }
 
-    fn token_after_prefix(&mut self) -> Vec<u8> {
-        let mut token = Vec::new();
+    fn token_after_prefix_str(&mut self) -> Result<&'a str, ParseError> {
+        let token = self.token_after_prefix_slice();
+        std::str::from_utf8(token).map_err(|_| ParseError::InvalidUtf8)
+    }
+
+    fn token_str_from(&mut self, start: usize) -> Result<&'a str, ParseError> {
+        let token = self.token_slice_from(start);
+        std::str::from_utf8(token).map_err(|_| ParseError::InvalidUtf8)
+    }
+
+    fn token_after_prefix_slice(&mut self) -> &'a [u8] {
+        let start = self.pos;
+        self.token_slice_from(start)
+    }
+
+    fn token_slice_from(&mut self, start: usize) -> &'a [u8] {
         while let Some(c) = self.peek() {
             if matches!(c, b' ' | b'\n') {
+                let end = self.pos;
                 self.pos += 1;
-                break;
+                return &self.input[start..end];
             }
-            token.push(c);
             self.pos += 1;
         }
-        token
+        &self.input[start..self.pos]
     }
 
     fn parse_i64(&mut self) -> Result<i64, ParseError> {
