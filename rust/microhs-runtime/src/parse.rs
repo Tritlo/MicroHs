@@ -59,11 +59,21 @@ struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn new(input: &'a [u8]) -> Self {
+        let (nodes, stack) = if input.len() >= 64 * 1024 {
+            let node_capacity = input.len().saturating_div(3);
+            let stack_capacity = input.len().saturating_div(32);
+            (
+                Vec::with_capacity(node_capacity),
+                Vec::with_capacity(stack_capacity),
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
         Self {
             input,
             pos: 0,
-            nodes: Vec::new(),
-            stack: Vec::new(),
+            nodes,
+            stack,
             labels: HashMap::new(),
         }
     }
