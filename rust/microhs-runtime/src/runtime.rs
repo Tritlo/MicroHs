@@ -1675,15 +1675,13 @@ impl Program {
                 if strict_markers && known.is_none() {
                     if args_len >= 2 {
                         if let Some(op) = IntBinOp::from_prim(prim.name()) {
-                            if op.driver_marker_safe() {
-                                strict_marker_step!(
-                                    2,
-                                    Int,
-                                    IntFrame,
-                                    IntFrameKind::BinSecond { op, x: arg!(0) },
-                                    arg!(1)
-                                );
-                            }
+                            strict_marker_step!(
+                                2,
+                                Int,
+                                IntFrame,
+                                IntFrameKind::BinSecond { op, x: arg!(0) },
+                                arg!(1)
+                            );
                         }
                     }
 
@@ -1711,29 +1709,25 @@ impl Program {
 
                     if args_len >= 1 {
                         if let Some(op) = Int64UnOp::from_prim(prim.name()) {
-                            if op.driver_marker_safe() {
-                                strict_marker_step!(
-                                    1,
-                                    Int64,
-                                    Int64Frame,
-                                    Int64FrameKind::Un { op },
-                                    arg!(0)
-                                );
-                            }
+                            strict_marker_step!(
+                                1,
+                                Int64,
+                                Int64Frame,
+                                Int64FrameKind::Un { op },
+                                arg!(0)
+                            );
                         }
                     }
 
                     if args_len >= 2 {
                         if let Some(op) = Float64BinOp::from_prim(prim.name()) {
-                            if op.driver_marker_safe() {
-                                strict_marker_step!(
-                                    2,
-                                    Float64,
-                                    Float64Frame,
-                                    Float64FrameKind::BinSecond { op, x: arg!(0) },
-                                    arg!(1)
-                                );
-                            }
+                            strict_marker_step!(
+                                2,
+                                Float64,
+                                Float64Frame,
+                                Float64FrameKind::BinSecond { op, x: arg!(0) },
+                                arg!(1)
+                            );
                         }
                     }
 
@@ -1751,15 +1745,13 @@ impl Program {
 
                     if args_len >= 2 {
                         if let Some(op) = Float32BinOp::from_prim(prim.name()) {
-                            if op.driver_marker_safe() {
-                                strict_marker_step!(
-                                    2,
-                                    Float32,
-                                    Float32Frame,
-                                    Float32FrameKind::BinSecond { op, x: arg!(0) },
-                                    arg!(1)
-                                );
-                            }
+                            strict_marker_step!(
+                                2,
+                                Float32,
+                                Float32Frame,
+                                Float32FrameKind::BinSecond { op, x: arg!(0) },
+                                arg!(1)
+                            );
                         }
                     }
 
@@ -1777,15 +1769,13 @@ impl Program {
 
                     if args_len >= 2 {
                         if let Some(op) = BytesBinOp::from_prim(prim.name()) {
-                            if op.driver_marker_safe() {
-                                strict_marker_step!(
-                                    2,
-                                    Bytes,
-                                    BytesFrame,
-                                    BytesFrameKind::BinSecond { op, x: arg!(0) },
-                                    arg!(1)
-                                );
-                            }
+                            strict_marker_step!(
+                                2,
+                                Bytes,
+                                BytesFrame,
+                                BytesFrameKind::BinSecond { op, x: arg!(0) },
+                                arg!(1)
+                            );
                         }
                     }
                 }
@@ -9287,10 +9277,6 @@ impl IntBinOp {
         })
     }
 
-    fn driver_marker_safe(self) -> bool {
-        true
-    }
-
     fn apply(self, x: i64, y: i64) -> Result<IntResult, EvalError> {
         let xu = x as u64;
         let yu = y as u64;
@@ -9522,10 +9508,6 @@ impl Int64UnOp {
         })
     }
 
-    fn driver_marker_safe(self) -> bool {
-        true
-    }
-
     fn apply(self, x: i64) -> Result<Int64UnResult, EvalError> {
         let xu = x as u64;
         Ok(match self {
@@ -9573,10 +9555,6 @@ impl Float64BinOp {
             "d>=" => Self::Ge,
             _ => return None,
         })
-    }
-
-    fn driver_marker_safe(self) -> bool {
-        true
     }
 
     fn apply(self, x: f64, y: f64) -> Float64Result {
@@ -9651,10 +9629,6 @@ impl Float32BinOp {
         })
     }
 
-    fn driver_marker_safe(self) -> bool {
-        true
-    }
-
     fn apply(self, x: f32, y: f32) -> Float32Result {
         match self {
             Self::Add => Float32Result::Float(x + y),
@@ -9718,10 +9692,6 @@ impl BytesBinOp {
             "bscmp" => Self::Cmp,
             _ => return None,
         })
-    }
-
-    fn driver_marker_safe(self) -> bool {
-        true
     }
 }
 
