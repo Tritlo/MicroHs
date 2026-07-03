@@ -24,6 +24,7 @@ struct Config {
     c_mhsbench_mode: BenchMode,
     profile: bool,
     profile_top: usize,
+    step_limit: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -55,7 +56,7 @@ fn usage() {
                                   [--mode whnf|main]\n\
                                   [--warmup-iters N]\n\
                                   [--c-mhseval PATH] [--c-mhsbench PATH] [--c-mhsbench-mode whnf|main]\n\
-                                  [--profile] [--profile-top N]\n\
+                                  [--profile] [--profile-top N] [--step-limit N]\n\
                                   [-- PROGRAM ARGS...]\n\
          default: --scenario {DEFAULT_SCENARIO} --iters {DEFAULT_ITERS}"
     );
@@ -79,6 +80,7 @@ fn main() -> ExitCode {
         config.executable_path.as_deref(),
         config.warmup_iters,
         config.iters,
+        config.step_limit,
     );
     let bytes = config.input.len();
 
@@ -87,6 +89,10 @@ fn main() -> ExitCode {
     println!("bytes: {bytes}");
     println!("iters: {}", config.iters);
     println!("warmup_iters: {}", config.warmup_iters);
+    match config.step_limit {
+        Some(limit) => println!("step_limit: {limit}"),
+        None => println!("step_limit: none"),
+    }
     println!("parse_total_ms: {:.3}", millis(parse.elapsed));
     println!(
         "parse_ns_per_iter: {:.1}",
@@ -109,6 +115,7 @@ fn main() -> ExitCode {
         "whnf_steps_per_s: {:.1}",
         eval.steps as f64 / eval.elapsed.as_secs_f64()
     );
+    println!("step_limited_iters: {}", eval.step_limited_iters);
     println!("serialize_sink: {}", eval.serialize_sink);
 
     if config.profile {
@@ -117,6 +124,7 @@ fn main() -> ExitCode {
             config.mode,
             &config.program_args,
             config.executable_path.as_deref(),
+            config.step_limit,
         );
         print_profile(&profile, config.profile_top);
     }
@@ -176,6 +184,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Config, String> {
     let mut c_mhsbench_mode = BenchMode::Whnf;
     let mut profile = false;
     let mut profile_top = 25usize;
+    let mut step_limit = None;
     let mut args = args.peekable();
 
     while let Some(arg) = args.next() {
@@ -241,6 +250,16 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Config, String> {
                     return Err("--profile-top must be greater than zero".to_owned());
                 }
             }
+            "--step-limit" => {
+                let value = args.next().ok_or("--step-limit requires a value")?;
+                let limit = value
+                    .parse()
+                    .map_err(|_| format!("invalid --step-limit value: {value}"))?;
+                if limit == 0 {
+                    return Err("--step-limit must be greater than zero".to_owned());
+                }
+                step_limit = Some(limit);
+            }
             "-h" | "--help" => return Err(String::new()),
             _ => return Err(format!("unknown argument: {arg}")),
         }
@@ -268,6 +287,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Config, String> {
         c_mhsbench_mode,
         profile,
         profile_top,
+        step_limit,
     })
 }
 
@@ -939,12 +959,14 @@ struct EvalBench {
     elapsed: Duration,
     steps: usize,
     serialize_sink: usize,
+    step_limited_iters: usize,
 }
 
 struct ProfileBench {
     elapsed: Duration,
     steps: usize,
     serialize_sink: usize,
+    step_limited: bool,
     nodes_before: usize,
     nodes_after: usize,
     profile: EvalProfile,
@@ -957,17 +979,29 @@ fn bench_eval(
     executable_path: Option<&[u8]>,
     warmup_iters: usize,
     iters: usize,
+    step_limit: Option<usize>,
 ) -> EvalBench {
     for _ in 0..warmup_iters {
-        black_box(eval_once(input, mode, program_args, executable_path));
+        black_box(eval_once(
+            input,
+            mode,
+            program_args,
+            executable_path,
+            step_limit,
+        ));
     }
 
     let started = Instant::now();
     let mut steps = 0;
     let mut serialize_sink = 0usize;
+    let mut step_limited_iters = 0usize;
     for _ in 0..iters {
-        let (n, sink) = eval_once(input, mode, program_args, executable_path);
-        steps += n;
+        let run = eval_once(input, mode, program_args, executable_path, step_limit);
+        steps += run.steps;
+        if run.step_limited {
+            step_limited_iters += 1;
+        }
+        let sink = run.serialize_sink;
         serialize_sink = serialize_sink.wrapping_add(sink);
     }
     black_box(serialize_sink);
@@ -975,7 +1009,14 @@ fn bench_eval(
         elapsed: started.elapsed(),
         steps,
         serialize_sink,
+        step_limited_iters,
     }
+}
+
+struct RunOnce {
+    steps: usize,
+    serialize_sink: usize,
+    step_limited: bool,
 }
 
 fn eval_once(
@@ -983,27 +1024,37 @@ fn eval_once(
     mode: BenchMode,
     program_args: &[Vec<u8>],
     executable_path: Option<&[u8]>,
-) -> (usize, usize) {
+    step_limit: Option<usize>,
+) -> RunOnce {
     let mut program = parse_program(black_box(input)).expect("reduce benchmark input");
     program.set_program_args(program_args.to_vec());
     program.set_executable_path(executable_path.map(Vec::from));
+    let limit = step_limit.unwrap_or(usize::MAX);
     match mode {
         BenchMode::Whnf => {
-            let (root, steps) = program
-                .reduce_whnf(usize::MAX)
-                .expect("reduce benchmark input");
-            let serialized = program
-                .serialize_program(root)
-                .expect("serialize benchmark result");
-            let sink = bytes_sink(&serialized);
-            black_box(&serialized);
-            (steps, sink)
+            let reductions = program.reduction_count();
+            match program.reduce_whnf(limit) {
+                Ok((root, steps)) => {
+                    let serialized = program
+                        .serialize_program(root)
+                        .expect("serialize benchmark result");
+                    let sink = bytes_sink(&serialized);
+                    black_box(&serialized);
+                    RunOnce {
+                        steps,
+                        serialize_sink: sink,
+                        step_limited: false,
+                    }
+                }
+                Err(EvalError::StepLimit { .. }) => RunOnce {
+                    steps: program.reduction_count().saturating_sub(reductions),
+                    serialize_sink: main_input_sink(input),
+                    step_limited: true,
+                },
+                Err(err) => panic!("reduce benchmark input: {err}"),
+            }
         }
-        BenchMode::Main => {
-            let steps = reduce_main_steps_or_panic(&mut program, "run benchmark main");
-            let sink = main_input_sink(input);
-            (steps, sink)
-        }
+        BenchMode::Main => reduce_main_or_panic(&mut program, limit, "run benchmark main", input),
     }
 }
 
@@ -1012,6 +1063,7 @@ fn profile_eval(
     mode: BenchMode,
     program_args: &[Vec<u8>],
     executable_path: Option<&[u8]>,
+    step_limit: Option<usize>,
 ) -> ProfileBench {
     let started = Instant::now();
     let mut program = parse_program(black_box(input)).expect("profile benchmark input");
@@ -1019,22 +1071,33 @@ fn profile_eval(
     program.set_executable_path(executable_path.map(Vec::from));
     let nodes_before = program.nodes().len();
     program.enable_profile();
-    let (steps, serialize_sink) = match mode {
+    let limit = step_limit.unwrap_or(usize::MAX);
+    let run = match mode {
         BenchMode::Whnf => {
-            let (root, steps) = program
-                .reduce_whnf(usize::MAX)
-                .expect("profile reduce benchmark input");
-            let serialized = program
-                .serialize_program(root)
-                .expect("profile serialize benchmark result");
-            let sink = bytes_sink(&serialized);
-            black_box(&serialized);
-            (steps, sink)
+            let reductions = program.reduction_count();
+            match program.reduce_whnf(limit) {
+                Ok((root, steps)) => {
+                    let serialized = program
+                        .serialize_program(root)
+                        .expect("profile serialize benchmark result");
+                    let sink = bytes_sink(&serialized);
+                    black_box(&serialized);
+                    RunOnce {
+                        steps,
+                        serialize_sink: sink,
+                        step_limited: false,
+                    }
+                }
+                Err(EvalError::StepLimit { .. }) => RunOnce {
+                    steps: program.reduction_count().saturating_sub(reductions),
+                    serialize_sink: main_input_sink(input),
+                    step_limited: true,
+                },
+                Err(err) => panic!("profile reduce benchmark input: {err}"),
+            }
         }
         BenchMode::Main => {
-            let steps = reduce_main_steps_or_panic(&mut program, "profile run benchmark main");
-            let sink = main_input_sink(input);
-            (steps, sink)
+            reduce_main_or_panic(&mut program, limit, "profile run benchmark main", input)
         }
     };
     let elapsed = started.elapsed();
@@ -1042,8 +1105,9 @@ fn profile_eval(
     let profile = program.take_profile().expect("profile enabled");
     ProfileBench {
         elapsed,
-        steps,
-        serialize_sink,
+        steps: run.steps,
+        serialize_sink: run.serialize_sink,
+        step_limited: run.step_limited,
         nodes_before,
         nodes_after,
         profile,
@@ -1054,6 +1118,7 @@ fn print_profile(profile: &ProfileBench, top: usize) {
     println!("profile_total_ms: {:.3}", millis(profile.elapsed));
     println!("profile_steps: {}", profile.steps);
     println!("profile_sink: {}", profile.serialize_sink);
+    println!("profile_step_limited: {}", profile.step_limited);
     println!("profile_nodes_before: {}", profile.nodes_before);
     println!("profile_nodes_after: {}", profile.nodes_after);
     println!(
@@ -1148,20 +1213,38 @@ fn main_input_sink(input: &[u8]) -> usize {
     bytes_sink(input)
 }
 
-fn reduce_main_steps_or_panic(program: &mut Program, context: &str) -> usize {
+fn reduce_main_or_panic(
+    program: &mut Program,
+    limit: usize,
+    context: &str,
+    input: &[u8],
+) -> RunOnce {
     let reductions = program.reduction_count();
-    match program.reduce_main(usize::MAX) {
-        Ok((_, steps)) => steps,
+    match program.reduce_main(limit) {
+        Ok((_, steps)) => RunOnce {
+            steps,
+            serialize_sink: main_input_sink(input),
+            step_limited: false,
+        },
         Err(EvalError::Raised(exn)) => {
             let message = program
                 .uncaught_exception_message_bytes(exn)
                 .unwrap_or_else(|err| err.to_string().into_bytes());
             if message == b"ExitSuccess" {
-                program.reduction_count().saturating_sub(reductions)
+                RunOnce {
+                    steps: program.reduction_count().saturating_sub(reductions),
+                    serialize_sink: main_input_sink(input),
+                    step_limited: false,
+                }
             } else {
                 panic!("{context}: {}", String::from_utf8_lossy(&message));
             }
         }
+        Err(EvalError::StepLimit { .. }) => RunOnce {
+            steps: program.reduction_count().saturating_sub(reductions),
+            serialize_sink: main_input_sink(input),
+            step_limited: true,
+        },
         Err(err) => panic!("{context}: {err}"),
     }
 }
