@@ -718,6 +718,48 @@ struct StepResult {
     reductions: usize,
 }
 
+struct IntFrame {
+    redex: IntRedex,
+    profile_head: Option<String>,
+    kind: IntFrameKind,
+}
+
+enum IntRedex {
+    Root(NodeId),
+    Spine {
+        root: NodeId,
+        used: usize,
+        args: Vec<NodeId>,
+        apps: Vec<NodeId>,
+    },
+}
+
+enum IntFrameKind {
+    BinSecond { op: IntBinOp, x: NodeId },
+    BinFirst { op: IntBinOp, y: i64 },
+    Un { op: IntUnOp },
+}
+
+#[derive(Default)]
+struct IntFrameStack {
+    top: Option<IntFrame>,
+    rest: Vec<IntFrame>,
+}
+
+impl IntFrameStack {
+    fn push(&mut self, frame: IntFrame) {
+        if let Some(top) = self.top.replace(frame) {
+            self.rest.push(top);
+        }
+    }
+
+    fn pop(&mut self) -> Option<IntFrame> {
+        let frame = self.top.take()?;
+        self.top = self.rest.pop();
+        Some(frame)
+    }
+}
+
 impl Program {
     pub fn new(nodes: Vec<Node>, root: NodeId, labels: HashMap<usize, NodeId>) -> Self {
         let mut small_ints = [None; SMALL_INT_COUNT];
@@ -2040,6 +2082,163 @@ impl Program {
             Ordering::Greater => "KA",
         };
         self.prim(name)
+    }
+
+    fn int_result_node(&mut self, result: IntResult) -> NodeId {
+        match result {
+            IntResult::Int(n) => self.int(n),
+            IntResult::Bool(b) => self.prim(if b { "A" } else { "K" }),
+            IntResult::Ordering(ord) => self.ordering(ord),
+        }
+    }
+
+    fn begin_int_force_frame(
+        &mut self,
+        root: NodeId,
+    ) -> Result<Option<(IntFrame, NodeId)>, EvalError> {
+        let spine = self.spine(root)?;
+        let head = spine.head;
+        let args = spine.args();
+        let Some(prim_name) = (match &self.nodes[head.0] {
+            Node::Prim(name) => Some(name.name()),
+            _ => None,
+        }) else {
+            return Ok(None);
+        };
+
+        let force = if args.len() >= 2 {
+            IntBinOp::from_prim(prim_name)
+                .map(|op| (2, IntFrameKind::BinSecond { op, x: args[0] }, args[1]))
+        } else {
+            None
+        }
+        .or_else(|| {
+            if args.is_empty() {
+                None
+            } else {
+                IntUnOp::from_prim(prim_name).map(|op| (1, IntFrameKind::Un { op }, args[0]))
+            }
+        });
+        let Some((used, kind, next)) = force else {
+            return Ok(None);
+        };
+
+        let profile_head = if self.profile.is_some() {
+            let heap_spine = matches!(&spine.storage, SpineStorage::Heap { .. });
+            self.profile_step(head, args.len(), heap_spine)
+        } else {
+            None
+        };
+        let redex = if args.len() == used {
+            IntRedex::Root(root)
+        } else {
+            IntRedex::Spine {
+                root,
+                used,
+                args: args.to_vec(),
+                apps: spine.apps().to_vec(),
+            }
+        };
+        let frame = IntFrame {
+            redex,
+            profile_head,
+            kind,
+        };
+        Ok(Some((frame, next)))
+    }
+
+    fn finish_int_frame(
+        &mut self,
+        frame: IntFrame,
+        value: i64,
+        stack: &mut IntFrameStack,
+    ) -> Result<(NodeId, usize), EvalError> {
+        let result = match frame.kind {
+            IntFrameKind::BinSecond { op, x } => {
+                let next = x;
+                let next_frame = IntFrame {
+                    redex: frame.redex,
+                    profile_head: frame.profile_head,
+                    kind: IntFrameKind::BinFirst { op, y: value },
+                };
+                stack.push(next_frame);
+                return Ok((next, 0));
+            }
+            IntFrameKind::BinFirst { op, y } => op
+                .apply(value, y)
+                .map_err(|err| self.arithmetic_eval_error(err))?,
+            IntFrameKind::Un { op } => {
+                let n = op
+                    .apply(value)
+                    .map_err(|err| self.arithmetic_eval_error(err))?;
+                IntResult::Int(n)
+            }
+        };
+
+        if frame.profile_head.is_some() {
+            self.profile_reduction(&frame.profile_head, 1);
+        }
+        let mut node = self.int_result_node(result);
+        match frame.redex {
+            IntRedex::Root(root) => {
+                if node != root {
+                    self.nodes[root.0] = Node::Indir(Some(node));
+                }
+            }
+            IntRedex::Spine {
+                root,
+                used,
+                args,
+                apps,
+            } => {
+                let in_place = self.apply_reduction_spine(&mut node, used, &args, &apps);
+                if !in_place && node != root {
+                    self.nodes[root.0] = Node::Indir(Some(node));
+                }
+            }
+        }
+        Ok((node, 1))
+    }
+
+    fn force_int(&mut self, root: NodeId, limit: usize) -> Result<i64, EvalError> {
+        let mut current = self.resolve(root)?;
+        let mut steps = 0;
+        let mut stack = IntFrameStack::default();
+        loop {
+            let current_resolved = self.resolve(current)?;
+            if let Node::Int(value) = self.nodes[current_resolved.0] {
+                let Some(frame) = stack.pop() else {
+                    return Ok(value);
+                };
+                let (next, reductions) = self.finish_int_frame(frame, value, &mut stack)?;
+                steps += reductions;
+                self.reductions += reductions;
+                if steps >= limit {
+                    return Err(EvalError::StepLimit { limit });
+                }
+                current = next;
+                continue;
+            }
+
+            if let Some((frame, next)) = self.begin_int_force_frame(current_resolved)? {
+                stack.push(frame);
+                current = next;
+                continue;
+            }
+
+            if steps >= limit {
+                return Err(EvalError::StepLimit { limit });
+            }
+            let Some(step) = self.step(current_resolved, limit - steps)? else {
+                return Err(EvalError::ExpectedInt(current_resolved));
+            };
+            steps += step.reductions;
+            self.reductions += step.reductions;
+            if !step.in_place && step.node != current_resolved {
+                self.nodes[current_resolved.0] = Node::Indir(Some(step.node));
+            }
+            current = step.node;
+        }
     }
 
     fn int_binop(
@@ -4010,11 +4209,7 @@ impl Program {
         if let Node::Int(n) = self.nodes[root.0] {
             return Ok(n);
         }
-        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
-        match self.nodes[self.resolve(root)?.0] {
-            Node::Int(n) => Ok(n),
-            _ => Err(EvalError::ExpectedInt(root)),
-        }
+        self.force_int(root, FORCE_REDUCTION_LIMIT)
     }
 
     fn eval_int64(&mut self, id: NodeId) -> Result<i64, EvalError> {
