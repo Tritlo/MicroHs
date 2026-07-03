@@ -183,7 +183,10 @@ impl<'a> Parser<'a> {
                     let tags = self.token_after_prefix_string()?;
                     self.expect(b'"')?;
                     let body = self.parse_string()?;
-                    let id = self.push(Node::JsCall { tags, body });
+                    let id = self.push(Node::JsCall(Box::new(crate::runtime::JsCallNode {
+                        tags,
+                        body,
+                    })));
                     self.stack.push(id);
                 }
                 b'`' => {

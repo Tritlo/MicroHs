@@ -308,34 +308,44 @@ pub enum Node {
     ThreadId(i64),
     Ptr(i64),
     RawFunPtr(i64),
-    ForeignPtr {
-        bytes: Option<Vec<u8>>,
-        offset: usize,
-        ptr: i64,
-        finalizer: Option<NodeId>,
-    },
-    Weak {
-        value: Option<NodeId>,
-        finalizer: Option<NodeId>,
-    },
+    ForeignPtr(Box<ForeignPtrNode>),
+    Weak(Box<WeakNode>),
     MVar(Option<NodeId>),
     BigInt(Vec<u8>),
     Bytes(Vec<u8>),
-    MutableBytes {
-        bytes: Vec<u8>,
-        capacity: usize,
-    },
+    MutableBytes(Box<MutableBytesNode>),
     Array(Vec<NodeId>),
     Ffi(String),
-    JsCall {
-        tags: String,
-        body: Vec<u8>,
-    },
-    JsWrap {
-        tags: String,
-    },
+    JsCall(Box<JsCallNode>),
+    JsWrap { tags: String },
     FunPtr(String),
     Tick(Vec<u8>),
+}
+
+#[derive(Clone, Debug)]
+pub struct ForeignPtrNode {
+    pub(crate) bytes: Option<Vec<u8>>,
+    pub(crate) offset: usize,
+    pub(crate) ptr: i64,
+    pub(crate) finalizer: Option<NodeId>,
+}
+
+#[derive(Clone, Debug)]
+pub struct JsCallNode {
+    pub(crate) tags: String,
+    pub(crate) body: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WeakNode {
+    pub(crate) value: Option<NodeId>,
+    pub(crate) finalizer: Option<NodeId>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MutableBytesNode {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) capacity: usize,
 }
 
 impl Node {
@@ -1520,15 +1530,15 @@ impl Program {
             Node::ThreadId(_) => "ThreadId".to_owned(),
             Node::Ptr(_) => "Ptr".to_owned(),
             Node::RawFunPtr(_) => "RawFunPtr".to_owned(),
-            Node::ForeignPtr { .. } => "ForeignPtr".to_owned(),
-            Node::Weak { .. } => "Weak".to_owned(),
+            Node::ForeignPtr(_) => "ForeignPtr".to_owned(),
+            Node::Weak(_) => "Weak".to_owned(),
             Node::MVar(_) => "MVar".to_owned(),
             Node::BigInt(_) => "BigInt".to_owned(),
             Node::Bytes(_) => "Bytes".to_owned(),
-            Node::MutableBytes { .. } => "MutableBytes".to_owned(),
+            Node::MutableBytes(_) => "MutableBytes".to_owned(),
             Node::Array(_) => "Array".to_owned(),
             Node::Ffi(name) => format!("Ffi:{name}"),
-            Node::JsCall { tags, .. } => format!("JsCall:{tags}"),
+            Node::JsCall(call) => format!("JsCall:{}", call.tags),
             Node::JsWrap { tags } => format!("JsWrap:{tags}"),
             Node::FunPtr(name) => format!("FunPtr:{name}"),
             Node::Tick(_) => "Tick".to_owned(),
@@ -1638,12 +1648,13 @@ impl Program {
                 };
                 rewrite_step!(used, node, 1);
             }
-            Node::JsCall { tags, body } => {
+            Node::JsCall(call) => {
                 if self.profile.is_some() {
                     self.profile_arg_materialization(args_len);
                 }
                 spine.write_args_head_order(scratch_args);
-                let Some((used, node)) = self.js_call(&tags, &body, scratch_args.as_slice())?
+                let Some((used, node)) =
+                    self.js_call(&call.tags, &call.body, scratch_args.as_slice())?
                 else {
                     return Ok(None);
                 };
@@ -2998,7 +3009,7 @@ impl Program {
             (Some(EvalFrame::Float32(_)), Node::Float32(value)) => {
                 Some(ReadyFrame::Float32(*value))
             }
-            (Some(EvalFrame::Bytes(_)), Node::Bytes(_) | Node::MutableBytes { .. }) => {
+            (Some(EvalFrame::Bytes(_)), Node::Bytes(_) | Node::MutableBytes(_)) => {
                 Some(ReadyFrame::Bytes)
             }
             (Some(EvalFrame::Conversion(frame)), node) => {
@@ -3537,12 +3548,12 @@ impl Program {
             }
             "fpnew" if args.len() >= 2 => {
                 let ptr = self.eval_pointer_value(args[0])?;
-                let foreign_ptr = self.push_node(Node::ForeignPtr {
+                let foreign_ptr = self.push_node(Node::ForeignPtr(Box::new(ForeignPtrNode {
                     bytes: None,
                     offset: 0,
                     ptr,
                     finalizer: None,
-                });
+                })));
                 Some((2, self.pair(foreign_ptr, args[1])))
             }
             "fpfin" if args.len() >= 3 => {
@@ -3571,12 +3582,12 @@ impl Program {
                 let bytes_id = self.eval_bytes_id(args[0])?;
                 let bytes = self.bytes(bytes_id)?.to_vec();
                 let ptr = self.pointer_for_node(bytes_id, 0)?;
-                self.push_node(Node::ForeignPtr {
+                self.push_node(Node::ForeignPtr(Box::new(ForeignPtrNode {
                     bytes: Some(bytes),
                     offset: 0,
                     ptr,
                     finalizer: None,
-                })
+                })))
             }
             "fp2p" => {
                 let foreign_ptr = self.eval_foreign_ptr_id(args[0])?;
@@ -3585,12 +3596,12 @@ impl Program {
             }
             "fpnew" => {
                 let ptr = self.eval_pointer_value(args[0])?;
-                self.push_node(Node::ForeignPtr {
+                self.push_node(Node::ForeignPtr(Box::new(ForeignPtrNode {
                     bytes: None,
                     offset: 0,
                     ptr,
                     finalizer: None,
-                })
+                })))
             }
             _ => return Ok(None),
         };
@@ -5195,7 +5206,8 @@ impl Program {
         let root = self.reduce_node_whnf(id, FORCE_REDUCTION_LIMIT)?;
         let root = self.resolve(root)?;
         let bytes = match self.nodes[root.0].clone() {
-            Node::Bytes(bytes) | Node::MutableBytes { bytes, .. } => bytes,
+            Node::Bytes(bytes) => bytes,
+            Node::MutableBytes(bytes) => bytes.bytes,
             _ => self.eval_char_list(root)?,
         };
         Ok(bytes)
@@ -5326,7 +5338,7 @@ impl Program {
         self.eval_whnf_value(
             id,
             |program, root| match &program.nodes[root.0] {
-                Node::ForeignPtr { .. } => Some(root),
+                Node::ForeignPtr(_) => Some(root),
                 Node::Prim(name) if std_handle(name.name()).is_some() => Some(root),
                 _ => None,
             },
@@ -5343,7 +5355,7 @@ impl Program {
         self.eval_whnf_value(
             id,
             |program, root| match program.nodes[root.0] {
-                Node::Bytes(_) | Node::MutableBytes { .. } => Some(root),
+                Node::Bytes(_) | Node::MutableBytes(_) => Some(root),
                 _ => None,
             },
             EvalError::ExpectedBytes,
@@ -5377,14 +5389,16 @@ impl Program {
 
     fn bytes(&self, id: NodeId) -> Result<&[u8], EvalError> {
         match &self.nodes[id.0] {
-            Node::Bytes(bytes) | Node::MutableBytes { bytes, .. } => Ok(bytes),
+            Node::Bytes(bytes) => Ok(bytes),
+            Node::MutableBytes(bytes) => Ok(&bytes.bytes),
             _ => Err(EvalError::ExpectedBytes(id)),
         }
     }
 
     fn bytes_mut(&mut self, id: NodeId) -> Result<&mut Vec<u8>, EvalError> {
         match &mut self.nodes[id.0] {
-            Node::Bytes(bytes) | Node::MutableBytes { bytes, .. } => Ok(bytes),
+            Node::Bytes(bytes) => Ok(bytes),
+            Node::MutableBytes(bytes) => Ok(&mut bytes.bytes),
             _ => Err(EvalError::ExpectedBytes(id)),
         }
     }
@@ -5395,13 +5409,18 @@ impl Program {
         }
         let mut bytes = Vec::with_capacity(capacity);
         bytes.resize(size, 0);
-        Ok(self.push_node(Node::MutableBytes { bytes, capacity }))
+        Ok(
+            self.push_node(Node::MutableBytes(Box::new(MutableBytesNode {
+                bytes,
+                capacity,
+            }))),
+        )
     }
 
     fn freeze_bytes(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         let frozen = match &mut self.nodes[id.0] {
             Node::Bytes(_) => return Ok(id),
-            Node::MutableBytes { bytes, .. } => std::mem::take(bytes),
+            Node::MutableBytes(bytes) => std::mem::take(&mut bytes.bytes),
             _ => return Err(EvalError::ExpectedBytes(id)),
         };
         self.nodes[id.0] = Node::Bytes(frozen);
@@ -5414,20 +5433,21 @@ impl Program {
                 bytes.push(byte);
                 Ok(())
             }
-            Node::MutableBytes { bytes, capacity } => {
-                if bytes.len() >= *capacity {
-                    *capacity = (*capacity)
-                        .checked_add(*capacity / 2)
+            Node::MutableBytes(bytes) => {
+                if bytes.bytes.len() >= bytes.capacity {
+                    bytes.capacity = bytes
+                        .capacity
+                        .checked_add(bytes.capacity / 2)
                         .and_then(|capacity| capacity.checked_add(2))
                         .ok_or(EvalError::Overflow)?;
-                    if *capacity < bytes.len() {
+                    if bytes.capacity < bytes.bytes.len() {
                         return Err(EvalError::Overflow);
                     }
-                    if *capacity > bytes.capacity() {
-                        bytes.reserve(*capacity - bytes.capacity());
+                    if bytes.capacity > bytes.bytes.capacity() {
+                        bytes.bytes.reserve(bytes.capacity - bytes.bytes.capacity());
                     }
                 }
-                bytes.push(byte);
+                bytes.bytes.push(byte);
                 Ok(())
             }
             _ => Err(EvalError::ExpectedBytes(id)),
@@ -5686,12 +5706,12 @@ impl Program {
     fn new_mpz_node(&mut self) -> Result<Node, EvalError> {
         let bigint = self.push_node(Node::BigInt(b"0".to_vec()));
         let ptr = self.pointer_for_node(bigint, 0)?;
-        Ok(Node::ForeignPtr {
+        Ok(Node::ForeignPtr(Box::new(ForeignPtrNode {
             bytes: None,
             offset: 0,
             ptr,
             finalizer: None,
-        })
+        })))
     }
 
     fn mpz_node_id(&self, ptr: i64) -> Result<NodeId, EvalError> {
@@ -6209,13 +6229,12 @@ impl Program {
         }
         let (base, offset) = self.decode_pointer(ptr)?;
         let bytes = match self.nodes.get(base).ok_or(EvalError::InvalidByteString)? {
-            Node::Bytes(bytes) | Node::MutableBytes { bytes, .. } => bytes,
-            Node::ForeignPtr {
-                bytes: Some(bytes),
-                offset: foreign_offset,
-                ..
-            } => {
-                let offset = foreign_offset
+            Node::Bytes(bytes) => bytes,
+            Node::MutableBytes(bytes) => &bytes.bytes,
+            Node::ForeignPtr(foreign_ptr) if foreign_ptr.bytes.is_some() => {
+                let bytes = foreign_ptr.bytes.as_ref().expect("checked above");
+                let offset = foreign_ptr
+                    .offset
                     .checked_add(offset)
                     .ok_or(EvalError::Overflow)?;
                 return bytes.get(offset..).ok_or(EvalError::InvalidByteString);
@@ -7878,7 +7897,7 @@ impl Program {
                 out.extend_from_slice(b"&&");
                 out.extend_from_slice(format_float(f64::from(*n)).as_bytes());
             }
-            Node::ThreadId(_) | Node::Weak { .. } | Node::MVar(_) => {
+            Node::ThreadId(_) | Node::Weak(_) | Node::MVar(_) => {
                 return Err(EvalError::UnsupportedSerialization(id));
             }
             Node::Ptr(ptr) => serialize_ptr(*ptr, out),
@@ -7887,13 +7906,11 @@ impl Program {
                 push_display(out, *ptr);
                 out.extend_from_slice(b" @");
             }
-            Node::ForeignPtr {
-                bytes, offset, ptr, ..
-            } => {
-                if let Some(mpz) = self.mpz_decimal_bytes_for_ptr(*ptr) {
+            Node::ForeignPtr(foreign_ptr) => {
+                if let Some(mpz) = self.mpz_decimal_bytes_for_ptr(foreign_ptr.ptr) {
                     serialize_bigint_decimal(mpz, out);
-                } else if let Some(bytes) = bytes {
-                    if *offset == 0 {
+                } else if let Some(bytes) = &foreign_ptr.bytes {
+                    if foreign_ptr.offset == 0 {
                         out.extend_from_slice(b"bs2fp ");
                         serialize_bytes_comb(bytes, out);
                         out.extend_from_slice(b" @");
@@ -7901,21 +7918,20 @@ impl Program {
                         out.extend_from_slice(b"fp+ bs2fp ");
                         serialize_bytes_comb(bytes, out);
                         out.extend_from_slice(b" @ #");
-                        push_display(out, *offset);
+                        push_display(out, foreign_ptr.offset);
                         out.extend_from_slice(b" @");
                     }
                 } else {
                     out.extend_from_slice(b"fpnew ");
-                    serialize_ptr(*ptr, out);
+                    serialize_ptr(foreign_ptr.ptr, out);
                     out.extend_from_slice(b" @");
                 }
             }
             Node::BigInt(bytes) => {
                 serialize_bigint_decimal(bytes, out);
             }
-            Node::Bytes(bytes) | Node::MutableBytes { bytes, .. } => {
-                serialize_bytes_comb(bytes, out);
-            }
+            Node::Bytes(bytes) => serialize_bytes_comb(bytes, out),
+            Node::MutableBytes(bytes) => serialize_bytes_comb(&bytes.bytes, out),
             Node::Array(items) => {
                 for item in items {
                     self.serialize_comb_into(*item, depth + 1, out)?;
@@ -7928,11 +7944,11 @@ impl Program {
                 out.push(b'^');
                 out.extend_from_slice(name.as_bytes());
             }
-            Node::JsCall { tags, body } => {
+            Node::JsCall(call) => {
                 out.push(b'~');
-                out.extend_from_slice(tags.as_bytes());
+                out.extend_from_slice(call.tags.as_bytes());
                 out.push(b' ');
-                serialize_bytes_quoted(body, out);
+                serialize_bytes_quoted(&call.body, out);
             }
             Node::JsWrap { tags } => {
                 out.push(b'`');
@@ -8003,40 +8019,38 @@ impl Program {
 
     fn offset_foreign_ptr(&mut self, id: NodeId, by: usize) -> Result<NodeId, EvalError> {
         let (bytes, offset, ptr, finalizer) = match &self.nodes[id.0] {
-            Node::ForeignPtr {
-                bytes,
-                offset,
-                ptr,
-                finalizer,
-            } => (bytes.clone(), *offset, *ptr, *finalizer),
+            Node::ForeignPtr(foreign_ptr) => (
+                foreign_ptr.bytes.clone(),
+                foreign_ptr.offset,
+                foreign_ptr.ptr,
+                foreign_ptr.finalizer,
+            ),
             _ => return Err(EvalError::ExpectedForeignPtr(id)),
         };
         let offset = offset.checked_add(by).ok_or(EvalError::Overflow)?;
         let ptr = ptr
             .checked_add(i64::try_from(by).map_err(|_| EvalError::Overflow)?)
             .ok_or(EvalError::Overflow)?;
-        Ok(self.push_node(Node::ForeignPtr {
+        Ok(self.push_node(Node::ForeignPtr(Box::new(ForeignPtrNode {
             bytes,
             offset,
             ptr,
             finalizer,
-        }))
+        }))))
     }
 
     fn foreign_ptr_to_bytes(&mut self, id: NodeId, len: usize) -> Result<NodeId, EvalError> {
         let bytes = match &self.nodes[id.0] {
-            Node::ForeignPtr {
-                bytes: Some(bytes),
-                offset,
-                ..
-            } => {
-                let end = offset
+            Node::ForeignPtr(foreign_ptr) if foreign_ptr.bytes.is_some() => {
+                let bytes = foreign_ptr.bytes.as_ref().expect("checked above");
+                let end = foreign_ptr
+                    .offset
                     .checked_add(len)
                     .filter(|end| *end <= bytes.len())
                     .ok_or(EvalError::InvalidByteString)?;
-                bytes[*offset..end].to_vec()
+                bytes[foreign_ptr.offset..end].to_vec()
             }
-            Node::ForeignPtr { ptr, .. } => self.read_pointer_bytes(*ptr, len)?,
+            Node::ForeignPtr(foreign_ptr) => self.read_pointer_bytes(foreign_ptr.ptr, len)?,
             _ => return Err(EvalError::ExpectedForeignPtr(id)),
         };
         Ok(self.push_node(Node::Bytes(bytes)))
@@ -8044,7 +8058,7 @@ impl Program {
 
     fn foreign_ptr_value(&self, id: NodeId) -> Result<i64, EvalError> {
         match &self.nodes[id.0] {
-            Node::ForeignPtr { ptr, .. } => Ok(*ptr),
+            Node::ForeignPtr(foreign_ptr) => Ok(foreign_ptr.ptr),
             Node::Prim(name) => {
                 std_handle_ptr(name.name()).ok_or(EvalError::ExpectedForeignPtr(id))
             }
@@ -8058,12 +8072,12 @@ impl Program {
     }
 
     fn js_object_node(&self, handle: u32) -> Node {
-        Node::ForeignPtr {
+        Node::ForeignPtr(Box::new(ForeignPtrNode {
             bytes: None,
             offset: 0,
             ptr: i64::from(handle),
             finalizer: None,
-        }
+        }))
     }
 
     fn set_foreign_ptr_finalizer(
@@ -8072,10 +8086,8 @@ impl Program {
         finalizer: NodeId,
     ) -> Result<(), EvalError> {
         match &mut self.nodes[id.0] {
-            Node::ForeignPtr {
-                finalizer: slot, ..
-            } => {
-                *slot = Some(finalizer);
+            Node::ForeignPtr(foreign_ptr) => {
+                foreign_ptr.finalizer = Some(finalizer);
                 Ok(())
             }
             _ => Err(EvalError::ExpectedForeignPtr(id)),
@@ -8083,17 +8095,17 @@ impl Program {
     }
 
     fn new_weak_ptr(&mut self, value: NodeId, finalizer: Option<NodeId>) -> NodeId {
-        self.push_node(Node::Weak {
+        self.push_node(Node::Weak(Box::new(WeakNode {
             value: Some(value),
             finalizer,
-        })
+        })))
     }
 
     fn eval_weak_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
             id,
             |program, root| match program.nodes[root.0] {
-                Node::Weak { .. } => Some(root),
+                Node::Weak(_) => Some(root),
                 _ => None,
             },
             EvalError::ExpectedWeak,
@@ -8102,8 +8114,8 @@ impl Program {
 
     fn deref_weak_ptr(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         let id = self.eval_weak_id(id)?;
-        let value = match self.nodes[id.0] {
-            Node::Weak { value, .. } => value,
+        let value = match &self.nodes[id.0] {
+            Node::Weak(weak) => weak.value,
             _ => unreachable!(),
         };
         Ok(match value {
@@ -8115,7 +8127,7 @@ impl Program {
     fn finalize_weak_ptr(&mut self, id: NodeId) -> Result<(), EvalError> {
         let id = self.eval_weak_id(id)?;
         let finalizer = match &mut self.nodes[id.0] {
-            Node::Weak { finalizer, .. } => finalizer.take(),
+            Node::Weak(weak) => weak.finalizer.take(),
             _ => unreachable!(),
         };
         if let Some(finalizer) = finalizer {
@@ -8279,16 +8291,16 @@ impl Program {
                 out.push_str("FunPtr#");
                 out.push_str(&n.to_string());
             }
-            Node::ForeignPtr { ptr, .. } => {
-                if let Some(mpz) = self.mpz_decimal_bytes_for_ptr(*ptr) {
+            Node::ForeignPtr(foreign_ptr) => {
+                if let Some(mpz) = self.mpz_decimal_bytes_for_ptr(foreign_ptr.ptr) {
                     out.push('%');
                     render_bytes(mpz, out);
                 } else {
                     out.push_str("ForeignPtr#");
-                    out.push_str(&ptr.to_string());
+                    out.push_str(&foreign_ptr.ptr.to_string());
                 }
             }
-            Node::Weak { .. } => {
+            Node::Weak(_) => {
                 out.push_str("Weak#");
                 out.push_str(&id.0.to_string());
             }
@@ -8300,7 +8312,8 @@ impl Program {
                 out.push('%');
                 render_bytes(bytes, out);
             }
-            Node::Bytes(bytes) | Node::MutableBytes { bytes, .. } => render_bytes(bytes, out),
+            Node::Bytes(bytes) => render_bytes(bytes, out),
+            Node::MutableBytes(bytes) => render_bytes(&bytes.bytes, out),
             Node::Array(items) => {
                 out.push('[');
                 for (idx, item) in items.iter().enumerate() {
@@ -8315,11 +8328,11 @@ impl Program {
                 out.push('^');
                 out.push_str(name);
             }
-            Node::JsCall { tags, body } => {
+            Node::JsCall(call) => {
                 out.push('~');
-                out.push_str(tags);
+                out.push_str(&call.tags);
                 out.push(' ');
-                render_bytes(body, out);
+                render_bytes(&call.body, out);
             }
             Node::JsWrap { tags } => {
                 out.push('`');
