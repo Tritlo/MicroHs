@@ -749,6 +749,7 @@ struct Int64Frame {
 enum Int64FrameKind {
     BinSecond { op: Int64BinOp, x: NodeId },
     BinFirst { op: Int64BinOp, y: i64 },
+    ShiftFirst { op: Int64BinOp, y: i64 },
     Un { op: Int64UnOp },
 }
 
@@ -2332,23 +2333,21 @@ impl Program {
         };
 
         let force = if args.len() >= 2 {
-            Int64BinOp::from_prim(prim_name).and_then(|op| {
-                (!op.rhs_is_shift()).then_some((
-                    2,
-                    Int64FrameKind::BinSecond { op, x: args[0] },
-                    args[1],
-                ))
-            })
+            if let Some(op) = Int64BinOp::from_prim(prim_name) {
+                if op.rhs_is_shift() {
+                    let y = self.eval_int(args[1])?;
+                    Some((2, Int64FrameKind::ShiftFirst { op, y }, args[0]))
+                } else {
+                    Some((2, Int64FrameKind::BinSecond { op, x: args[0] }, args[1]))
+                }
+            } else {
+                None
+            }
+        } else if !args.is_empty() {
+            Int64UnOp::from_prim(prim_name).map(|op| (1, Int64FrameKind::Un { op }, args[0]))
         } else {
             None
-        }
-        .or_else(|| {
-            if args.is_empty() {
-                None
-            } else {
-                Int64UnOp::from_prim(prim_name).map(|op| (1, Int64FrameKind::Un { op }, args[0]))
-            }
-        });
+        };
         let Some((used, kind, next)) = force else {
             return Ok(None);
         };
@@ -2395,6 +2394,12 @@ impl Program {
                 return Ok((next, 0));
             }
             Int64FrameKind::BinFirst { op, y } => {
+                let result = op
+                    .apply(value, y)
+                    .map_err(|err| self.arithmetic_eval_error(err))?;
+                self.int64_result_node(result)
+            }
+            Int64FrameKind::ShiftFirst { op, y } => {
                 let result = op
                     .apply(value, y)
                     .map_err(|err| self.arithmetic_eval_error(err))?;
