@@ -31,7 +31,7 @@ what should not be retried blindly.
 | common benchmark sinks | matching |
 | rare/smoke benchmark sinks | matching; no longer tracked as a live performance table here |
 | self-host `--help` proxy | sink-comparable with C when using `--c-mhsbench-mode main` |
-| full self-host compile | C completes; Rust still times out without an output comb |
+| full self-host compile | C completes; Rust `539c52d0` still timed out at 600s with no output comb |
 
 ## Coverage
 
@@ -46,6 +46,12 @@ what should not be retried blindly.
 | `IO.serialize`/sharing/cycles | incomplete; defer until after evaluator/GC shape is clearer |
 | GC/F5 | not implemented; blocked on explicit roots/stack protocol |
 | self-hosting | `--help` proxy runs; full compile remains the main parity/perf target |
+
+Latest full self-host attempt:
+
+| runtime | command shape | result |
+|---|---|---|
+| Rust `539c52d0` | `timeout 600s target/release/mhs-rust-bench --input /tmp/mhs-selfhost.comb --mode main --warmup-iters 0 --iters 1 -- ./bin/mhs -i -imhs -isrc -ilib MicroHs.Main -o/tmp/mhs-selfhost-out-539c52d0.comb` | timed out with exit 124; no output comb |
 
 ## Performance Snapshot
 
