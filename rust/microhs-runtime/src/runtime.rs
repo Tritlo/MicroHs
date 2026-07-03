@@ -776,6 +776,17 @@ enum Float32FrameKind {
     Un { op: Float32UnOp },
 }
 
+struct BytesFrame {
+    redex: StrictRedex,
+    profile_head: Option<String>,
+    kind: BytesFrameKind,
+}
+
+enum BytesFrameKind {
+    BinSecond { op: BytesBinOp, x: NodeId },
+    BinFirst { op: BytesBinOp, y: NodeId },
+}
+
 struct FrameStack<T> {
     top: Option<T>,
     rest: Vec<T>,
@@ -808,6 +819,7 @@ type IntFrameStack = FrameStack<IntFrame>;
 type Int64FrameStack = FrameStack<Int64Frame>;
 type Float64FrameStack = FrameStack<Float64Frame>;
 type Float32FrameStack = FrameStack<Float32Frame>;
+type BytesFrameStack = FrameStack<BytesFrame>;
 
 impl Program {
     pub fn new(nodes: Vec<Node>, root: NodeId, labels: HashMap<usize, NodeId>) -> Self {
@@ -2729,6 +2741,169 @@ impl Program {
         }
     }
 
+    fn bytes_bin_result_node(
+        &mut self,
+        op: BytesBinOp,
+        x: NodeId,
+        y: NodeId,
+    ) -> Result<NodeId, EvalError> {
+        let node = match op {
+            BytesBinOp::Append => {
+                let mut bytes = self.bytes(x)?.to_vec();
+                bytes.extend(self.bytes(y)?);
+                self.push_node(Node::Bytes(bytes))
+            }
+            BytesBinOp::AppendDot => {
+                let mut bytes = self.bytes(x)?.to_vec();
+                bytes.push(b'.');
+                bytes.extend(self.bytes(y)?);
+                self.push_node(Node::Bytes(bytes))
+            }
+            BytesBinOp::Eq
+            | BytesBinOp::Ne
+            | BytesBinOp::Lt
+            | BytesBinOp::Le
+            | BytesBinOp::Gt
+            | BytesBinOp::Ge
+            | BytesBinOp::Cmp => {
+                let cmp = self.bytes(x)?.cmp(self.bytes(y)?);
+                match op {
+                    BytesBinOp::Eq => self.prim(if cmp == Ordering::Equal { "A" } else { "K" }),
+                    BytesBinOp::Ne => self.prim(if cmp != Ordering::Equal { "A" } else { "K" }),
+                    BytesBinOp::Lt => self.prim(if cmp == Ordering::Less { "A" } else { "K" }),
+                    BytesBinOp::Le => self.prim(if cmp != Ordering::Greater { "A" } else { "K" }),
+                    BytesBinOp::Gt => self.prim(if cmp == Ordering::Greater { "A" } else { "K" }),
+                    BytesBinOp::Ge => self.prim(if cmp != Ordering::Less { "A" } else { "K" }),
+                    BytesBinOp::Cmp => self.ordering(cmp),
+                    BytesBinOp::Append | BytesBinOp::AppendDot => unreachable!(),
+                }
+            }
+        };
+        Ok(node)
+    }
+
+    fn begin_bytes_force_frame(
+        &mut self,
+        root: NodeId,
+    ) -> Result<Option<(BytesFrame, NodeId)>, EvalError> {
+        let spine = self.spine(root)?;
+        let head = spine.head;
+        let args = spine.args();
+        let Some(prim_name) = (match &self.nodes[head.0] {
+            Node::Prim(name) => Some(name.name()),
+            _ => None,
+        }) else {
+            return Ok(None);
+        };
+        if args.len() < 2 {
+            return Ok(None);
+        }
+        let Some(op) = BytesBinOp::from_prim(prim_name) else {
+            return Ok(None);
+        };
+
+        let profile_head = if self.profile.is_some() {
+            let heap_spine = matches!(&spine.storage, SpineStorage::Heap { .. });
+            self.profile_step(head, args.len(), heap_spine)
+        } else {
+            None
+        };
+        let redex = if args.len() == 2 {
+            StrictRedex::Root(root)
+        } else {
+            StrictRedex::Spine {
+                root,
+                used: 2,
+                args: args.to_vec(),
+                apps: spine.apps().to_vec(),
+            }
+        };
+        let frame = BytesFrame {
+            redex,
+            profile_head,
+            kind: BytesFrameKind::BinSecond { op, x: args[0] },
+        };
+        Ok(Some((frame, args[1])))
+    }
+
+    fn finish_bytes_frame(
+        &mut self,
+        frame: BytesFrame,
+        value: NodeId,
+        stack: &mut BytesFrameStack,
+    ) -> Result<(NodeId, usize), EvalError> {
+        let node = match frame.kind {
+            BytesFrameKind::BinSecond { op, x } => {
+                let next = x;
+                let next_frame = BytesFrame {
+                    redex: frame.redex,
+                    profile_head: frame.profile_head,
+                    kind: BytesFrameKind::BinFirst { op, y: value },
+                };
+                stack.push(next_frame);
+                return Ok((next, 0));
+            }
+            BytesFrameKind::BinFirst { op, y } => self.bytes_bin_result_node(op, value, y)?,
+        };
+
+        if frame.profile_head.is_some() {
+            self.profile_reduction(&frame.profile_head, 1);
+        }
+        self.apply_strict_redex(frame.redex, node);
+        Ok((node, 1))
+    }
+
+    fn force_bytes_id_from_frame(
+        &mut self,
+        frame: BytesFrame,
+        next: NodeId,
+        limit: usize,
+    ) -> Result<NodeId, EvalError> {
+        let mut current = next;
+        let mut steps = 0;
+        let mut stack = BytesFrameStack::default();
+        stack.push(frame);
+        loop {
+            let current_resolved = self.resolve(current)?;
+            match self.nodes[current_resolved.0] {
+                Node::Bytes(_) | Node::MutableBytes { .. } => {
+                    let Some(frame) = stack.pop() else {
+                        return Ok(current_resolved);
+                    };
+                    let (next, reductions) =
+                        self.finish_bytes_frame(frame, current_resolved, &mut stack)?;
+                    steps += reductions;
+                    self.reductions += reductions;
+                    if steps >= limit {
+                        return Err(EvalError::StepLimit { limit });
+                    }
+                    current = next;
+                    continue;
+                }
+                _ => {}
+            }
+
+            if let Some((frame, next)) = self.begin_bytes_force_frame(current_resolved)? {
+                stack.push(frame);
+                current = next;
+                continue;
+            }
+
+            if steps >= limit {
+                return Err(EvalError::StepLimit { limit });
+            }
+            let Some(step) = self.step(current_resolved, limit - steps)? else {
+                return Err(EvalError::ExpectedBytes(current_resolved));
+            };
+            steps += step.reductions;
+            self.reductions += step.reductions;
+            if !step.in_place && step.node != current_resolved {
+                self.nodes[current_resolved.0] = Node::Indir(Some(step.node));
+            }
+            current = step.node;
+        }
+    }
+
     fn int_binop(
         &mut self,
         name: &str,
@@ -3269,6 +3444,13 @@ impl Program {
         name: &str,
         args: &[NodeId],
     ) -> Result<Option<(usize, NodeId)>, EvalError> {
+        if let Some(op) = BytesBinOp::from_prim(name) {
+            let x = self.eval_bytes_id(args[0])?;
+            let y = self.eval_bytes_id(args[1])?;
+            let node = self.bytes_bin_result_node(op, x, y)?;
+            return Ok(Some((2, node)));
+        }
+
         let rewrite = match name {
             "packCString" if args.len() >= 2 => {
                 let ptr = self.eval_pointer_value(args[0])?;
@@ -3393,31 +3575,6 @@ impl Program {
                 let encoded = modified_utf8(self.eval_int(args[1])?)?;
                 self.append_bytes(bytes, &encoded)?;
                 Some((2, self.prim("I")))
-            }
-            "bs++" => {
-                let mut bytes = self.eval_bytes(args[0])?;
-                bytes.extend(self.eval_bytes(args[1])?);
-                Some((2, self.push_node(Node::Bytes(bytes))))
-            }
-            "bs++." => {
-                let mut bytes = self.eval_bytes(args[0])?;
-                bytes.push(b'.');
-                bytes.extend(self.eval_bytes(args[1])?);
-                Some((2, self.push_node(Node::Bytes(bytes))))
-            }
-            "bs==" | "bs/=" | "bs<" | "bs<=" | "bs>" | "bs>=" | "bscmp" => {
-                let cmp = self.eval_bytes(args[0])?.cmp(&self.eval_bytes(args[1])?);
-                let node = match name {
-                    "bs==" => self.prim(if cmp == Ordering::Equal { "A" } else { "K" }),
-                    "bs/=" => self.prim(if cmp != Ordering::Equal { "A" } else { "K" }),
-                    "bs<" => self.prim(if cmp == Ordering::Less { "A" } else { "K" }),
-                    "bs<=" => self.prim(if cmp != Ordering::Greater { "A" } else { "K" }),
-                    "bs>" => self.prim(if cmp == Ordering::Greater { "A" } else { "K" }),
-                    "bs>=" => self.prim(if cmp != Ordering::Less { "A" } else { "K" }),
-                    "bscmp" => self.ordering(cmp),
-                    _ => unreachable!(),
-                };
-                Some((2, node))
             }
             "bsreplicate" => {
                 let len = int_to_usize(self.eval_int(args[0])?)?;
@@ -4796,6 +4953,9 @@ impl Program {
         match self.nodes[root.0] {
             Node::Bytes(_) | Node::MutableBytes { .. } => return Ok(root),
             _ => {}
+        }
+        if let Some((frame, next)) = self.begin_bytes_force_frame(root)? {
+            return self.force_bytes_id_from_frame(frame, next, FORCE_REDUCTION_LIMIT);
         }
         let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
         let id = self.resolve(root)?;
@@ -8257,6 +8417,36 @@ impl Float32UnOp {
         match self {
             Self::Neg => -x,
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BytesBinOp {
+    Append,
+    AppendDot,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Cmp,
+}
+
+impl BytesBinOp {
+    fn from_prim(name: &str) -> Option<Self> {
+        Some(match name {
+            "bs++" => Self::Append,
+            "bs++." => Self::AppendDot,
+            "bs==" => Self::Eq,
+            "bs/=" => Self::Ne,
+            "bs<" => Self::Lt,
+            "bs<=" => Self::Le,
+            "bs>" => Self::Gt,
+            "bs>=" => Self::Ge,
+            "bscmp" => Self::Cmp,
+            _ => return None,
+        })
     }
 }
 
