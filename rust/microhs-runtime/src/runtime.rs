@@ -1,7 +1,17 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::mem::{MaybeUninit, size_of};
+
+macro_rules! trace_invalid_bytes {
+    ($program:expr, $($arg:tt)*) => {{
+        if std::env::var_os("MHS_TRACE_INVALID_BYTES").is_some() {
+            eprintln!("invalid bytes: reductions={}", $program.reductions);
+            eprintln!($($arg)*);
+        }
+        EvalError::InvalidByteString
+    }};
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct NodeId(pub usize);
@@ -345,7 +355,14 @@ pub struct WeakNode {
 #[derive(Clone, Debug)]
 pub struct MutableBytesNode {
     pub(crate) bytes: Vec<u8>,
+    pub(crate) size: usize,
     pub(crate) capacity: usize,
+}
+
+impl MutableBytesNode {
+    fn visible(&self) -> &[u8] {
+        &self.bytes[..self.size]
+    }
 }
 
 impl Node {
@@ -363,6 +380,7 @@ enum StdHandle {
 
 const ALLOCATION_PTR_BASE: i64 = -(1_i64 << 62);
 const ALLOCATION_PTR_STRIDE: i64 = 1_i64 << 32;
+const NODE_PTR_STRIDE: i64 = 1_i64 << 32;
 const BFILE_PTR_BASE: i64 = i64::MIN + (1_i64 << 32);
 const FORCE_REDUCTION_LIMIT: usize = usize::MAX;
 const RTS_EXN_DIVIDE_BY_ZERO: i64 = 4;
@@ -371,11 +389,13 @@ const BFILE_PTR_STRIDE: i64 = 1_i64 << 32;
 const DIR_PTR_BASE: i64 = i64::MIN + (1_i64 << 61);
 const DIR_PTR_STRIDE: i64 = 1_i64 << 32;
 const INLINE_SPINE: usize = 16;
+const FALLBACK_PRIM_ARG_PREFIX: usize = 4;
 const SMALL_INT_MIN: i64 = -10;
 const SMALL_INT_MAX: i64 = 255;
 const SMALL_INT_COUNT: usize = (SMALL_INT_MAX - SMALL_INT_MIN + 1) as usize;
 const IGNORED_IO_SHORTCUT_RECURSION_LIMIT: usize = 256;
 const UTF8_ASCII_REFILL: usize = 1024;
+const GC_NODE_INTERVAL: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 struct BFile {
@@ -592,6 +612,16 @@ pub struct Program {
     nodes: Vec<Node>,
     root: NodeId,
     labels: HashMap<usize, NodeId>,
+    node_pointers: Vec<NodeId>,
+    node_pointer_slots: HashMap<NodeId, usize>,
+    free_nodes: Vec<usize>,
+    gc_node_interval: usize,
+    next_gc_nodes: usize,
+    gc_collections: usize,
+    gc_freed_nodes_total: usize,
+    gc_last_live_nodes: usize,
+    gc_last_free_nodes: usize,
+    gc_high_water_nodes: usize,
     stable_ptrs: Vec<Option<NodeId>>,
     allocations: Vec<Option<Vec<u8>>>,
     bfiles: Vec<Option<BFile>>,
@@ -609,6 +639,17 @@ pub struct Program {
     small_ints: [Option<NodeId>; SMALL_INT_COUNT],
     world: Option<NodeId>,
     profile: Option<EvalProfile>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GcStats {
+    pub collections: usize,
+    pub freed_nodes_total: usize,
+    pub last_live_nodes: usize,
+    pub last_free_nodes: usize,
+    pub high_water_nodes: usize,
+    pub current_nodes: usize,
+    pub current_free_nodes: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -636,6 +677,10 @@ pub struct EvalProfile {
     pub spine_arity: BTreeMap<usize, usize>,
     pub resolve_chain: BTreeMap<usize, usize>,
     pub shortcut_hits: HashMap<String, usize>,
+    pub primitive_dispatch_probes: HashMap<String, usize>,
+    pub primitive_dispatch_hits: HashMap<String, usize>,
+    pub node_allocations: HashMap<String, usize>,
+    pub app_allocation_sites: HashMap<String, usize>,
 }
 
 impl EvalProfile {
@@ -650,6 +695,22 @@ impl EvalProfile {
     pub fn top_shortcut_hits(&self, limit: usize) -> Vec<(&str, usize)> {
         sorted_profile_counts(&self.shortcut_hits, limit)
     }
+
+    pub fn top_primitive_dispatch_probes(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.primitive_dispatch_probes, limit)
+    }
+
+    pub fn top_primitive_dispatch_hits(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.primitive_dispatch_hits, limit)
+    }
+
+    pub fn top_node_allocations(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.node_allocations, limit)
+    }
+
+    pub fn top_app_allocation_sites(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.app_allocation_sites, limit)
+    }
 }
 
 fn sorted_profile_counts(map: &HashMap<String, usize>, limit: usize) -> Vec<(&str, usize)> {
@@ -660,6 +721,33 @@ fn sorted_profile_counts(map: &HashMap<String, usize>, limit: usize) -> Vec<(&st
     counts.sort_unstable_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
     counts.truncate(limit);
     counts
+}
+
+fn node_allocation_key(node: &Node) -> &'static str {
+    match node {
+        Node::App(_, _) => "App",
+        Node::Indir(_) => "Indir",
+        Node::Prim(_) => "Prim",
+        Node::Int(_) => "Int",
+        Node::Int64(_) => "Int64",
+        Node::Float64(_) => "Float64",
+        Node::Float32(_) => "Float32",
+        Node::ThreadId(_) => "ThreadId",
+        Node::Ptr(_) => "Ptr",
+        Node::RawFunPtr(_) => "RawFunPtr",
+        Node::ForeignPtr(_) => "ForeignPtr",
+        Node::Weak(_) => "Weak",
+        Node::MVar(_) => "MVar",
+        Node::BigInt(_) => "BigInt",
+        Node::Bytes(_) => "Bytes",
+        Node::MutableBytes(_) => "MutableBytes",
+        Node::Array(_) => "Array",
+        Node::Ffi(_) => "Ffi",
+        Node::JsCall(_) => "JsCall",
+        Node::JsWrap { .. } => "JsWrap",
+        Node::FunPtr(_) => "FunPtr",
+        Node::Tick(_) => "Tick",
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -704,6 +792,19 @@ enum SpineStorage {
         args: Vec<NodeId>,
         apps: Vec<NodeId>,
     },
+}
+
+#[derive(Default)]
+struct PersistentSpine {
+    args: VecDeque<NodeId>,
+    apps: VecDeque<NodeId>,
+}
+
+enum PersistentStep {
+    Reduced { node: NodeId, reductions: usize },
+    Force { node: NodeId },
+    Whnf { node: NodeId },
+    Fallback { root: NodeId },
 }
 
 impl Default for EvalSpine {
@@ -805,6 +906,15 @@ impl EvalSpine {
         }
     }
 
+    fn write_args_head_order_prefix(&self, args: &mut Vec<NodeId>, limit: usize) {
+        args.clear();
+        let len = self.len().min(limit);
+        args.reserve(len);
+        for head_idx in 0..len {
+            args.push(self.arg(head_idx));
+        }
+    }
+
     fn write_spine_head_order(&self, args: &mut Vec<NodeId>, apps: &mut Vec<NodeId>) {
         args.clear();
         apps.clear();
@@ -815,6 +925,46 @@ impl EvalSpine {
             args.push(self.desc_arg(desc_idx));
             apps.push(self.desc_app(desc_idx));
         }
+    }
+}
+
+impl PersistentSpine {
+    fn clear(&mut self) {
+        self.args.clear();
+        self.apps.clear();
+    }
+
+    fn len(&self) -> usize {
+        self.args.len()
+    }
+
+    fn push_front(&mut self, arg: NodeId, app: NodeId) {
+        self.args.push_front(arg);
+        self.apps.push_front(app);
+    }
+
+    fn consume(&mut self, used: usize) {
+        debug_assert!(used <= self.len());
+        for _ in 0..used {
+            self.args.pop_front();
+            self.apps.pop_front();
+        }
+    }
+
+    fn arg(&self, index: usize) -> NodeId {
+        self.args[index]
+    }
+
+    fn app(&self, index: usize) -> NodeId {
+        self.apps[index]
+    }
+
+    fn outer_root(&self, head: NodeId) -> NodeId {
+        self.apps.back().copied().unwrap_or(head)
+    }
+
+    fn remaining_apps_contain(&self, start: usize, node: NodeId) -> bool {
+        self.apps.iter().skip(start).any(|app| *app == node)
     }
 }
 
@@ -949,7 +1099,7 @@ struct ConversionFrame {
     kind: ConversionFrameKind,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum ConversionFrameKind {
     IntToInt64,
     Int64ToInt,
@@ -1020,26 +1170,32 @@ impl<T> FrameStack<T> {
 type EvalFrameStack = FrameStack<EvalFrame>;
 
 impl ConversionFrameKind {
-    fn from_prim(name: &str) -> Option<Self> {
+    fn from_prim_named(name: &str) -> Option<(Self, &'static str)> {
         Some(match name {
-            "itoI" | "utoU" => Self::IntToInt64,
-            "Itoi" | "Utou" => Self::Int64ToInt,
-            "itod" => Self::IntToFloat64 { unsigned: false },
-            "utod" => Self::IntToFloat64 { unsigned: true },
-            "Itod" => Self::Int64ToFloat64,
-            "dtoi" => Self::Float64ToInt,
-            "itof" => Self::IntToFloat32 { unsigned: false },
-            "utof" => Self::IntToFloat32 { unsigned: true },
-            "Itof" => Self::Int64ToFloat32,
-            "ftoi" => Self::Float32ToInt,
-            "dtof" => Self::Float64ToFloat32,
-            "ftod" => Self::Float32ToFloat64,
-            "toDbl" => Self::Int64BitsToFloat64,
-            "fromDbl" => Self::Float64BitsToInt64,
-            "toFlt" => Self::IntBitsToFloat32,
-            "fromFlt" => Self::Float32BitsToInt,
+            "itoI" => (Self::IntToInt64, "itoI"),
+            "utoU" => (Self::IntToInt64, "utoU"),
+            "Itoi" => (Self::Int64ToInt, "Itoi"),
+            "Utou" => (Self::Int64ToInt, "Utou"),
+            "itod" => (Self::IntToFloat64 { unsigned: false }, "itod"),
+            "utod" => (Self::IntToFloat64 { unsigned: true }, "utod"),
+            "Itod" => (Self::Int64ToFloat64, "Itod"),
+            "dtoi" => (Self::Float64ToInt, "dtoi"),
+            "itof" => (Self::IntToFloat32 { unsigned: false }, "itof"),
+            "utof" => (Self::IntToFloat32 { unsigned: true }, "utof"),
+            "Itof" => (Self::Int64ToFloat32, "Itof"),
+            "ftoi" => (Self::Float32ToInt, "ftoi"),
+            "dtof" => (Self::Float64ToFloat32, "dtof"),
+            "ftod" => (Self::Float32ToFloat64, "ftod"),
+            "toDbl" => (Self::Int64BitsToFloat64, "toDbl"),
+            "fromDbl" => (Self::Float64BitsToInt64, "fromDbl"),
+            "toFlt" => (Self::IntBitsToFloat32, "toFlt"),
+            "fromFlt" => (Self::Float32BitsToInt, "fromFlt"),
             _ => return None,
         })
+    }
+
+    fn from_prim(name: &str) -> Option<Self> {
+        Self::from_prim_named(name).map(|(kind, _)| kind)
     }
 
     fn ready_value(self, node: &Node) -> Option<ConversionValue> {
@@ -1092,6 +1248,16 @@ impl ConversionFrameKind {
 
 impl Program {
     pub fn new(nodes: Vec<Node>, root: NodeId, labels: HashMap<usize, NodeId>) -> Self {
+        let gc_node_interval = std::env::var("MHS_GC_NODE_INTERVAL")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(GC_NODE_INTERVAL);
+        let high_water_nodes = nodes.len();
+        let next_gc_nodes = if gc_node_interval == 0 {
+            usize::MAX
+        } else {
+            nodes.len().saturating_add(gc_node_interval)
+        };
         let mut small_ints = [None; SMALL_INT_COUNT];
         for (index, node) in nodes.iter().enumerate() {
             if let Node::Int(value) = node {
@@ -1104,6 +1270,16 @@ impl Program {
             nodes,
             root,
             labels,
+            node_pointers: Vec::new(),
+            node_pointer_slots: HashMap::new(),
+            free_nodes: Vec::new(),
+            gc_node_interval,
+            next_gc_nodes,
+            gc_collections: 0,
+            gc_freed_nodes_total: 0,
+            gc_last_live_nodes: high_water_nodes,
+            gc_last_free_nodes: 0,
+            gc_high_water_nodes: high_water_nodes,
             stable_ptrs: vec![None],
             allocations: Vec::new(),
             bfiles: Vec::new(),
@@ -1158,9 +1334,332 @@ impl Program {
     }
 
     pub fn push_node(&mut self, node: Node) -> NodeId {
-        let id = NodeId(self.nodes.len());
-        self.nodes.push(node);
-        id
+        if self.profile.is_some() {
+            self.profile_node_allocation(&node);
+        }
+        if let Some(index) = self.free_nodes.pop() {
+            self.nodes[index] = node;
+            NodeId(index)
+        } else {
+            let id = NodeId(self.nodes.len());
+            self.nodes.push(node);
+            self.gc_high_water_nodes = self.gc_high_water_nodes.max(self.nodes.len());
+            id
+        }
+    }
+
+    pub fn gc_stats(&self) -> GcStats {
+        GcStats {
+            collections: self.gc_collections,
+            freed_nodes_total: self.gc_freed_nodes_total,
+            last_live_nodes: self.gc_last_live_nodes,
+            last_free_nodes: self.gc_last_free_nodes,
+            high_water_nodes: self.gc_high_water_nodes,
+            current_nodes: self.nodes.len(),
+            current_free_nodes: self.free_nodes.len(),
+        }
+    }
+
+    fn mark_node_id(marked: &mut [bool], work: &mut Vec<NodeId>, id: NodeId) {
+        if let Some(mark) = marked.get_mut(id.0) {
+            if !*mark {
+                *mark = true;
+                work.push(id);
+            }
+        }
+    }
+
+    fn node_pointer_target(&self, ptr: i64) -> Option<NodeId> {
+        if ptr <= 0 {
+            return None;
+        }
+        let slot_word = usize::try_from(ptr >> 32).ok()?;
+        if slot_word == 0 {
+            return None;
+        }
+        self.node_pointers.get(slot_word - 1).copied()
+    }
+
+    fn mark_pointer_target(&self, marked: &mut [bool], work: &mut Vec<NodeId>, ptr: i64) {
+        if let Some(id) = self.node_pointer_target(ptr) {
+            Self::mark_node_id(marked, work, id);
+        }
+    }
+
+    fn mark_strict_redex(marked: &mut [bool], work: &mut Vec<NodeId>, redex: &StrictRedex) {
+        match redex {
+            StrictRedex::Root(root) => Self::mark_node_id(marked, work, *root),
+            StrictRedex::Spine {
+                root, args, apps, ..
+            } => {
+                Self::mark_node_id(marked, work, *root);
+                for id in args.iter().chain(apps) {
+                    Self::mark_node_id(marked, work, *id);
+                }
+            }
+        }
+    }
+
+    fn mark_eval_frame(&self, marked: &mut [bool], work: &mut Vec<NodeId>, frame: &EvalFrame) {
+        match frame {
+            EvalFrame::Whnf(frame) => {
+                Self::mark_strict_redex(marked, work, &frame.redex);
+                match &frame.kind {
+                    WhnfFrameKind::Seq { result } => Self::mark_node_id(marked, work, *result),
+                    WhnfFrameKind::IoStrict { action, value } => {
+                        Self::mark_node_id(marked, work, *action);
+                        Self::mark_node_id(marked, work, *value);
+                    }
+                    WhnfFrameKind::IsInt => {}
+                }
+            }
+            EvalFrame::Int(frame) => {
+                Self::mark_strict_redex(marked, work, &frame.redex);
+                if let IntFrameKind::BinSecond { x, .. } = &frame.kind {
+                    Self::mark_node_id(marked, work, *x);
+                }
+            }
+            EvalFrame::Int64(frame) => {
+                Self::mark_strict_redex(marked, work, &frame.redex);
+                match &frame.kind {
+                    Int64FrameKind::BinSecond { x, .. } => Self::mark_node_id(marked, work, *x),
+                    Int64FrameKind::BinFirst { .. }
+                    | Int64FrameKind::ShiftFirst { .. }
+                    | Int64FrameKind::Un { .. } => {}
+                }
+            }
+            EvalFrame::Int64Shift(frame) => {
+                Self::mark_strict_redex(marked, work, &frame.redex);
+                Self::mark_node_id(marked, work, frame.x);
+            }
+            EvalFrame::Float64(frame) => {
+                Self::mark_strict_redex(marked, work, &frame.redex);
+                if let Float64FrameKind::BinSecond { x, .. } = &frame.kind {
+                    Self::mark_node_id(marked, work, *x);
+                }
+            }
+            EvalFrame::Float32(frame) => {
+                Self::mark_strict_redex(marked, work, &frame.redex);
+                if let Float32FrameKind::BinSecond { x, .. } = &frame.kind {
+                    Self::mark_node_id(marked, work, *x);
+                }
+            }
+            EvalFrame::Bytes(frame) => {
+                Self::mark_strict_redex(marked, work, &frame.redex);
+                match &frame.kind {
+                    BytesFrameKind::BinSecond { x, .. } => Self::mark_node_id(marked, work, *x),
+                    BytesFrameKind::BinFirst { y, .. } => Self::mark_node_id(marked, work, *y),
+                }
+            }
+            EvalFrame::Conversion(frame) => {
+                Self::mark_strict_redex(marked, work, &frame.redex);
+            }
+        }
+    }
+
+    fn mark_eval_stack(&self, marked: &mut [bool], work: &mut Vec<NodeId>, stack: &EvalFrameStack) {
+        if let Some(frame) = &stack.top {
+            self.mark_eval_frame(marked, work, frame);
+        }
+        for frame in &stack.rest {
+            self.mark_eval_frame(marked, work, frame);
+        }
+    }
+
+    fn mark_eval_spine(marked: &mut [bool], work: &mut Vec<NodeId>, spine: &EvalSpine) {
+        for idx in 0..spine.len() {
+            Self::mark_node_id(marked, work, spine.desc_arg(idx));
+            Self::mark_node_id(marked, work, spine.desc_app(idx));
+        }
+    }
+
+    fn mark_persistent_spine(marked: &mut [bool], work: &mut Vec<NodeId>, spine: &PersistentSpine) {
+        for id in spine.args.iter().chain(&spine.apps) {
+            Self::mark_node_id(marked, work, *id);
+        }
+    }
+
+    fn mark_program_roots(
+        &self,
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        current_root: NodeId,
+        frame_stack: &EvalFrameStack,
+        eval_spine: &EvalSpine,
+        persistent_spine: &PersistentSpine,
+        scratch_args: &[NodeId],
+        scratch_apps: &[NodeId],
+    ) {
+        Self::mark_node_id(marked, work, self.root);
+        Self::mark_node_id(marked, work, current_root);
+        for id in self.labels.values() {
+            Self::mark_node_id(marked, work, *id);
+        }
+        for id in self.stable_ptrs.iter().flatten() {
+            Self::mark_node_id(marked, work, *id);
+        }
+        if let Some(id) = self.arg_ref_array {
+            Self::mark_node_id(marked, work, id);
+        }
+        if let Some(id) = self.world {
+            Self::mark_node_id(marked, work, id);
+        }
+        for id in self.small_ints.iter().flatten() {
+            Self::mark_node_id(marked, work, *id);
+        }
+        for id in [
+            self.prim_cache.a,
+            self.prim_cache.b,
+            self.prim_cache.c,
+            self.prim_cache.i,
+            self.prim_cache.k,
+            self.prim_cache.k2,
+            self.prim_cache.k3,
+            self.prim_cache.o,
+            self.prim_cache.p,
+            self.prim_cache.u,
+            self.prim_cache.y,
+            self.prim_cache.z,
+            self.prim_cache.io_bind,
+            self.prim_cache.io_perform_io,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            Self::mark_node_id(marked, work, id);
+        }
+        self.mark_eval_stack(marked, work, frame_stack);
+        Self::mark_eval_spine(marked, work, eval_spine);
+        Self::mark_persistent_spine(marked, work, persistent_spine);
+        for id in scratch_args.iter().chain(scratch_apps) {
+            Self::mark_node_id(marked, work, *id);
+        }
+    }
+
+    fn mark_reachable(&self, marked: &mut [bool], work: &mut Vec<NodeId>) {
+        while let Some(id) = work.pop() {
+            let Some(node) = self.nodes.get(id.0) else {
+                continue;
+            };
+            match node {
+                Node::App(fun, arg) => {
+                    Self::mark_node_id(marked, work, *fun);
+                    Self::mark_node_id(marked, work, *arg);
+                }
+                Node::Indir(Some(next)) => Self::mark_node_id(marked, work, *next),
+                Node::ForeignPtr(foreign_ptr) => {
+                    if let Some(finalizer) = foreign_ptr.finalizer {
+                        Self::mark_node_id(marked, work, finalizer);
+                    }
+                    self.mark_pointer_target(marked, work, foreign_ptr.ptr);
+                }
+                Node::Weak(weak) => {
+                    if let Some(value) = weak.value {
+                        Self::mark_node_id(marked, work, value);
+                    }
+                    if let Some(finalizer) = weak.finalizer {
+                        Self::mark_node_id(marked, work, finalizer);
+                    }
+                }
+                Node::MVar(Some(value)) => Self::mark_node_id(marked, work, *value),
+                Node::Array(items) => {
+                    for item in items {
+                        Self::mark_node_id(marked, work, *item);
+                    }
+                }
+                Node::Ptr(ptr) | Node::RawFunPtr(ptr) => {
+                    self.mark_pointer_target(marked, work, *ptr);
+                }
+                Node::Indir(None)
+                | Node::Prim(_)
+                | Node::Int(_)
+                | Node::Int64(_)
+                | Node::Float64(_)
+                | Node::Float32(_)
+                | Node::ThreadId(_)
+                | Node::MVar(None)
+                | Node::BigInt(_)
+                | Node::Bytes(_)
+                | Node::MutableBytes(_)
+                | Node::Ffi(_)
+                | Node::JsCall(_)
+                | Node::JsWrap { .. }
+                | Node::FunPtr(_)
+                | Node::Tick(_) => {}
+            }
+        }
+    }
+
+    fn collect_garbage_between_steps(
+        &mut self,
+        current_root: NodeId,
+        frame_stack: &EvalFrameStack,
+        eval_spine: &EvalSpine,
+        persistent_spine: &PersistentSpine,
+        scratch_args: &[NodeId],
+        scratch_apps: &[NodeId],
+    ) -> usize {
+        let mut marked = vec![false; self.nodes.len()];
+        let mut work = Vec::new();
+        self.mark_program_roots(
+            &mut marked,
+            &mut work,
+            current_root,
+            frame_stack,
+            eval_spine,
+            persistent_spine,
+            scratch_args,
+            scratch_apps,
+        );
+        self.mark_reachable(&mut marked, &mut work);
+
+        self.free_nodes.clear();
+        let mut freed = 0;
+        let mut live = 0;
+        for (index, mark) in marked.into_iter().enumerate() {
+            if mark {
+                live += 1;
+                continue;
+            }
+            if matches!(self.nodes[index], Node::Indir(None)) {
+                self.free_nodes.push(index);
+                continue;
+            }
+            self.nodes[index] = Node::Indir(None);
+            self.free_nodes.push(index);
+            freed += 1;
+        }
+        self.gc_collections += 1;
+        self.gc_freed_nodes_total = self.gc_freed_nodes_total.saturating_add(freed);
+        self.gc_last_live_nodes = live;
+        self.gc_last_free_nodes = self.free_nodes.len();
+        freed
+    }
+
+    fn maybe_collect_garbage_between_steps(
+        &mut self,
+        current_root: NodeId,
+        frame_stack: &EvalFrameStack,
+        eval_spine: &EvalSpine,
+        persistent_spine: &PersistentSpine,
+        scratch_args: &[NodeId],
+        scratch_apps: &[NodeId],
+    ) {
+        if self.gc_node_interval == 0 {
+            return;
+        }
+        if self.nodes.len() < self.next_gc_nodes {
+            return;
+        }
+        self.collect_garbage_between_steps(
+            current_root,
+            frame_stack,
+            eval_spine,
+            persistent_spine,
+            scratch_args,
+            scratch_apps,
+        );
+        self.next_gc_nodes = self.nodes.len().saturating_add(self.gc_node_interval);
     }
 
     pub fn resolve(&self, mut id: NodeId) -> Result<NodeId, EvalError> {
@@ -1392,6 +1891,36 @@ impl Program {
         }
     }
 
+    #[cold]
+    fn profile_primitive_dispatch_probe(&mut self, key: &'static str) {
+        if let Some(profile) = self.profile.as_mut() {
+            *profile
+                .primitive_dispatch_probes
+                .entry(key.to_owned())
+                .or_default() += 1;
+        }
+    }
+
+    #[cold]
+    fn profile_primitive_dispatch_hit(&mut self, key: &'static str) {
+        if let Some(profile) = self.profile.as_mut() {
+            *profile
+                .primitive_dispatch_hits
+                .entry(key.to_owned())
+                .or_default() += 1;
+        }
+    }
+
+    #[cold]
+    fn profile_node_allocation(&mut self, node: &Node) {
+        if let Some(profile) = self.profile.as_mut() {
+            *profile
+                .node_allocations
+                .entry(node_allocation_key(node).to_owned())
+                .or_default() += 1;
+        }
+    }
+
     fn eval_loop_result(
         &mut self,
         profile_head: &Option<String>,
@@ -1512,6 +2041,23 @@ impl Program {
                 used,
                 args: scratch_args.clone(),
                 apps: scratch_apps.clone(),
+            }
+        }
+    }
+
+    fn strict_redex_from_persistent_spine(
+        root: NodeId,
+        used: usize,
+        spine: &PersistentSpine,
+    ) -> StrictRedex {
+        if spine.len() == used {
+            StrictRedex::Root(root)
+        } else {
+            StrictRedex::Spine {
+                root,
+                used,
+                args: spine.args.iter().copied().collect(),
+                apps: spine.apps.iter().copied().collect(),
             }
         }
     }
@@ -1707,9 +2253,52 @@ impl Program {
                     }
                 }
 
+                if strict_markers {
+                    match known {
+                        Some(IoStrict) if args_len >= 2 => {
+                            strict_marker_step!(
+                                2,
+                                Whnf,
+                                WhnfFrame,
+                                WhnfFrameKind::IoStrict {
+                                    action: arg!(0),
+                                    value: arg!(1),
+                                },
+                                arg!(1)
+                            );
+                        }
+                        Some(Seq) if args_len >= 2 => {
+                            strict_marker_step!(
+                                2,
+                                Whnf,
+                                WhnfFrame,
+                                WhnfFrameKind::Seq { result: arg!(1) },
+                                arg!(0)
+                            );
+                        }
+                        Some(IsInt) if args_len >= 1 => {
+                            strict_marker_step!(1, Whnf, WhnfFrame, WhnfFrameKind::IsInt, arg!(0));
+                        }
+                        _ => {}
+                    }
+                }
+
                 if strict_markers && known.is_none() {
+                    macro_rules! dispatch_probe {
+                        ($key:literal, $expr:expr) => {{
+                            self.profile_primitive_dispatch_probe($key);
+                            let result = $expr;
+                            if result.is_some() {
+                                self.profile_primitive_dispatch_hit($key);
+                            }
+                            result
+                        }};
+                    }
+
                     if args_len >= 2 {
-                        if let Some(op) = IntBinOp::from_prim(prim.name()) {
+                        if let Some(op) =
+                            dispatch_probe!("strict_int_binop", IntBinOp::from_prim(prim.name()))
+                        {
                             strict_marker_step!(
                                 2,
                                 Int,
@@ -1721,13 +2310,18 @@ impl Program {
                     }
 
                     if args_len >= 1 {
-                        if let Some(op) = IntUnOp::from_prim(prim.name()) {
+                        if let Some(op) =
+                            dispatch_probe!("strict_int_unop", IntUnOp::from_prim(prim.name()))
+                        {
                             strict_marker_step!(1, Int, IntFrame, IntFrameKind::Un { op }, arg!(0));
                         }
                     }
 
                     if args_len >= 2 {
-                        if let Some(op) = Int64BinOp::from_prim(prim.name()) {
+                        if let Some(op) = dispatch_probe!(
+                            "strict_int64_binop",
+                            Int64BinOp::from_prim(prim.name())
+                        ) {
                             if op.rhs_is_shift() {
                                 strict_int64_shift_marker_step!(2, op, arg!(0), arg!(1));
                             } else if op.driver_marker_safe() {
@@ -1743,7 +2337,9 @@ impl Program {
                     }
 
                     if args_len >= 1 {
-                        if let Some(op) = Int64UnOp::from_prim(prim.name()) {
+                        if let Some(op) =
+                            dispatch_probe!("strict_int64_unop", Int64UnOp::from_prim(prim.name()))
+                        {
                             strict_marker_step!(
                                 1,
                                 Int64,
@@ -1755,7 +2351,10 @@ impl Program {
                     }
 
                     if args_len >= 2 {
-                        if let Some(op) = Float64BinOp::from_prim(prim.name()) {
+                        if let Some(op) = dispatch_probe!(
+                            "strict_float64_binop",
+                            Float64BinOp::from_prim(prim.name())
+                        ) {
                             strict_marker_step!(
                                 2,
                                 Float64,
@@ -1767,7 +2366,10 @@ impl Program {
                     }
 
                     if args_len >= 1 {
-                        if let Some(op) = Float64UnOp::from_prim(prim.name()) {
+                        if let Some(op) = dispatch_probe!(
+                            "strict_float64_unop",
+                            Float64UnOp::from_prim(prim.name())
+                        ) {
                             strict_marker_step!(
                                 1,
                                 Float64,
@@ -1779,7 +2381,10 @@ impl Program {
                     }
 
                     if args_len >= 2 {
-                        if let Some(op) = Float32BinOp::from_prim(prim.name()) {
+                        if let Some(op) = dispatch_probe!(
+                            "strict_float32_binop",
+                            Float32BinOp::from_prim(prim.name())
+                        ) {
                             strict_marker_step!(
                                 2,
                                 Float32,
@@ -1791,7 +2396,10 @@ impl Program {
                     }
 
                     if args_len >= 1 {
-                        if let Some(op) = Float32UnOp::from_prim(prim.name()) {
+                        if let Some(op) = dispatch_probe!(
+                            "strict_float32_unop",
+                            Float32UnOp::from_prim(prim.name())
+                        ) {
                             strict_marker_step!(
                                 1,
                                 Float32,
@@ -1803,7 +2411,10 @@ impl Program {
                     }
 
                     if args_len >= 2 {
-                        if let Some(op) = BytesBinOp::from_prim(prim.name()) {
+                        if let Some(op) = dispatch_probe!(
+                            "strict_bytes_binop",
+                            BytesBinOp::from_prim(prim.name())
+                        ) {
                             strict_marker_step!(
                                 2,
                                 Bytes,
@@ -1815,7 +2426,10 @@ impl Program {
                     }
 
                     if args_len >= 1 {
-                        if let Some(kind) = ConversionFrameKind::from_prim(prim.name()) {
+                        if let Some(kind) = dispatch_probe!(
+                            "strict_conversion",
+                            ConversionFrameKind::from_prim(prim.name())
+                        ) {
                             strict_marker_step!(1, Conversion, ConversionFrame, kind, arg!(0));
                         }
                     }
@@ -1873,7 +2487,6 @@ impl Program {
                         Some((3, n))
                     }
                     Some(IoStrict) if args_len >= 2 => {
-                        self.reduce_node_whnf_with_frames(arg!(1), FORCE_REDUCTION_LIMIT)?;
                         let n = self.app(arg!(0), arg!(1));
                         Some((2, n))
                     }
@@ -2001,14 +2614,10 @@ impl Program {
                         self.rnf(noerr, arg!(1))?;
                         Some((2, self.prim("I")))
                     }
-                    Some(Seq) if args_len >= 2 => {
-                        self.reduce_node_whnf_with_frames(arg!(0), FORCE_REDUCTION_LIMIT)?;
-                        Some((2, arg!(1)))
-                    }
+                    Some(Seq) if args_len >= 2 => Some((2, arg!(1))),
                     Some(IsInt) if args_len >= 1 => {
-                        let root =
-                            self.reduce_node_whnf_with_frames(arg!(0), FORCE_REDUCTION_LIMIT)?;
-                        let n = match self.nodes[self.resolve(root)?.0] {
+                        let root = self.resolve(arg!(0))?;
+                        let n = match self.nodes[root.0] {
                             Node::Int(n) => n,
                             _ => -1,
                         };
@@ -2142,49 +2751,155 @@ impl Program {
                     }
                     _ if args_len >= 2 => {
                         let name = prim.name();
+                        let materialized_args = args_len.min(FALLBACK_PRIM_ARG_PREFIX);
                         if self.profile.is_some() {
-                            self.profile_arg_materialization(args_len);
+                            self.profile_arg_materialization(materialized_args);
                         }
-                        spine.write_args_head_order(scratch_args);
+                        spine.write_args_head_order_prefix(scratch_args, FALLBACK_PRIM_ARG_PREFIX);
                         let args = scratch_args.as_slice();
-                        self.array_op(name, args)?
-                            .or(self.foreign_ptr_op(name, args)?)
-                            .or(self.stable_ptr_op(name, args)?)
-                            .or(self.weak_ptr_op(name, args)?)
-                            .or(self.bytes_op(name, args)?)
-                            .or(self.float64_binop(name, args)?)
-                            .or(self.float32_binop(name, args)?)
-                            .or(self.int64_binop(name, args)?)
-                            .or(self.int_binop(name, args)?)
-                            .or(self.array_unop(name, args)?)
-                            .or(self.bytes_unop(name, args)?)
-                            .or(self.float64_unop(name, args)?)
-                            .or(self.float32_unop(name, args)?)
-                            .or(self.pointer_conversion(name, args)?)
-                            .or(self.float_conversion(name, args)?)
-                            .or(self.int64_unop(name, args)?)
-                            .or(self.int_conversion(name, args)?)
-                            .or(self.int_unop(name, args)?)
+                        macro_rules! dispatch_helper {
+                            ($key:literal, $expr:expr) => {{
+                                self.profile_primitive_dispatch_probe($key);
+                                let result = $expr?;
+                                if result.is_some() {
+                                    self.profile_primitive_dispatch_hit($key);
+                                }
+                                result
+                            }};
+                        }
+                        dispatch_helper!("fallback_array_op", self.array_op(name, args))
+                            .or(dispatch_helper!(
+                                "fallback_foreign_ptr_op",
+                                self.foreign_ptr_op(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_stable_ptr_op",
+                                self.stable_ptr_op(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_weak_ptr_op",
+                                self.weak_ptr_op(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_bytes_op",
+                                self.bytes_op(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_float64_binop",
+                                self.float64_binop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_float32_binop",
+                                self.float32_binop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_int64_binop",
+                                self.int64_binop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_int_binop",
+                                self.int_binop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_array_unop",
+                                self.array_unop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_bytes_unop",
+                                self.bytes_unop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_float64_unop",
+                                self.float64_unop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_float32_unop",
+                                self.float32_unop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_pointer_conversion",
+                                self.pointer_conversion(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_float_conversion",
+                                self.float_conversion(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_int64_unop",
+                                self.int64_unop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_int_conversion",
+                                self.int_conversion(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_int_unop",
+                                self.int_unop(name, args)
+                            ))
                     }
                     _ if args_len >= 1 => {
                         let name = prim.name();
+                        let materialized_args = args_len.min(FALLBACK_PRIM_ARG_PREFIX);
                         if self.profile.is_some() {
-                            self.profile_arg_materialization(args_len);
+                            self.profile_arg_materialization(materialized_args);
                         }
-                        spine.write_args_head_order(scratch_args);
+                        spine.write_args_head_order_prefix(scratch_args, FALLBACK_PRIM_ARG_PREFIX);
                         let args = scratch_args.as_slice();
-                        self.array_unop(name, args)?
-                            .or(self.foreign_ptr_unop(name, args)?)
-                            .or(self.stable_ptr_unop(name, args)?)
-                            .or(self.weak_ptr_unop(name, args)?)
-                            .or(self.bytes_unop(name, args)?)
-                            .or(self.float64_unop(name, args)?)
-                            .or(self.float32_unop(name, args)?)
-                            .or(self.pointer_conversion(name, args)?)
-                            .or(self.float_conversion(name, args)?)
-                            .or(self.int64_unop(name, args)?)
-                            .or(self.int_conversion(name, args)?)
-                            .or(self.int_unop(name, args)?)
+                        macro_rules! dispatch_helper {
+                            ($key:literal, $expr:expr) => {{
+                                self.profile_primitive_dispatch_probe($key);
+                                let result = $expr?;
+                                if result.is_some() {
+                                    self.profile_primitive_dispatch_hit($key);
+                                }
+                                result
+                            }};
+                        }
+                        dispatch_helper!("fallback_array_unop", self.array_unop(name, args))
+                            .or(dispatch_helper!(
+                                "fallback_foreign_ptr_unop",
+                                self.foreign_ptr_unop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_stable_ptr_unop",
+                                self.stable_ptr_unop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_weak_ptr_unop",
+                                self.weak_ptr_unop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_bytes_unop",
+                                self.bytes_unop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_float64_unop",
+                                self.float64_unop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_float32_unop",
+                                self.float32_unop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_pointer_conversion",
+                                self.pointer_conversion(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_float_conversion",
+                                self.float_conversion(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_int64_unop",
+                                self.int64_unop(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_int_conversion",
+                                self.int_conversion(name, args)
+                            ))
+                            .or(dispatch_helper!(
+                                "fallback_int_unop",
+                                self.int_unop(name, args)
+                            ))
                     }
                     _ => None,
                 };
@@ -2217,6 +2932,506 @@ impl Program {
                 Ok(Some(self.eval_loop_result(&profile_head, node, reductions)))
             }
             _ => Ok(None),
+        }
+    }
+
+    fn fill_persistent_spine(
+        &mut self,
+        mut node: NodeId,
+        spine: &mut PersistentSpine,
+        profile_resolve: bool,
+    ) -> Result<NodeId, EvalError> {
+        while let Node::App(fun, arg) = self.nodes[node.0] {
+            spine.push_front(arg, node);
+            node = self.resolve_for_whnf(fun, profile_resolve)?;
+        }
+        Ok(node)
+    }
+
+    fn persistent_eval_step(
+        &mut self,
+        head: NodeId,
+        spine: &mut PersistentSpine,
+        frame_stack: &mut EvalFrameStack,
+        scratch_args: &mut Vec<NodeId>,
+        budget: usize,
+    ) -> Result<PersistentStep, EvalError> {
+        let args_len = spine.len();
+        let profile_head = if self.profile.is_some() {
+            self.profile_step(head, args_len, false)
+        } else {
+            None
+        };
+
+        macro_rules! arg {
+            ($idx:expr) => {
+                spine.arg($idx)
+            };
+        }
+        macro_rules! app_site {
+            ($key:literal, $fun:expr, $arg:expr) => {
+                self.app_with_site($key, $fun, $arg)
+            };
+        }
+        macro_rules! finish_reduction {
+            ($node:expr, $reductions:expr) => {{
+                if profile_head.is_some() {
+                    self.profile_reduction(&profile_head, $reductions);
+                }
+                return Ok(PersistentStep::Reduced {
+                    node: $node,
+                    reductions: $reductions,
+                });
+            }};
+        }
+        macro_rules! rewrite_step {
+            ($used:expr, $node:expr, $reductions:expr) => {{
+                let node = $node;
+                if $used > 0 {
+                    let redex = spine.app($used - 1);
+                    if node != redex {
+                        self.nodes[redex.0] = Node::Indir(Some(node));
+                    }
+                    if $used < spine.len() && !spine.remaining_apps_contain($used, node) {
+                        let app = spine.app($used);
+                        let arg = spine.arg($used);
+                        self.nodes[app.0] = Node::App(node, arg);
+                    }
+                }
+                spine.consume($used);
+                finish_reduction!(node, $reductions);
+            }};
+        }
+        macro_rules! app_step_reductions {
+            ($used:expr, $fun:expr, $arg:expr, $reductions:expr) => {{
+                let fun = $fun;
+                let arg = $arg;
+                let node = if $used > 0 {
+                    let redex = spine.app($used - 1);
+                    self.nodes[redex.0] = Node::App(fun, arg);
+                    redex
+                } else {
+                    app_site!("persistent_app_step_result", fun, arg)
+                };
+                spine.consume($used);
+                finish_reduction!(node, $reductions);
+            }};
+        }
+        macro_rules! app_step {
+            ($used:expr, $fun:expr, $arg:expr) => {{
+                app_step_reductions!($used, $fun, $arg, 1);
+            }};
+        }
+        macro_rules! force_step {
+            ($used:expr, $variant:ident, $frame:ident, $kind:expr, $next:expr) => {{
+                let redex =
+                    Self::strict_redex_from_persistent_spine(spine.outer_root(head), $used, spine);
+                frame_stack.push(EvalFrame::$variant($frame {
+                    redex,
+                    profile_head,
+                    kind: $kind,
+                }));
+                return Ok(PersistentStep::Force { node: $next });
+            }};
+        }
+        macro_rules! force_int64_shift_step {
+            ($used:expr, $op:expr, $x:expr, $next:expr) => {{
+                let redex =
+                    Self::strict_redex_from_persistent_spine(spine.outer_root(head), $used, spine);
+                frame_stack.push(EvalFrame::Int64Shift(Int64ShiftFrame {
+                    redex,
+                    profile_head,
+                    op: $op,
+                    x: $x,
+                }));
+                return Ok(PersistentStep::Force { node: $next });
+            }};
+        }
+
+        let head_node = self.nodes[head.0].clone();
+        let prim = match head_node {
+            Node::Ffi(name) if args_len > 0 => {
+                if self.profile.is_some() {
+                    self.profile_arg_materialization(args_len);
+                }
+                scratch_args.clear();
+                scratch_args.extend(spine.args.iter().copied());
+                let Some((used, node)) = self.ffi_call(&name, scratch_args.as_slice())? else {
+                    return Ok(PersistentStep::Whnf {
+                        node: spine.outer_root(head),
+                    });
+                };
+                rewrite_step!(used, node, 1);
+            }
+            Node::JsCall(call) if args_len > 0 => {
+                if self.profile.is_some() {
+                    self.profile_arg_materialization(args_len);
+                }
+                scratch_args.clear();
+                scratch_args.extend(spine.args.iter().copied());
+                let Some((used, node)) =
+                    self.js_call(&call.tags, &call.body, scratch_args.as_slice())?
+                else {
+                    return Ok(PersistentStep::Whnf {
+                        node: spine.outer_root(head),
+                    });
+                };
+                rewrite_step!(used, node, 1);
+            }
+            Node::JsWrap { tags } if args_len > 0 => {
+                if self.profile.is_some() {
+                    self.profile_arg_materialization(args_len);
+                }
+                scratch_args.clear();
+                scratch_args.extend(spine.args.iter().copied());
+                let Some((used, node)) = self.js_wrap(&tags, scratch_args.as_slice())? else {
+                    return Ok(PersistentStep::Whnf {
+                        node: spine.outer_root(head),
+                    });
+                };
+                rewrite_step!(used, node, 1);
+            }
+            Node::Prim(prim) => prim,
+            _ => {
+                return Ok(PersistentStep::Whnf {
+                    node: spine.outer_root(head),
+                });
+            }
+        };
+        let known = prim.known();
+        use KnownPrim::*;
+
+        match known {
+            Some(IoStrict) if args_len >= 2 => {
+                force_step!(
+                    2,
+                    Whnf,
+                    WhnfFrame,
+                    WhnfFrameKind::IoStrict {
+                        action: arg!(0),
+                        value: arg!(1),
+                    },
+                    arg!(1)
+                );
+            }
+            Some(Seq) if args_len >= 2 => {
+                force_step!(
+                    2,
+                    Whnf,
+                    WhnfFrame,
+                    WhnfFrameKind::Seq { result: arg!(1) },
+                    arg!(0)
+                );
+            }
+            Some(IsInt) if args_len >= 1 => {
+                force_step!(1, Whnf, WhnfFrame, WhnfFrameKind::IsInt, arg!(0));
+            }
+            _ => {}
+        }
+
+        if known.is_none() {
+            let name = prim.name();
+            macro_rules! dispatch_probe {
+                ($key:literal, $expr:expr) => {{
+                    self.profile_primitive_dispatch_probe($key);
+                    let result = $expr;
+                    if result.is_some() {
+                        self.profile_primitive_dispatch_hit($key);
+                    }
+                    result
+                }};
+            }
+
+            if args_len >= 2 {
+                if let Some(op) = dispatch_probe!("strict_int_binop", IntBinOp::from_prim(name)) {
+                    force_step!(
+                        2,
+                        Int,
+                        IntFrame,
+                        IntFrameKind::BinSecond { op, x: arg!(0) },
+                        arg!(1)
+                    );
+                }
+            }
+
+            if args_len >= 1 {
+                if let Some(op) = dispatch_probe!("strict_int_unop", IntUnOp::from_prim(name)) {
+                    force_step!(1, Int, IntFrame, IntFrameKind::Un { op }, arg!(0));
+                }
+            }
+
+            if args_len >= 2 {
+                if let Some(op) = dispatch_probe!("strict_int64_binop", Int64BinOp::from_prim(name))
+                {
+                    if op.rhs_is_shift() {
+                        force_int64_shift_step!(2, op, arg!(0), arg!(1));
+                    } else if op.driver_marker_safe() {
+                        force_step!(
+                            2,
+                            Int64,
+                            Int64Frame,
+                            Int64FrameKind::BinSecond { op, x: arg!(0) },
+                            arg!(1)
+                        );
+                    }
+                }
+            }
+
+            if args_len >= 1 {
+                if let Some(op) = dispatch_probe!("strict_int64_unop", Int64UnOp::from_prim(name)) {
+                    force_step!(1, Int64, Int64Frame, Int64FrameKind::Un { op }, arg!(0));
+                }
+            }
+
+            if args_len >= 2 {
+                if let Some(op) =
+                    dispatch_probe!("strict_float64_binop", Float64BinOp::from_prim(name))
+                {
+                    force_step!(
+                        2,
+                        Float64,
+                        Float64Frame,
+                        Float64FrameKind::BinSecond { op, x: arg!(0) },
+                        arg!(1)
+                    );
+                }
+            }
+
+            if args_len >= 1 {
+                if let Some(op) =
+                    dispatch_probe!("strict_float64_unop", Float64UnOp::from_prim(name))
+                {
+                    force_step!(
+                        1,
+                        Float64,
+                        Float64Frame,
+                        Float64FrameKind::Un { op },
+                        arg!(0)
+                    );
+                }
+            }
+
+            if args_len >= 2 {
+                if let Some(op) =
+                    dispatch_probe!("strict_float32_binop", Float32BinOp::from_prim(name))
+                {
+                    force_step!(
+                        2,
+                        Float32,
+                        Float32Frame,
+                        Float32FrameKind::BinSecond { op, x: arg!(0) },
+                        arg!(1)
+                    );
+                }
+            }
+
+            if args_len >= 1 {
+                if let Some(op) =
+                    dispatch_probe!("strict_float32_unop", Float32UnOp::from_prim(name))
+                {
+                    force_step!(
+                        1,
+                        Float32,
+                        Float32Frame,
+                        Float32FrameKind::Un { op },
+                        arg!(0)
+                    );
+                }
+            }
+
+            if args_len >= 2 {
+                if let Some(op) = dispatch_probe!("strict_bytes_binop", BytesBinOp::from_prim(name))
+                {
+                    force_step!(
+                        2,
+                        Bytes,
+                        BytesFrame,
+                        BytesFrameKind::BinSecond { op, x: arg!(0) },
+                        arg!(1)
+                    );
+                }
+            }
+
+            if args_len >= 1 {
+                if let Some(kind) =
+                    dispatch_probe!("strict_conversion", ConversionFrameKind::from_prim(name))
+                {
+                    force_step!(1, Conversion, ConversionFrame, kind, arg!(0));
+                }
+            }
+        }
+
+        let Some(known) = known else {
+            return Ok(PersistentStep::Fallback {
+                root: spine.outer_root(head),
+            });
+        };
+
+        match known {
+            IoPerformIo if args_len >= 1 => {
+                let world = self.world();
+                let k = self.prim("K");
+                let action = app_site!("IO.performIO.action", arg!(0), world);
+                app_step!(1, action, k);
+            }
+            IoBind if args_len >= 3 => {
+                let action = app_site!("IO.bind.action", arg!(0), arg!(2));
+                app_step!(3, action, arg!(1));
+            }
+            IoThen if args_len >= 3 && budget >= 2 => {
+                let k = self.prim("K");
+                let then = app_site!("IO.then.k", k, arg!(1));
+                let action = app_site!("IO.then.action", arg!(0), arg!(2));
+                app_step_reductions!(3, action, then, 2);
+            }
+            IoThen if args_len >= 2 => {
+                let bind = self.prim("IO.>>=");
+                let bind_action = app_site!("IO.then.bind_action", bind, arg!(0));
+                let k = self.prim("K");
+                let then = app_site!("IO.then.k", k, arg!(1));
+                app_step!(2, bind_action, then);
+            }
+            IoReturn if args_len >= 3 => {
+                let kx = app_site!("IO.return.kx", arg!(2), arg!(0));
+                app_step!(3, kx, arg!(1));
+            }
+            I | Ord | Chr if args_len >= 1 => {
+                let mut used = 1;
+                let mut reductions = 1;
+                let mut node = arg!(0);
+                let mut alias_shortcuts = 0;
+                while reductions < budget && used < args_len && self.is_identity_alias_node(node)? {
+                    node = arg!(used);
+                    used += 1;
+                    reductions += 1;
+                    alias_shortcuts += 1;
+                }
+                self.profile_shortcut("identity_alias_chain", alias_shortcuts);
+                rewrite_step!(used, node, reductions);
+            }
+            K if args_len >= 2 => rewrite_step!(2, arg!(0), 1),
+            A if args_len >= 2 => rewrite_step!(2, arg!(1), 1),
+            U if args_len >= 2 => {
+                app_step!(2, arg!(1), arg!(0));
+            }
+            S if args_len >= 3 => {
+                let x = arg!(2);
+                let left = app_site!("S.left", arg!(0), x);
+                let right = app_site!("S.right", arg!(1), x);
+                app_step!(3, left, right);
+            }
+            SPrime if args_len >= 4 => {
+                let yw = app_site!("S'.yw", arg!(1), arg!(3));
+                let zw = app_site!("S'.zw", arg!(2), arg!(3));
+                let left = app_site!("S'.left", arg!(0), yw);
+                app_step!(4, left, zw);
+            }
+            B if args_len >= 3 => {
+                let yz = app_site!("B.yz", arg!(1), arg!(2));
+                app_step!(3, arg!(0), yz);
+            }
+            BPrime if args_len >= 4 => {
+                let zw = app_site!("B'.zw", arg!(2), arg!(3));
+                let xy = app_site!("B'.xy", arg!(0), arg!(1));
+                app_step!(4, xy, zw);
+            }
+            BPrime if args_len >= 2 => {
+                let xy = app_site!("B'.xy_under", arg!(0), arg!(1));
+                let b = self.prim("B");
+                app_step!(2, b, xy);
+            }
+            Z if args_len >= 3 => {
+                app_step!(3, arg!(0), arg!(1));
+            }
+            Z if args_len >= 2 => {
+                let xy = app_site!("Z.xy_under", arg!(0), arg!(1));
+                let k = self.prim("K");
+                app_step!(2, k, xy);
+            }
+            J if args_len >= 3 => {
+                app_step!(3, arg!(2), arg!(0));
+            }
+            L if args_len >= 3 => {
+                app_step!(3, arg!(1), arg!(0));
+            }
+            KK if args_len >= 3 => rewrite_step!(3, arg!(1), 1),
+            KA if args_len >= 3 => rewrite_step!(3, arg!(2), 1),
+            C if args_len >= 3 => {
+                let xz = app_site!("C.xz", arg!(0), arg!(2));
+                app_step!(3, xz, arg!(1));
+            }
+            CPrime if args_len >= 4 => {
+                let yw = app_site!("C'.yw", arg!(1), arg!(3));
+                let xyw = app_site!("C'.xyw", arg!(0), yw);
+                app_step!(4, xyw, arg!(2));
+            }
+            P if args_len >= 3 => {
+                let zx = app_site!("P.zx", arg!(2), arg!(0));
+                app_step!(3, zx, arg!(1));
+            }
+            R if args_len >= 3 => {
+                let yz = app_site!("R.yz", arg!(1), arg!(2));
+                app_step!(3, yz, arg!(0));
+            }
+            R if args_len >= 2 => {
+                let c = self.prim("C");
+                let cy = app_site!("R.cy_under", c, arg!(1));
+                app_step!(2, cy, arg!(0));
+            }
+            O if args_len >= 4 => {
+                let wx = app_site!("O.wx", arg!(3), arg!(0));
+                app_step!(4, wx, arg!(1));
+            }
+            K2 if args_len >= 3 => rewrite_step!(3, arg!(0), 1),
+            K2 if args_len >= 2 => {
+                let k = self.prim("K");
+                app_step!(2, k, arg!(0));
+            }
+            K3 if args_len >= 4 => rewrite_step!(4, arg!(0), 1),
+            K3 if args_len >= 2 => {
+                let k2 = self.prim("K2");
+                app_step!(2, k2, arg!(0));
+            }
+            K4 if args_len >= 5 => rewrite_step!(5, arg!(0), 1),
+            K4 if args_len >= 2 => {
+                let k3 = self.prim("K3");
+                app_step!(2, k3, arg!(0));
+            }
+            CPrimeB if args_len >= 4 => {
+                let yw = app_site!("C'B.yw", arg!(1), arg!(3));
+                let xz = app_site!("C'B.xz", arg!(0), arg!(2));
+                app_step!(4, xz, yw);
+            }
+            CPrimeB if args_len >= 3 => {
+                let xz = app_site!("C'B.xz_under", arg!(0), arg!(2));
+                let b = self.prim("B");
+                let bxz = app_site!("C'B.bxz_under", b, xz);
+                app_step!(3, bxz, arg!(1));
+            }
+            Y if args_len >= 1 => {
+                app_step!(1, arg!(0), spine.app(0));
+            }
+            Tag(tag) if args_len >= 2 => {
+                let tag = self.int(i64::from(tag));
+                let ytag = app_site!("Tag.ytag", arg!(1), tag);
+                app_step!(2, ytag, arg!(0));
+            }
+            Tuple(fields) if args_len > usize::from(fields) => {
+                let fields = usize::from(fields);
+                let mut n = arg!(fields);
+                for idx in 0..fields - 1 {
+                    n = app_site!("Tuple.prefix", n, arg!(idx));
+                }
+                app_step!(fields + 1, n, arg!(fields - 1));
+            }
+            I | Ord | Chr | K | A | U | S | SPrime | B | BPrime | Z | J | L | KK | KA | C
+            | CPrime | P | R | O | K2 | K3 | K4 | CPrimeB | Y | Tag(_) | Tuple(_) | IoPerformIo
+            | IoBind | IoThen | IoReturn => Ok(PersistentStep::Whnf {
+                node: spine.outer_root(head),
+            }),
+            _ => Ok(PersistentStep::Fallback {
+                root: spine.outer_root(head),
+            }),
         }
     }
 
@@ -2530,9 +3745,22 @@ impl Program {
         ))
     }
 
+    #[inline]
     fn app(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
         if self.profile.is_some() {
             self.profile_app_allocation();
+        }
+        self.push_node(Node::App(fun, arg))
+    }
+
+    #[inline]
+    fn app_with_site(&mut self, key: &'static str, fun: NodeId, arg: NodeId) -> NodeId {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.app_allocations += 1;
+            *profile
+                .app_allocation_sites
+                .entry(key.to_owned())
+                .or_default() += 1;
         }
         self.push_node(Node::App(fun, arg))
     }
@@ -3099,10 +4327,20 @@ impl Program {
         let mut steps = 0;
         let mut frame_stack = EvalFrameStack::default();
         let mut eval_spine = EvalSpine::default();
+        let mut persistent_spine = PersistentSpine::default();
+        let mut persistent_active = false;
         let mut scratch_args = Vec::new();
         let mut scratch_apps = Vec::new();
         while steps < limit {
-            let current = self.resolve_for_whnf(root, profile_resolve)?;
+            self.maybe_collect_garbage_between_steps(
+                root,
+                &frame_stack,
+                &eval_spine,
+                &persistent_spine,
+                &scratch_args,
+                &scratch_apps,
+            );
+            let mut current = self.resolve_for_whnf(root, profile_resolve)?;
             if let Some((next, reductions)) =
                 self.finish_ready_eval_frame(&mut frame_stack, current)?
             {
@@ -3112,7 +4350,60 @@ impl Program {
                     return Err(EvalError::StepLimit { limit });
                 }
                 root = next;
+                persistent_active = false;
+                persistent_spine.clear();
                 continue;
+            }
+
+            if !whnf_frames {
+                if !persistent_active {
+                    persistent_spine.clear();
+                }
+                let head =
+                    self.fill_persistent_spine(current, &mut persistent_spine, profile_resolve)?;
+                match self.persistent_eval_step(
+                    head,
+                    &mut persistent_spine,
+                    &mut frame_stack,
+                    &mut scratch_args,
+                    limit - steps,
+                )? {
+                    PersistentStep::Reduced { node, reductions } => {
+                        steps += reductions;
+                        self.reductions += reductions;
+                        root = node;
+                        persistent_active = true;
+                        continue;
+                    }
+                    PersistentStep::Force { node } => {
+                        root = node;
+                        persistent_active = false;
+                        persistent_spine.clear();
+                        continue;
+                    }
+                    PersistentStep::Whnf { node } => {
+                        let Some((next, reductions)) =
+                            self.finish_whnf_eval_frame(&mut frame_stack, node)?
+                        else {
+                            return Ok((node, steps));
+                        };
+                        steps += reductions;
+                        self.reductions += reductions;
+                        if steps >= limit {
+                            return Err(EvalError::StepLimit { limit });
+                        }
+                        root = next;
+                        persistent_active = false;
+                        persistent_spine.clear();
+                        continue;
+                    }
+                    PersistentStep::Fallback { root: next_root } => {
+                        root = next_root;
+                        persistent_active = false;
+                        persistent_spine.clear();
+                        current = self.resolve_for_whnf(root, profile_resolve)?;
+                    }
+                }
             }
 
             if whnf_frames {
@@ -3514,6 +4805,70 @@ impl Program {
         Ok(Some((1, node)))
     }
 
+    fn node_trace_summary(&self, id: NodeId) -> String {
+        let Some(node) = self.nodes.get(id.0) else {
+            return format!("{id:?}:<missing>");
+        };
+        match node {
+            Node::Int(n) => format!("{id:?}:Int({n})"),
+            Node::Int64(n) => format!("{id:?}:Int64({n})"),
+            Node::Ptr(ptr) => format!("{id:?}:Ptr({ptr})"),
+            Node::RawFunPtr(ptr) => format!("{id:?}:RawFunPtr({ptr})"),
+            Node::ThreadId(n) => format!("{id:?}:ThreadId({n})"),
+            Node::Prim(name) => format!("{id:?}:Prim({})", name.name()),
+            Node::Ffi(name) => format!("{id:?}:Ffi({name})"),
+            Node::Bytes(bytes) => format!("{id:?}:Bytes(len={})", bytes.len()),
+            Node::MutableBytes(bytes) => {
+                format!(
+                    "{id:?}:MutableBytes(size={}, capacity={})",
+                    bytes.size, bytes.capacity
+                )
+            }
+            Node::ForeignPtr(ptr) => format!(
+                "{id:?}:ForeignPtr(ptr={}, offset={}, bytes={})",
+                ptr.ptr,
+                ptr.offset,
+                ptr.bytes.as_ref().map_or(0, Vec::len)
+            ),
+            Node::App(fun, arg) => format!("{id:?}:App({fun:?},{arg:?})"),
+            Node::Indir(target) => format!("{id:?}:Indir({target:?})"),
+            Node::BigInt(bytes) => format!("{id:?}:BigInt(len={})", bytes.len()),
+            Node::Array(items) => format!("{id:?}:Array(len={})", items.len()),
+            Node::Float64(n) => format!("{id:?}:Float64({n})"),
+            Node::Float32(n) => format!("{id:?}:Float32({n})"),
+            Node::Weak(_) => format!("{id:?}:Weak"),
+            Node::MVar(_) => format!("{id:?}:MVar"),
+            Node::JsCall(call) => format!("{id:?}:JsCall(tags={})", call.tags),
+            Node::JsWrap { tags } => format!("{id:?}:JsWrap(tags={tags})"),
+            Node::FunPtr(name) => format!("{id:?}:FunPtr({name})"),
+            Node::Tick(bytes) => format!("{id:?}:Tick(len={})", bytes.len()),
+        }
+    }
+
+    fn trace_invalid_op_error(
+        &self,
+        domain: &str,
+        name: &str,
+        args: &[NodeId],
+        err: EvalError,
+    ) -> EvalError {
+        if matches!(err, EvalError::InvalidByteString)
+            && std::env::var_os("MHS_TRACE_INVALID_BYTES").is_some()
+        {
+            eprintln!(
+                "invalid bytes context: domain={domain} name={name} reductions={}",
+                self.reductions
+            );
+            for (idx, arg) in args.iter().take(8).enumerate() {
+                eprintln!("  arg{idx}: {}", self.node_trace_summary(*arg));
+            }
+            if args.len() > 8 {
+                eprintln!("  ... {} more args", args.len() - 8);
+            }
+        }
+        err
+    }
+
     fn pointer_conversion(
         &mut self,
         name: &str,
@@ -3529,6 +4884,17 @@ impl Program {
     }
 
     fn foreign_ptr_op(
+        &mut self,
+        name: &str,
+        args: &[NodeId],
+    ) -> Result<Option<(usize, NodeId)>, EvalError> {
+        match self.foreign_ptr_op_inner(name, args) {
+            Ok(result) => Ok(result),
+            Err(err) => Err(self.trace_invalid_op_error("foreign_ptr_op", name, args, err)),
+        }
+    }
+
+    fn foreign_ptr_op_inner(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -3571,6 +4937,17 @@ impl Program {
     }
 
     fn foreign_ptr_unop(
+        &mut self,
+        name: &str,
+        args: &[NodeId],
+    ) -> Result<Option<(usize, NodeId)>, EvalError> {
+        match self.foreign_ptr_unop_inner(name, args) {
+            Ok(result) => Ok(result),
+            Err(err) => Err(self.trace_invalid_op_error("foreign_ptr_unop", name, args, err)),
+        }
+    }
+
+    fn foreign_ptr_unop_inner(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -3831,6 +5208,29 @@ impl Program {
         name: &str,
         args: &[NodeId],
     ) -> Result<Option<(usize, NodeId)>, EvalError> {
+        match self.bytes_op_inner(name, args) {
+            Ok(result) => Ok(result),
+            Err(err) => Err(self.trace_invalid_op_error("bytes_op", name, args, err)),
+        }
+    }
+
+    fn bytes_op_inner(
+        &mut self,
+        name: &str,
+        args: &[NodeId],
+    ) -> Result<Option<(usize, NodeId)>, EvalError> {
+        macro_rules! invalid_bytes {
+            ($($arg:tt)*) => {{
+                if std::env::var_os("MHS_TRACE_INVALID_BYTES").is_some() {
+                    eprintln!(
+                        "invalid bytes op {name}: reductions={}",
+                        self.reductions,
+                    );
+                    eprintln!($($arg)*);
+                }
+                EvalError::InvalidByteString
+            }};
+        }
         if let Some(op) = BytesBinOp::from_prim(name) {
             let x = self.eval_bytes_id(args[0])?;
             let y = self.eval_bytes_id(args[1])?;
@@ -3891,33 +5291,39 @@ impl Program {
             "bsread" if args.len() >= 3 => {
                 let bytes = self.eval_bytes_id(args[0])?;
                 let index = int_to_usize(self.eval_int(args[1])?)?;
-                let byte = self
-                    .bytes(bytes)?
-                    .get(index)
-                    .copied()
-                    .ok_or(EvalError::InvalidByteString)?;
+                let (len, storage_len) = self.byte_prim_lengths(bytes)?;
+                if index >= storage_len {
+                    return Err(invalid_bytes!(
+                        "bsread bytes={bytes:?} index={index} len={len} storage_len={storage_len}"
+                    ));
+                }
+                let byte = self.read_byte_unchecked_prim(bytes, index)?;
                 let byte = self.int(byte as i64);
                 Some((3, self.pair(byte, args[2])))
             }
             "bsread" => {
                 let bytes = self.eval_bytes_id(args[0])?;
                 let index = int_to_usize(self.eval_int(args[1])?)?;
-                let byte = self
-                    .bytes(bytes)?
-                    .get(index)
-                    .copied()
-                    .ok_or(EvalError::InvalidByteString)?;
+                let (len, storage_len) = self.byte_prim_lengths(bytes)?;
+                if index >= storage_len {
+                    return Err(invalid_bytes!(
+                        "bsread bytes={bytes:?} index={index} len={len} storage_len={storage_len}"
+                    ));
+                }
+                let byte = self.read_byte_unchecked_prim(bytes, index)?;
                 Some((2, self.int(byte as i64)))
             }
             "bswrite" if args.len() >= 4 => {
                 let bytes = self.eval_bytes_id(args[0])?;
                 let index = int_to_usize(self.eval_int(args[1])?)?;
                 let byte = self.eval_int(args[2])? as u8;
-                let slot = self
-                    .bytes_mut(bytes)?
-                    .get_mut(index)
-                    .ok_or(EvalError::InvalidByteString)?;
-                *slot = byte;
+                let (len, storage_len) = self.byte_prim_lengths(bytes)?;
+                if index >= storage_len {
+                    return Err(invalid_bytes!(
+                        "bswrite bytes={bytes:?} index={index} len={len} storage_len={storage_len}"
+                    ));
+                }
+                self.write_byte_unchecked_prim(bytes, index, byte)?;
                 let unit = self.prim("I");
                 Some((4, self.pair(unit, args[3])))
             }
@@ -3925,11 +5331,13 @@ impl Program {
                 let bytes = self.eval_bytes_id(args[0])?;
                 let index = int_to_usize(self.eval_int(args[1])?)?;
                 let byte = self.eval_int(args[2])? as u8;
-                let slot = self
-                    .bytes_mut(bytes)?
-                    .get_mut(index)
-                    .ok_or(EvalError::InvalidByteString)?;
-                *slot = byte;
+                let (len, storage_len) = self.byte_prim_lengths(bytes)?;
+                if index >= storage_len {
+                    return Err(invalid_bytes!(
+                        "bswrite bytes={bytes:?} index={index} len={len} storage_len={storage_len}"
+                    ));
+                }
+                self.write_byte_unchecked_prim(bytes, index, byte)?;
                 Some((3, self.prim("I")))
             }
             "bsfreeze" if args.len() >= 2 => {
@@ -3971,20 +5379,24 @@ impl Program {
             "bsindex" => {
                 let bytes = self.eval_bytes(args[0])?;
                 let index = int_to_usize(self.eval_int(args[1])?)?;
-                let byte = bytes
-                    .get(index)
-                    .copied()
-                    .ok_or(EvalError::InvalidByteString)?;
+                let len = bytes.len();
+                if index >= len {
+                    return Err(invalid_bytes!("bsindex index={index} len={len}"));
+                }
+                let byte = bytes[index];
                 Some((2, self.int(byte as i64)))
             }
             "bssubstr" if args.len() >= 3 => {
                 let bytes = self.eval_bytes(args[0])?;
                 let offset = int_to_usize(self.eval_int(args[1])?)?;
                 let len = int_to_usize(self.eval_int(args[2])?)?;
+                let bytes_len = bytes.len();
                 let end = offset
                     .checked_add(len)
                     .filter(|end| *end <= bytes.len())
-                    .ok_or(EvalError::InvalidByteString)?;
+                    .ok_or_else(|| {
+                        invalid_bytes!("bssubstr offset={offset} len={len} bytes_len={bytes_len}")
+                    })?;
                 Some((3, self.push_node(Node::Bytes(bytes[offset..end].to_vec()))))
             }
             _ => None,
@@ -3993,6 +5405,17 @@ impl Program {
     }
 
     fn bytes_unop(
+        &mut self,
+        name: &str,
+        args: &[NodeId],
+    ) -> Result<Option<(usize, NodeId)>, EvalError> {
+        match self.bytes_unop_inner(name, args) {
+            Ok(result) => Ok(result),
+            Err(err) => Err(self.trace_invalid_op_error("bytes_unop", name, args, err)),
+        }
+    }
+
+    fn bytes_unop_inner(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -4042,6 +5465,17 @@ impl Program {
     }
 
     fn ffi_call(
+        &mut self,
+        name: &str,
+        args: &[NodeId],
+    ) -> Result<Option<(usize, NodeId)>, EvalError> {
+        match self.ffi_call_inner(name, args) {
+            Ok(result) => Ok(result),
+            Err(err) => Err(self.trace_invalid_op_error("ffi", name, args, err)),
+        }
+    }
+
+    fn ffi_call_inner(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -5205,7 +6639,7 @@ impl Program {
         let root = self.resolve(root)?;
         let bytes = match self.nodes[root.0].clone() {
             Node::Bytes(bytes) => bytes,
-            Node::MutableBytes(bytes) => bytes.bytes,
+            Node::MutableBytes(bytes) => bytes.visible().to_vec(),
             _ => self.eval_char_list(root)?,
         };
         Ok(bytes)
@@ -5321,15 +6755,59 @@ impl Program {
     }
 
     fn eval_pointer_value(&mut self, id: NodeId) -> Result<i64, EvalError> {
-        self.eval_whnf_value(
-            id,
-            |program, root| match &program.nodes[root.0] {
-                Node::Int(n) | Node::Ptr(n) | Node::RawFunPtr(n) | Node::ThreadId(n) => Some(*n),
-                Node::Prim(name) => std_handle_ptr(name.name()),
-                _ => None,
-            },
-            EvalError::ExpectedPointer,
-        )
+        let root = self.resolve(id)?;
+        if let Some(value) = self.pointer_value_from_whnf(root) {
+            self.trace_suspicious_pointer_value(root, value);
+            return Ok(value);
+        }
+        let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
+        let root = self.resolve(root)?;
+        let value = self
+            .pointer_value_from_whnf(root)
+            .ok_or(EvalError::ExpectedPointer(root))?;
+        self.trace_suspicious_pointer_value(root, value);
+        Ok(value)
+    }
+
+    fn pointer_value_from_whnf(&self, root: NodeId) -> Option<i64> {
+        match &self.nodes[root.0] {
+            Node::Int(n) | Node::Ptr(n) | Node::RawFunPtr(n) | Node::ThreadId(n) => Some(*n),
+            Node::Prim(name) => std_handle_ptr(name.name()),
+            _ => None,
+        }
+    }
+
+    fn trace_suspicious_pointer_value(&self, root: NodeId, ptr: i64) {
+        if std::env::var_os("MHS_TRACE_INVALID_BYTES").is_none() {
+            return;
+        }
+        if ptr >= 0 || handle_from_ptr(ptr).is_some() {
+            return;
+        }
+        let suspicious = if ptr < BFILE_PTR_BASE {
+            true
+        } else if ptr < DIR_PTR_BASE {
+            self.decode_bfile_pointer(ptr)
+                .ok()
+                .and_then(|slot| self.bfiles.get(slot))
+                .and_then(Option::as_ref)
+                .is_none()
+        } else if ptr < ALLOCATION_PTR_BASE {
+            self.decode_dir_pointer(ptr)
+                .ok()
+                .and_then(|slot| self.dirs.get(slot))
+                .and_then(Option::as_ref)
+                .is_none()
+        } else {
+            self.decode_allocation_pointer(ptr).is_err()
+        };
+        if suspicious {
+            eprintln!(
+                "suspicious pointer value: reductions={} ptr={ptr} root={}",
+                self.reductions,
+                self.node_trace_summary(root)
+            );
+        }
     }
 
     fn eval_foreign_ptr_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
@@ -5388,15 +6866,7 @@ impl Program {
     fn bytes(&self, id: NodeId) -> Result<&[u8], EvalError> {
         match &self.nodes[id.0] {
             Node::Bytes(bytes) => Ok(bytes),
-            Node::MutableBytes(bytes) => Ok(&bytes.bytes),
-            _ => Err(EvalError::ExpectedBytes(id)),
-        }
-    }
-
-    fn bytes_mut(&mut self, id: NodeId) -> Result<&mut Vec<u8>, EvalError> {
-        match &mut self.nodes[id.0] {
-            Node::Bytes(bytes) => Ok(bytes),
-            Node::MutableBytes(bytes) => Ok(&mut bytes.bytes),
+            Node::MutableBytes(bytes) => Ok(bytes.visible()),
             _ => Err(EvalError::ExpectedBytes(id)),
         }
     }
@@ -5405,11 +6875,11 @@ impl Program {
         if size > capacity {
             return Err(EvalError::InvalidByteString);
         }
-        let mut bytes = Vec::with_capacity(capacity);
-        bytes.resize(size, 0);
+        let bytes = vec![0; capacity];
         Ok(
             self.push_node(Node::MutableBytes(Box::new(MutableBytesNode {
                 bytes,
+                size,
                 capacity,
             }))),
         )
@@ -5418,7 +6888,7 @@ impl Program {
     fn freeze_bytes(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         let frozen = match &mut self.nodes[id.0] {
             Node::Bytes(_) => return Ok(id),
-            Node::MutableBytes(bytes) => std::mem::take(&mut bytes.bytes),
+            Node::MutableBytes(bytes) => bytes.visible().to_vec(),
             _ => return Err(EvalError::ExpectedBytes(id)),
         };
         self.nodes[id.0] = Node::Bytes(frozen);
@@ -5432,20 +6902,22 @@ impl Program {
                 Ok(())
             }
             Node::MutableBytes(bytes) => {
-                if bytes.bytes.len() >= bytes.capacity {
+                if bytes.size >= bytes.capacity {
                     bytes.capacity = bytes
                         .capacity
                         .checked_add(bytes.capacity / 2)
                         .and_then(|capacity| capacity.checked_add(2))
                         .ok_or(EvalError::Overflow)?;
-                    if bytes.capacity < bytes.bytes.len() {
+                    if bytes.capacity < bytes.size {
                         return Err(EvalError::Overflow);
                     }
                     if bytes.capacity > bytes.bytes.capacity() {
                         bytes.bytes.reserve(bytes.capacity - bytes.bytes.capacity());
                     }
+                    bytes.bytes.resize(bytes.capacity, 0);
                 }
-                bytes.bytes.push(byte);
+                bytes.bytes[bytes.size] = byte;
+                bytes.size += 1;
                 Ok(())
             }
             _ => Err(EvalError::ExpectedBytes(id)),
@@ -5457,6 +6929,53 @@ impl Program {
             self.append_byte(id, byte)?;
         }
         Ok(())
+    }
+
+    fn read_byte_unchecked_prim(&self, id: NodeId, index: usize) -> Result<u8, EvalError> {
+        match &self.nodes[id.0] {
+            Node::Bytes(bytes) => bytes
+                .get(index)
+                .copied()
+                .ok_or(EvalError::InvalidByteString),
+            Node::MutableBytes(bytes) => bytes
+                .bytes
+                .get(index)
+                .copied()
+                .ok_or(EvalError::InvalidByteString),
+            _ => Err(EvalError::ExpectedBytes(id)),
+        }
+    }
+
+    fn byte_prim_lengths(&self, id: NodeId) -> Result<(usize, usize), EvalError> {
+        match &self.nodes[id.0] {
+            Node::Bytes(bytes) => Ok((bytes.len(), bytes.len())),
+            Node::MutableBytes(bytes) => Ok((bytes.size, bytes.bytes.len())),
+            _ => Err(EvalError::ExpectedBytes(id)),
+        }
+    }
+
+    fn write_byte_unchecked_prim(
+        &mut self,
+        id: NodeId,
+        index: usize,
+        byte: u8,
+    ) -> Result<(), EvalError> {
+        match &mut self.nodes[id.0] {
+            Node::Bytes(bytes) => {
+                let slot = bytes.get_mut(index).ok_or(EvalError::InvalidByteString)?;
+                *slot = byte;
+                Ok(())
+            }
+            Node::MutableBytes(bytes) => {
+                let slot = bytes
+                    .bytes
+                    .get_mut(index)
+                    .ok_or(EvalError::InvalidByteString)?;
+                *slot = byte;
+                Ok(())
+            }
+            _ => Err(EvalError::ExpectedBytes(id)),
+        }
     }
 
     fn alloc_memory(&mut self, size: usize) -> Result<i64, EvalError> {
@@ -6089,13 +7608,28 @@ impl Program {
         })
     }
 
-    fn pointer_for_node(&self, id: NodeId, offset: usize) -> Result<i64, EvalError> {
-        let base = i64::try_from(id.0).map_err(|_| EvalError::Overflow)?;
+    fn pointer_for_node(&mut self, id: NodeId, offset: usize) -> Result<i64, EvalError> {
         let offset = i64::try_from(offset).map_err(|_| EvalError::Overflow)?;
-        if offset >= (1_i64 << 32) {
+        if offset >= NODE_PTR_STRIDE {
             return Err(EvalError::Overflow);
         }
-        base.checked_shl(32)
+        let slot = if let Some(slot) = self.node_pointer_slots.get(&id) {
+            *slot
+        } else {
+            let slot = self.node_pointers.len();
+            self.node_pointers.push(id);
+            self.node_pointer_slots.insert(id, slot);
+            slot
+        };
+        let slot_word = slot
+            .checked_add(1)
+            .and_then(|slot| i64::try_from(slot).ok())
+            .ok_or(EvalError::Overflow)?;
+        if slot_word >= (1_i64 << 31) {
+            return Err(EvalError::Overflow);
+        }
+        slot_word
+            .checked_mul(NODE_PTR_STRIDE)
             .and_then(|base| base.checked_add(offset))
             .ok_or(EvalError::Overflow)
     }
@@ -6143,32 +7677,56 @@ impl Program {
 
     fn decode_pointer(&self, ptr: i64) -> Result<(usize, usize), EvalError> {
         if ptr <= 0 {
-            return Err(EvalError::InvalidByteString);
+            return Err(trace_invalid_bytes!(self, "decode_pointer ptr={ptr}"));
         }
-        let block = usize::try_from(ptr >> 32).map_err(|_| EvalError::InvalidByteString)?;
-        let offset =
-            usize::try_from(ptr & 0xffff_ffff).map_err(|_| EvalError::InvalidByteString)?;
-        Ok((block, offset))
+        let slot_word = usize::try_from(ptr >> 32)
+            .map_err(|_| trace_invalid_bytes!(self, "decode_pointer block ptr={ptr}"))?;
+        if slot_word == 0 {
+            return Err(trace_invalid_bytes!(
+                self,
+                "decode_pointer zero slot ptr={ptr}"
+            ));
+        }
+        let offset = usize::try_from(ptr & 0xffff_ffff)
+            .map_err(|_| trace_invalid_bytes!(self, "decode_pointer offset ptr={ptr}"))?;
+        let slot = slot_word - 1;
+        let block = self.node_pointers.get(slot).copied().ok_or_else(|| {
+            trace_invalid_bytes!(
+                self,
+                "decode_pointer missing node slot ptr={ptr} slot={slot} slots={}",
+                self.node_pointers.len()
+            )
+        })?;
+        Ok((block.0, offset))
     }
 
     fn decode_allocation_pointer(&self, ptr: i64) -> Result<(usize, usize), EvalError> {
         if ptr < ALLOCATION_PTR_BASE || ptr >= 0 {
-            return Err(EvalError::InvalidByteString);
+            return Err(trace_invalid_bytes!(
+                self,
+                "decode_allocation_pointer ptr={ptr}"
+            ));
         }
         let raw = ptr
             .checked_sub(ALLOCATION_PTR_BASE)
             .ok_or(EvalError::Overflow)?;
         let slot = usize::try_from(raw / ALLOCATION_PTR_STRIDE)
-            .map_err(|_| EvalError::InvalidByteString)?;
+            .map_err(|_| trace_invalid_bytes!(self, "allocation slot ptr={ptr} raw={raw}"))?;
         let offset = usize::try_from(raw % ALLOCATION_PTR_STRIDE)
-            .map_err(|_| EvalError::InvalidByteString)?;
+            .map_err(|_| trace_invalid_bytes!(self, "allocation offset ptr={ptr} raw={raw}"))?;
         let bytes = self
             .allocations
             .get(slot)
             .and_then(Option::as_ref)
-            .ok_or(EvalError::InvalidByteString)?;
+            .ok_or_else(|| {
+                trace_invalid_bytes!(self, "allocation missing ptr={ptr} slot={slot}")
+            })?;
         if offset > bytes.len() {
-            return Err(EvalError::InvalidByteString);
+            return Err(trace_invalid_bytes!(
+                self,
+                "allocation offset out of range ptr={ptr} slot={slot} offset={offset} len={}",
+                bytes.len()
+            ));
         }
         Ok((slot, offset))
     }
@@ -6204,21 +7762,10 @@ impl Program {
             .allocations
             .get(slot)
             .and_then(Option::as_ref)
-            .ok_or(EvalError::InvalidByteString)?;
+            .ok_or_else(|| {
+                trace_invalid_bytes!(self, "allocation read missing ptr={ptr} slot={slot}")
+            })?;
         Ok(Some(&bytes[offset..]))
-    }
-
-    fn allocation_bytes_mut(&mut self, ptr: i64) -> Result<Option<&mut [u8]>, EvalError> {
-        if ptr < ALLOCATION_PTR_BASE || ptr >= 0 {
-            return Ok(None);
-        }
-        let (slot, offset) = self.decode_allocation_pointer(ptr)?;
-        let bytes = self
-            .allocations
-            .get_mut(slot)
-            .and_then(Option::as_mut)
-            .ok_or(EvalError::InvalidByteString)?;
-        Ok(Some(&mut bytes[offset..]))
     }
 
     fn pointer_bytes(&self, ptr: i64) -> Result<&[u8], EvalError> {
@@ -6226,7 +7773,14 @@ impl Program {
             return Ok(bytes);
         }
         let (base, offset) = self.decode_pointer(ptr)?;
-        let bytes = match self.nodes.get(base).ok_or(EvalError::InvalidByteString)? {
+        let Some(node) = self.nodes.get(base) else {
+            return Err(trace_invalid_bytes!(
+                self,
+                "pointer base missing ptr={ptr} base={base} offset={offset} nodes={}",
+                self.nodes.len()
+            ));
+        };
+        let bytes = match node {
             Node::Bytes(bytes) => bytes,
             Node::MutableBytes(bytes) => &bytes.bytes,
             Node::ForeignPtr(foreign_ptr) if foreign_ptr.bytes.is_some() => {
@@ -6235,25 +7789,96 @@ impl Program {
                     .offset
                     .checked_add(offset)
                     .ok_or(EvalError::Overflow)?;
-                return bytes.get(offset..).ok_or(EvalError::InvalidByteString);
+                return bytes.get(offset..).ok_or_else(|| {
+                    trace_invalid_bytes!(
+                        self,
+                        "foreign pointer offset out of range ptr={ptr} base={base} offset={offset} len={}",
+                        bytes.len()
+                    )
+                });
             }
-            _ => return Err(EvalError::InvalidByteString),
+            _ => {
+                return Err(trace_invalid_bytes!(
+                    self,
+                    "pointer base not bytes ptr={ptr} base={base} offset={offset} kind={}",
+                    self.profile_head_key(NodeId(base))
+                ));
+            }
         };
         if offset > bytes.len() {
-            return Err(EvalError::InvalidByteString);
+            return Err(trace_invalid_bytes!(
+                self,
+                "pointer offset out of range ptr={ptr} base={base} offset={offset} len={}",
+                bytes.len()
+            ));
         }
         Ok(&bytes[offset..])
     }
 
     fn write_pointer_bytes(&mut self, ptr: i64, bytes: &[u8]) -> Result<(), EvalError> {
-        if let Some(dst) = self.allocation_bytes_mut(ptr)? {
-            let dst = dst
-                .get_mut(..bytes.len())
-                .ok_or(EvalError::InvalidByteString)?;
-            dst.copy_from_slice(bytes);
+        if ptr >= ALLOCATION_PTR_BASE && ptr < 0 {
+            let (slot, offset) = self.decode_allocation_pointer(ptr)?;
+            let write_len = bytes.len();
+            let available = self.allocations[slot]
+                .as_ref()
+                .expect("checked allocation slot")
+                .len()
+                .saturating_sub(offset);
+            if available < write_len {
+                return Err(trace_invalid_bytes!(
+                    self,
+                    "allocation write too short ptr={ptr} slot={slot} offset={offset} write_len={write_len} available={available}"
+                ));
+            }
+            let dst = self.allocations[slot]
+                .as_mut()
+                .expect("checked allocation slot");
+            dst[offset..offset + write_len].copy_from_slice(bytes);
             return Ok(());
         }
-        Err(EvalError::InvalidByteString)
+        let (base, offset) = self.decode_pointer(ptr)?;
+        if base >= self.nodes.len() {
+            return Err(trace_invalid_bytes!(
+                self,
+                "write pointer base missing ptr={ptr} base={base} offset={offset} nodes={}",
+                self.nodes.len()
+            ));
+        }
+        let write_len = bytes.len();
+        let kind = self.profile_head_key(NodeId(base));
+        let dst = match &mut self.nodes[base] {
+            Node::Bytes(dst) => {
+                let available = dst.len().saturating_sub(offset);
+                if offset > dst.len() || available < write_len {
+                    return Err(trace_invalid_bytes!(
+                        self,
+                        "write bytes out of range ptr={ptr} base={base} offset={offset} write_len={write_len} len={}",
+                        dst.len()
+                    ));
+                }
+                &mut dst[offset..offset + write_len]
+            }
+            Node::MutableBytes(dst) => {
+                let storage_len = dst.bytes.len();
+                let available = storage_len.saturating_sub(offset);
+                if offset > storage_len || available < write_len {
+                    return Err(trace_invalid_bytes!(
+                        self,
+                        "write mutable bytes out of range ptr={ptr} base={base} offset={offset} write_len={write_len} storage_len={storage_len}"
+                    ));
+                }
+                &mut dst.bytes[offset..offset + write_len]
+            }
+            _ => {
+                return Err(trace_invalid_bytes!(
+                    self,
+                    "write pointer base not bytes ptr={ptr} base={base} offset={offset} kind={}",
+                    kind
+                ));
+            }
+        };
+        dst.copy_from_slice(bytes);
+        Ok(())
     }
 
     fn peek_array<const N: usize>(&self, ptr: i64) -> Result<[u8; N], EvalError> {
@@ -6326,7 +7951,13 @@ impl Program {
 
     fn read_pointer_bytes(&self, ptr: i64, len: usize) -> Result<Vec<u8>, EvalError> {
         let bytes = self.pointer_bytes(ptr)?;
-        let bytes = bytes.get(..len).ok_or(EvalError::InvalidByteString)?;
+        let bytes = bytes.get(..len).ok_or_else(|| {
+            trace_invalid_bytes!(
+                self,
+                "read pointer too short ptr={ptr} len={len} available={}",
+                bytes.len()
+            )
+        })?;
         Ok(bytes.to_vec())
     }
 
@@ -7929,7 +9560,7 @@ impl Program {
                 serialize_bigint_decimal(bytes, out);
             }
             Node::Bytes(bytes) => serialize_bytes_comb(bytes, out),
-            Node::MutableBytes(bytes) => serialize_bytes_comb(&bytes.bytes, out),
+            Node::MutableBytes(bytes) => serialize_bytes_comb(bytes.visible(), out),
             Node::Array(items) => {
                 for item in items {
                     self.serialize_comb_into(*item, depth + 1, out)?;
@@ -8039,16 +9670,19 @@ impl Program {
 
     fn foreign_ptr_to_bytes(&mut self, id: NodeId, len: usize) -> Result<NodeId, EvalError> {
         let bytes = match &self.nodes[id.0] {
-            Node::ForeignPtr(foreign_ptr) if foreign_ptr.bytes.is_some() => {
-                let bytes = foreign_ptr.bytes.as_ref().expect("checked above");
-                let end = foreign_ptr
-                    .offset
-                    .checked_add(len)
-                    .filter(|end| *end <= bytes.len())
-                    .ok_or(EvalError::InvalidByteString)?;
-                bytes[foreign_ptr.offset..end].to_vec()
-            }
-            Node::ForeignPtr(foreign_ptr) => self.read_pointer_bytes(foreign_ptr.ptr, len)?,
+            Node::ForeignPtr(foreign_ptr) => match self.read_pointer_bytes(foreign_ptr.ptr, len) {
+                Ok(bytes) => bytes,
+                Err(_) if foreign_ptr.bytes.is_some() => {
+                    let bytes = foreign_ptr.bytes.as_ref().expect("checked above");
+                    let end = foreign_ptr
+                        .offset
+                        .checked_add(len)
+                        .filter(|end| *end <= bytes.len())
+                        .ok_or(EvalError::InvalidByteString)?;
+                    bytes[foreign_ptr.offset..end].to_vec()
+                }
+                Err(err) => return Err(err),
+            },
             _ => return Err(EvalError::ExpectedForeignPtr(id)),
         };
         Ok(self.push_node(Node::Bytes(bytes)))
@@ -8212,15 +9846,6 @@ impl Program {
             .map(|(root, _)| root)
     }
 
-    fn reduce_node_whnf_with_frames(
-        &mut self,
-        root: NodeId,
-        limit: usize,
-    ) -> Result<NodeId, EvalError> {
-        self.reduce_whnf_from(root, limit, false, true)
-            .map(|(root, _)| root)
-    }
-
     fn rnf(&mut self, noerr: bool, root: NodeId) -> Result<(), EvalError> {
         let mut seen = HashSet::new();
         let mut stack = vec![root];
@@ -8311,7 +9936,7 @@ impl Program {
                 render_bytes(bytes, out);
             }
             Node::Bytes(bytes) => render_bytes(bytes, out),
-            Node::MutableBytes(bytes) => render_bytes(&bytes.bytes, out),
+            Node::MutableBytes(bytes) => render_bytes(bytes.visible(), out),
             Node::Array(items) => {
                 out.push('[');
                 for (idx, item) in items.iter().enumerate() {
@@ -8354,7 +9979,7 @@ enum IntResult {
     Ordering(Ordering),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum IntBinOp {
     Add,
     Sub,
@@ -8490,7 +10115,7 @@ enum Int64Result {
     Ordering(Ordering),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Int64BinOp {
     Add,
     Sub,
@@ -8633,7 +10258,7 @@ enum Int64UnResult {
     Int(i64),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Int64UnOp {
     Neg,
     UNeg,
@@ -8674,7 +10299,7 @@ enum Float64Result {
     Bool(bool),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Float64BinOp {
     Add,
     Sub,
@@ -8721,7 +10346,7 @@ impl Float64BinOp {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Float64UnOp {
     Neg,
 }
@@ -8746,7 +10371,7 @@ enum Float32Result {
     Bool(bool),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Float32BinOp {
     Add,
     Sub,
@@ -8793,7 +10418,7 @@ impl Float32BinOp {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Float32UnOp {
     Neg,
 }
@@ -8813,7 +10438,7 @@ impl Float32UnOp {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum BytesBinOp {
     Append,
     AppendDot,
@@ -8843,7 +10468,7 @@ impl BytesBinOp {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum IntUnOp {
     Neg,
     UNeg,
