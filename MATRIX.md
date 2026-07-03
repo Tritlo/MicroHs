@@ -14,7 +14,7 @@ the current bottleneck, and decisions that should steer the next rewrite work.
 |---|---|
 | branch | `microhs-rust`, ahead of `origin/microhs-rust`, not pushed |
 | committed checkpoint | `08ef23f4 Add bounded bench step limits` |
-| active working tree | uncommitted `runtime.rs` EvalSpine spill-buffer probe; not yet baseline |
+| active working tree | clean except local scratch notes |
 | compiler scope | unchanged; keep the compiler in Haskell |
 | runtime scope | Rust replacement for the C runtime/evaluator and host support |
 | node layout | `Node` is 32 bytes; cold `ForeignPtr`, `JsCall`, `Weak`, and `MutableBytes` payloads are boxed |
@@ -24,8 +24,8 @@ the current bottleneck, and decisions that should steer the next rewrite work.
 
 | gate | status |
 |---|---|
-| Rust fmt/check/test/build | passed for latest committed baseline before the current EvalSpine probe |
-| release binary and wasm library | passed for latest committed baseline before the current EvalSpine probe |
+| Rust fmt/check/test/build | passed for `08ef23f4`; rerun during the rejected spill-buffer probe |
+| release binary and wasm library | passed for `08ef23f4`; rerun during the rejected spill-buffer probe |
 | common benchmark sinks | matching |
 | rare/smoke benchmark sinks | matching; no longer expanded here |
 | self-host `--help` proxy | sink-comparable with C using `--c-mhsbench-mode main` |
@@ -125,12 +125,13 @@ Only keep these as "do not retry alone" markers:
 | static `Prim` names for current runtime prims | scalar microbench win, self-host regression |
 | evaluator first-indirection compression | fewer profiled indirections, slower wall time and self-host proxy |
 | unconditional parser preallocation | helped self-host, regressed short inputs; keep the 64 KiB threshold |
+| two-tier EvalSpine spill buffer | fixed heap-spine count, but 50k self-host slice slowed from 24.8 ms to 25.3 ms and proxy slowed from 40.4 ms to 41.9 ms |
 
 ## Next
 
 | priority | work |
 |---|---|
-| 1 | decide whether the current EvalSpine spill-buffer probe beats the committed baseline without common-row regressions |
-| 2 | finish F2 around app update/rebuild and remaining resolve/classification volume |
+| 1 | finish F2 around app update/rebuild and remaining resolve/classification volume |
+| 2 | prefer structural evaluator changes over narrow spine-storage tweaks |
 | 3 | keep using bounded self-host slices for fast signal and full self-host reruns only after proxy/slice improvements |
 | 4 | unblock F5 by making roots and evaluator stack ownership explicit |
