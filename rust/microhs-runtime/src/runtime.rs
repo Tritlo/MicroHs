@@ -933,6 +933,37 @@ enum BytesFrameKind {
     BinFirst { op: BytesBinOp, y: NodeId },
 }
 
+struct ConversionFrame {
+    redex: StrictRedex,
+    profile_head: Option<String>,
+    kind: ConversionFrameKind,
+}
+
+#[derive(Clone, Copy)]
+enum ConversionFrameKind {
+    IntToInt64,
+    Int64ToInt,
+    IntToFloat64 { unsigned: bool },
+    Int64ToFloat64,
+    Float64ToInt,
+    IntToFloat32 { unsigned: bool },
+    Int64ToFloat32,
+    Float32ToInt,
+    Float64ToFloat32,
+    Float32ToFloat64,
+    Int64BitsToFloat64,
+    Float64BitsToInt64,
+    IntBitsToFloat32,
+    Float32BitsToInt,
+}
+
+enum ConversionValue {
+    Int(i64),
+    Int64(i64),
+    Float64(f64),
+    Float32(f32),
+}
+
 enum EvalFrame {
     Whnf(WhnfFrame),
     Int(IntFrame),
@@ -941,6 +972,7 @@ enum EvalFrame {
     Float64(Float64Frame),
     Float32(Float32Frame),
     Bytes(BytesFrame),
+    Conversion(ConversionFrame),
 }
 
 struct FrameStack<T> {
@@ -1059,6 +1091,77 @@ impl PushBytesFrame for BytesFrameStack {
 impl PushBytesFrame for EvalFrameStack {
     fn push_bytes_frame(&mut self, frame: BytesFrame) {
         self.push(EvalFrame::Bytes(frame));
+    }
+}
+
+impl ConversionFrameKind {
+    fn from_prim(name: &str) -> Option<Self> {
+        Some(match name {
+            "itoI" | "utoU" => Self::IntToInt64,
+            "Itoi" | "Utou" => Self::Int64ToInt,
+            "itod" => Self::IntToFloat64 { unsigned: false },
+            "utod" => Self::IntToFloat64 { unsigned: true },
+            "Itod" => Self::Int64ToFloat64,
+            "dtoi" => Self::Float64ToInt,
+            "itof" => Self::IntToFloat32 { unsigned: false },
+            "utof" => Self::IntToFloat32 { unsigned: true },
+            "Itof" => Self::Int64ToFloat32,
+            "ftoi" => Self::Float32ToInt,
+            "dtof" => Self::Float64ToFloat32,
+            "ftod" => Self::Float32ToFloat64,
+            "toDbl" => Self::Int64BitsToFloat64,
+            "fromDbl" => Self::Float64BitsToInt64,
+            "toFlt" => Self::IntBitsToFloat32,
+            "fromFlt" => Self::Float32BitsToInt,
+            _ => return None,
+        })
+    }
+
+    fn ready_value(self, node: &Node) -> Option<ConversionValue> {
+        match (self, node) {
+            (
+                Self::IntToInt64
+                | Self::IntToFloat64 { .. }
+                | Self::IntToFloat32 { .. }
+                | Self::IntBitsToFloat32,
+                Node::Int(value),
+            ) => Some(ConversionValue::Int(*value)),
+            (
+                Self::Int64ToInt
+                | Self::Int64ToFloat64
+                | Self::Int64ToFloat32
+                | Self::Int64BitsToFloat64,
+                Node::Int64(value),
+            ) => Some(ConversionValue::Int64(*value)),
+            (
+                Self::Float64ToInt | Self::Float64ToFloat32 | Self::Float64BitsToInt64,
+                Node::Float64(value),
+            ) => Some(ConversionValue::Float64(*value)),
+            (
+                Self::Float32ToInt | Self::Float32ToFloat64 | Self::Float32BitsToInt,
+                Node::Float32(value),
+            ) => Some(ConversionValue::Float32(*value)),
+            _ => None,
+        }
+    }
+
+    fn expected_error(self, current: NodeId) -> EvalError {
+        match self {
+            Self::IntToInt64
+            | Self::IntToFloat64 { .. }
+            | Self::IntToFloat32 { .. }
+            | Self::IntBitsToFloat32 => EvalError::ExpectedInt(current),
+            Self::Int64ToInt
+            | Self::Int64ToFloat64
+            | Self::Int64ToFloat32
+            | Self::Int64BitsToFloat64 => EvalError::ExpectedInt64(current),
+            Self::Float64ToInt | Self::Float64ToFloat32 | Self::Float64BitsToInt64 => {
+                EvalError::ExpectedFloat64(current)
+            }
+            Self::Float32ToInt | Self::Float32ToFloat64 | Self::Float32BitsToInt => {
+                EvalError::ExpectedFloat32(current)
+            }
+        }
     }
 }
 
@@ -1776,6 +1879,12 @@ impl Program {
                                 BytesFrameKind::BinSecond { op, x: arg!(0) },
                                 arg!(1)
                             );
+                        }
+                    }
+
+                    if args_len >= 1 {
+                        if let Some(kind) = ConversionFrameKind::from_prim(prim.name()) {
+                            strict_marker_step!(1, Conversion, ConversionFrame, kind, arg!(0));
                         }
                     }
                 }
@@ -3521,6 +3630,72 @@ impl Program {
         Ok((node, 1))
     }
 
+    fn conversion_result_node(
+        &mut self,
+        kind: ConversionFrameKind,
+        value: ConversionValue,
+    ) -> NodeId {
+        match (kind, value) {
+            (ConversionFrameKind::IntToInt64, ConversionValue::Int(n)) => {
+                self.push_node(Node::Int64(n))
+            }
+            (ConversionFrameKind::Int64ToInt, ConversionValue::Int64(n)) => self.int(n),
+            (ConversionFrameKind::IntToFloat64 { unsigned: false }, ConversionValue::Int(n)) => {
+                self.push_node(Node::Float64(n as f64))
+            }
+            (ConversionFrameKind::IntToFloat64 { unsigned: true }, ConversionValue::Int(n)) => {
+                self.push_node(Node::Float64((n as u64) as f64))
+            }
+            (ConversionFrameKind::Int64ToFloat64, ConversionValue::Int64(n)) => {
+                self.push_node(Node::Float64(n as f64))
+            }
+            (ConversionFrameKind::Float64ToInt, ConversionValue::Float64(n)) => self.int(n as i64),
+            (ConversionFrameKind::IntToFloat32 { unsigned: false }, ConversionValue::Int(n)) => {
+                self.push_node(Node::Float32(n as f32))
+            }
+            (ConversionFrameKind::IntToFloat32 { unsigned: true }, ConversionValue::Int(n)) => {
+                self.push_node(Node::Float32((n as u64) as f32))
+            }
+            (ConversionFrameKind::Int64ToFloat32, ConversionValue::Int64(n)) => {
+                self.push_node(Node::Float32(n as f32))
+            }
+            (ConversionFrameKind::Float32ToInt, ConversionValue::Float32(n)) => self.int(n as i64),
+            (ConversionFrameKind::Float64ToFloat32, ConversionValue::Float64(n)) => {
+                self.push_node(Node::Float32(n as f32))
+            }
+            (ConversionFrameKind::Float32ToFloat64, ConversionValue::Float32(n)) => {
+                self.push_node(Node::Float64(n as f64))
+            }
+            (ConversionFrameKind::Int64BitsToFloat64, ConversionValue::Int64(n)) => {
+                self.push_node(Node::Float64(f64::from_bits(n as u64)))
+            }
+            (ConversionFrameKind::Float64BitsToInt64, ConversionValue::Float64(n)) => {
+                self.push_node(Node::Int64(n.to_bits() as i64))
+            }
+            (ConversionFrameKind::IntBitsToFloat32, ConversionValue::Int(n)) => {
+                self.push_node(Node::Float32(f32::from_bits(n as u32)))
+            }
+            (ConversionFrameKind::Float32BitsToInt, ConversionValue::Float32(n)) => {
+                self.int((n.to_bits() as i32) as i64)
+            }
+            _ => unreachable!("conversion frame kind and value mismatch"),
+        }
+    }
+
+    fn finish_conversion_frame(
+        &mut self,
+        frame: ConversionFrame,
+        value: ConversionValue,
+    ) -> (NodeId, usize) {
+        let node = self.conversion_result_node(frame.kind, value);
+
+        if frame.profile_head.is_some() {
+            self.profile_reduction(&frame.profile_head, 1);
+        }
+        let node = self.apply_strict_redex(frame.redex, node);
+        (node, 1)
+    }
+
     fn finish_ready_eval_frame(
         &mut self,
         stack: &mut EvalFrameStack,
@@ -3533,6 +3708,7 @@ impl Program {
             Float64(f64),
             Float32(f32),
             Bytes,
+            Conversion(ConversionValue),
         }
 
         let ready = match (stack.peek(), &self.nodes[current.0]) {
@@ -3549,6 +3725,9 @@ impl Program {
             }
             (Some(EvalFrame::Bytes(_)), Node::Bytes(_) | Node::MutableBytes { .. }) => {
                 Some(ReadyFrame::Bytes)
+            }
+            (Some(EvalFrame::Conversion(frame)), node) => {
+                frame.kind.ready_value(node).map(ReadyFrame::Conversion)
             }
             _ => None,
         };
@@ -3585,6 +3764,9 @@ impl Program {
             (EvalFrame::Bytes(frame), ReadyFrame::Bytes) => {
                 self.finish_bytes_frame(frame, current, stack)?
             }
+            (EvalFrame::Conversion(frame), ReadyFrame::Conversion(value)) => {
+                self.finish_conversion_frame(frame, value)
+            }
             _ => unreachable!("ready eval frame kind changed before pop"),
         };
         Ok(Some(result))
@@ -3606,6 +3788,7 @@ impl Program {
             EvalFrame::Float64(_) => return Err(EvalError::ExpectedFloat64(current)),
             EvalFrame::Float32(_) => return Err(EvalError::ExpectedFloat32(current)),
             EvalFrame::Bytes(_) => return Err(EvalError::ExpectedBytes(current)),
+            EvalFrame::Conversion(frame) => return Err(frame.kind.expected_error(current)),
         };
         Ok(Some(result))
     }
