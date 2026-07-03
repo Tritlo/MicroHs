@@ -788,6 +788,18 @@ impl EvalSpine {
             args.push(self.desc_arg(desc_idx));
         }
     }
+
+    fn write_spine_head_order(&self, args: &mut Vec<NodeId>, apps: &mut Vec<NodeId>) {
+        args.clear();
+        apps.clear();
+        let len = self.len();
+        args.reserve(len);
+        apps.reserve(len);
+        for desc_idx in (0..len).rev() {
+            args.push(self.desc_arg(desc_idx));
+            apps.push(self.desc_app(desc_idx));
+        }
+    }
 }
 
 impl Spine {
@@ -939,6 +951,10 @@ impl<T> FrameStack<T> {
         let frame = self.top.take()?;
         self.top = self.rest.pop();
         Some(frame)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.top.is_none()
     }
 }
 
@@ -1361,6 +1377,26 @@ impl Program {
         self.eval_loop_result(profile_head, node, reductions)
     }
 
+    fn strict_redex_from_eval_spine(
+        root: NodeId,
+        used: usize,
+        spine: &EvalSpine,
+        scratch_args: &mut Vec<NodeId>,
+        scratch_apps: &mut Vec<NodeId>,
+    ) -> StrictRedex {
+        if spine.len() == used {
+            StrictRedex::Root(root)
+        } else {
+            spine.write_spine_head_order(scratch_args, scratch_apps);
+            StrictRedex::Spine {
+                root,
+                used,
+                args: scratch_args.clone(),
+                apps: scratch_apps.clone(),
+            }
+        }
+    }
+
     #[cold]
     fn profile_head_key(&self, head: NodeId) -> String {
         match &self.nodes[head.0] {
@@ -1395,6 +1431,8 @@ impl Program {
         budget: usize,
         spine: &mut EvalSpine,
         scratch_args: &mut Vec<NodeId>,
+        scratch_apps: &mut Vec<NodeId>,
+        int_stack: &mut IntFrameStack,
     ) -> Result<Option<EvalLoopStep>, EvalError> {
         let head = self.fill_eval_spine(root, spine)?;
         let args_len = spine.len();
@@ -1492,6 +1530,52 @@ impl Program {
                         let next = self.app(arg!(1), result);
                         let node = self.app(next, arg!(2));
                         rewrite_step!(3, node, 2);
+                    }
+                }
+
+                if known.is_none() {
+                    if args_len >= 2 {
+                        if let Some(op) = IntBinOp::from_prim(prim.name()) {
+                            if op.driver_marker_safe() {
+                                let redex = Self::strict_redex_from_eval_spine(
+                                    root,
+                                    2,
+                                    spine,
+                                    scratch_args,
+                                    scratch_apps,
+                                );
+                                int_stack.push(IntFrame {
+                                    redex,
+                                    profile_head,
+                                    kind: IntFrameKind::BinSecond { op, x: arg!(0) },
+                                });
+                                return Ok(Some(EvalLoopStep {
+                                    node: arg!(1),
+                                    reductions: 0,
+                                }));
+                            }
+                        }
+                    }
+
+                    if args_len >= 1 {
+                        if let Some(op) = IntUnOp::from_prim(prim.name()) {
+                            let redex = Self::strict_redex_from_eval_spine(
+                                root,
+                                1,
+                                spine,
+                                scratch_args,
+                                scratch_apps,
+                            );
+                            int_stack.push(IntFrame {
+                                redex,
+                                profile_head,
+                                kind: IntFrameKind::Un { op },
+                            });
+                            return Ok(Some(EvalLoopStep {
+                                node: arg!(0),
+                                reductions: 0,
+                            }));
+                        }
                     }
                 }
 
@@ -3257,10 +3341,28 @@ impl Program {
     ) -> Result<(NodeId, usize), EvalError> {
         let mut steps = 0;
         let mut stack = WhnfFrameStack::default();
+        let mut int_stack = IntFrameStack::default();
         let mut eval_spine = EvalSpine::default();
         let mut scratch_args = Vec::new();
+        let mut scratch_apps = Vec::new();
         while steps < limit {
             let current = self.resolve_for_whnf(root, profile_resolve)?;
+            if stack.is_empty() {
+                if let Node::Int(value) = self.nodes[current.0] {
+                    if let Some(frame) = int_stack.pop() {
+                        let (next, reductions) =
+                            self.finish_int_frame(frame, value, &mut int_stack)?;
+                        steps += reductions;
+                        self.reductions += reductions;
+                        if steps >= limit {
+                            return Err(EvalError::StepLimit { limit });
+                        }
+                        root = next;
+                        continue;
+                    }
+                }
+            }
+
             if whnf_frames {
                 if let Some((frame, next)) = self.begin_whnf_force_frame(current)? {
                     stack.push(frame);
@@ -3269,10 +3371,19 @@ impl Program {
                 }
             }
 
-            let Some(step) =
-                self.eval_loop_step(current, limit - steps, &mut eval_spine, &mut scratch_args)?
+            let Some(step) = self.eval_loop_step(
+                current,
+                limit - steps,
+                &mut eval_spine,
+                &mut scratch_args,
+                &mut scratch_apps,
+                &mut int_stack,
+            )?
             else {
                 let Some(frame) = stack.pop() else {
+                    if !int_stack.is_empty() {
+                        return Err(EvalError::ExpectedInt(current));
+                    }
                     return Ok((current, steps));
                 };
                 let (next, reductions) = self.finish_whnf_frame(frame, current)?;
@@ -8880,6 +8991,26 @@ impl IntBinOp {
             "ucmp" => Self::UCmp,
             _ => return None,
         })
+    }
+
+    fn driver_marker_safe(self) -> bool {
+        // Comparison/ordering markers reached self-host parser layout failures;
+        // keep them on the older helper path until that is isolated.
+        !matches!(
+            self,
+            Self::Eq
+                | Self::Ne
+                | Self::Lt
+                | Self::Le
+                | Self::Gt
+                | Self::Ge
+                | Self::Ult
+                | Self::Ule
+                | Self::Ugt
+                | Self::Uge
+                | Self::ICmp
+                | Self::UCmp
+        )
     }
 
     fn apply(self, x: i64, y: i64) -> Result<IntResult, EvalError> {

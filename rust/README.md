@@ -93,9 +93,10 @@ WHNF that Rust evaluates. Use `--c-mhsbench-mode main` only for a real MicroHs
 main program that expects the runtime `World` argument. The comparable C number
 is `c_parse_eval_serialize_ns_per_iter`; the comparable Rust number is
 `parse_reduce_render_ns_per_iter`. Both sides serialize the WHNF result as a
-`.comb` fragment before updating the sink. Rust `whnf_steps` currently counts
-outer WHNF rewrites; strict primitive argument evaluation is included in elapsed
-time but not counted as separate steps.
+`.comb` fragment before updating the sink. Rust `whnf_steps` counts
+driver-visible WHNF rewrites. Strict primitive forcing that still happens inside
+helper evaluators is included in elapsed time but not always counted as
+separate steps; F2 Int marker forcing is counted in the driver.
 
 For main-program benchmarks, pass exact program argv after `--`, including
 `argv[0]`, for example:
