@@ -1730,6 +1730,14 @@ fn print_phase_profile(profile: &ProfileBench, top: usize) {
         "profile_profile_app_alloc_bookkeeping_ms: {:.3}",
         nanos_millis(profile.profile.profile_app_alloc_bookkeeping_nanos)
     );
+    println!("profile_stack_rewrite_arg_patterns:");
+    for (pattern, count) in profile.profile.top_stack_rewrite_arg_patterns(top) {
+        println!("  {pattern}: {count}");
+    }
+    println!("profile_stack_rewrite_opportunities:");
+    for (opportunity, count) in profile.profile.top_stack_rewrite_opportunities(top) {
+        println!("  {opportunity}: {count}");
+    }
     println!("profile_stack_eval_step_head_ms:");
     for (head, nanos) in profile.profile.top_stack_eval_step_head_times(top) {
         println!("  {head}: {:.3}", nanos_millis(nanos));
