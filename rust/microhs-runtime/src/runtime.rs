@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::mem::{MaybeUninit, size_of};
+use std::time::Instant;
 
 macro_rules! trace_invalid_bytes {
     ($program:expr, $($arg:tt)*) => {{
@@ -14,34 +15,62 @@ macro_rules! trace_invalid_bytes {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct NodeId(pub usize);
+pub struct NodeId(pub u32);
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+impl NodeId {
+    pub(crate) fn from_index(index: usize) -> Self {
+        Self(u32::try_from(index).expect("node arena exceeded u32 ids"))
+    }
+
+    pub(crate) fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Prim {
     Known(KnownPrim),
-    Other(String),
+    Runtime(RuntimePrim),
 }
 
 impl Prim {
-    pub fn from_name(name: &str) -> Self {
-        match KnownPrim::from_name(name) {
-            Some(known) => Self::Known(known),
-            None => Self::Other(name.to_owned()),
-        }
+    pub fn from_name(name: &str) -> Option<Self> {
+        KnownPrim::from_name(name)
+            .map(Self::Known)
+            .or_else(|| RuntimePrim::from_name(name).map(Self::Runtime))
     }
 
     pub fn known(&self) -> Option<KnownPrim> {
         match self {
             Self::Known(known) => Some(*known),
-            Self::Other(_) => None,
+            Self::Runtime(_) => None,
         }
     }
 
     pub fn name(&self) -> &str {
         match self {
             Self::Known(known) => known.name(),
-            Self::Other(name) => name,
+            Self::Runtime(runtime) => runtime.name(),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct RuntimePrim(u16);
+
+impl RuntimePrim {
+    fn from_name(name: &str) -> Option<Self> {
+        RUNTIME_PRIM_NAMES
+            .iter()
+            .position(|candidate| *candidate == name)
+            .map(|index| Self(index as u16))
+    }
+
+    fn name(self) -> &'static str {
+        RUNTIME_PRIM_NAMES
+            .get(self.0 as usize)
+            .copied()
+            .unwrap_or("<invalid-runtime-prim>")
     }
 }
 
@@ -294,6 +323,143 @@ impl KnownPrim {
     }
 }
 
+fn encode_known_prim(known: KnownPrim) -> u16 {
+    match known {
+        KnownPrim::A => 0,
+        KnownPrim::B => 1,
+        KnownPrim::BPrime => 2,
+        KnownPrim::C => 3,
+        KnownPrim::CPrime => 4,
+        KnownPrim::CPrimeB => 5,
+        KnownPrim::I => 6,
+        KnownPrim::J => 7,
+        KnownPrim::K => 8,
+        KnownPrim::K2 => 9,
+        KnownPrim::K3 => 10,
+        KnownPrim::K4 => 11,
+        KnownPrim::KA => 12,
+        KnownPrim::KK => 13,
+        KnownPrim::L => 14,
+        KnownPrim::O => 15,
+        KnownPrim::P => 16,
+        KnownPrim::R => 17,
+        KnownPrim::S => 18,
+        KnownPrim::SPrime => 19,
+        KnownPrim::U => 20,
+        KnownPrim::Y => 21,
+        KnownPrim::Z => 22,
+        KnownPrim::Tag(tag) => 64 + u16::from(tag),
+        KnownPrim::Tuple(fields) => 128 + u16::from(fields),
+        KnownPrim::Chr => 23,
+        KnownPrim::Ord => 24,
+        KnownPrim::Catch => 25,
+        KnownPrim::CatchR => 26,
+        KnownPrim::Dynsym => 27,
+        KnownPrim::IsInt => 28,
+        KnownPrim::Raise => 29,
+        KnownPrim::Rnf => 30,
+        KnownPrim::Seq => 31,
+        KnownPrim::Thnum => 32,
+        KnownPrim::IoAtomic => 33,
+        KnownPrim::IoBind => 34,
+        KnownPrim::IoGc => 35,
+        KnownPrim::IoGetArgRef => 36,
+        KnownPrim::IoGetMaskingState => 37,
+        KnownPrim::IoLazyBind => 38,
+        KnownPrim::IoNewMVar => 39,
+        KnownPrim::IoPerformIo => 40,
+        KnownPrim::IoPp => 41,
+        KnownPrim::IoPrint => 42,
+        KnownPrim::IoPutMVar => 43,
+        KnownPrim::IoReadMVar => 44,
+        KnownPrim::IoReturn => 45,
+        KnownPrim::IoSerialize => 46,
+        KnownPrim::IoSetMaskingState => 47,
+        KnownPrim::IoStderr => 48,
+        KnownPrim::IoStdin => 49,
+        KnownPrim::IoStdout => 50,
+        KnownPrim::IoStats => 51,
+        KnownPrim::IoStrict => 52,
+        KnownPrim::IoTakeMVar => 53,
+        KnownPrim::IoThen => 54,
+        KnownPrim::IoThid => 55,
+        KnownPrim::IoThreadStatus => 56,
+        KnownPrim::IoTryPutMVar => 57,
+        KnownPrim::IoTryReadMVar => 58,
+        KnownPrim::IoTryTakeMVar => 59,
+        KnownPrim::IoYield => 60,
+    }
+}
+
+fn decode_known_prim(code: u16) -> KnownPrim {
+    match code {
+        0 => KnownPrim::A,
+        1 => KnownPrim::B,
+        2 => KnownPrim::BPrime,
+        3 => KnownPrim::C,
+        4 => KnownPrim::CPrime,
+        5 => KnownPrim::CPrimeB,
+        6 => KnownPrim::I,
+        7 => KnownPrim::J,
+        8 => KnownPrim::K,
+        9 => KnownPrim::K2,
+        10 => KnownPrim::K3,
+        11 => KnownPrim::K4,
+        12 => KnownPrim::KA,
+        13 => KnownPrim::KK,
+        14 => KnownPrim::L,
+        15 => KnownPrim::O,
+        16 => KnownPrim::P,
+        17 => KnownPrim::R,
+        18 => KnownPrim::S,
+        19 => KnownPrim::SPrime,
+        20 => KnownPrim::U,
+        21 => KnownPrim::Y,
+        22 => KnownPrim::Z,
+        23 => KnownPrim::Chr,
+        24 => KnownPrim::Ord,
+        25 => KnownPrim::Catch,
+        26 => KnownPrim::CatchR,
+        27 => KnownPrim::Dynsym,
+        28 => KnownPrim::IsInt,
+        29 => KnownPrim::Raise,
+        30 => KnownPrim::Rnf,
+        31 => KnownPrim::Seq,
+        32 => KnownPrim::Thnum,
+        33 => KnownPrim::IoAtomic,
+        34 => KnownPrim::IoBind,
+        35 => KnownPrim::IoGc,
+        36 => KnownPrim::IoGetArgRef,
+        37 => KnownPrim::IoGetMaskingState,
+        38 => KnownPrim::IoLazyBind,
+        39 => KnownPrim::IoNewMVar,
+        40 => KnownPrim::IoPerformIo,
+        41 => KnownPrim::IoPp,
+        42 => KnownPrim::IoPrint,
+        43 => KnownPrim::IoPutMVar,
+        44 => KnownPrim::IoReadMVar,
+        45 => KnownPrim::IoReturn,
+        46 => KnownPrim::IoSerialize,
+        47 => KnownPrim::IoSetMaskingState,
+        48 => KnownPrim::IoStderr,
+        49 => KnownPrim::IoStdin,
+        50 => KnownPrim::IoStdout,
+        51 => KnownPrim::IoStats,
+        52 => KnownPrim::IoStrict,
+        53 => KnownPrim::IoTakeMVar,
+        54 => KnownPrim::IoThen,
+        55 => KnownPrim::IoThid,
+        56 => KnownPrim::IoThreadStatus,
+        57 => KnownPrim::IoTryPutMVar,
+        58 => KnownPrim::IoTryReadMVar,
+        59 => KnownPrim::IoTryTakeMVar,
+        60 => KnownPrim::IoYield,
+        64..=96 => KnownPrim::Tag((code - 64) as u8),
+        128..=144 => KnownPrim::Tuple((code - 128) as u8),
+        _ => unreachable!("invalid known prim code"),
+    }
+}
+
 const TAG_PRIM_NAMES: [&str; 33] = [
     "TAG0", "TAG1", "TAG2", "TAG3", "TAG4", "TAG5", "TAG6", "TAG7", "TAG8", "TAG9", "TAG10",
     "TAG11", "TAG12", "TAG13", "TAG14", "TAG15", "TAG16", "TAG17", "TAG18", "TAG19", "TAG20",
@@ -306,10 +472,182 @@ const TUPLE_PRIM_NAMES: [&str; 17] = [
     "T16",
 ];
 
+const RUNTIME_PRIM_NAMES: &[&str] = &[
+    "+",
+    "-",
+    "*",
+    "quot",
+    "rem",
+    "subtract",
+    "u+",
+    "u-",
+    "u*",
+    "uquot",
+    "urem",
+    "usubtract",
+    "and",
+    "or",
+    "xor",
+    "shl",
+    "shr",
+    "ashr",
+    "==",
+    "/=",
+    "<",
+    "<=",
+    ">",
+    ">=",
+    "u<",
+    "u<=",
+    "u>",
+    "u>=",
+    "icmp",
+    "ucmp",
+    "neg",
+    "uneg",
+    "inv",
+    "popcount",
+    "clz",
+    "ctz",
+    "I+",
+    "I-",
+    "I*",
+    "Iquot",
+    "Irem",
+    "Isubtract",
+    "Iu+",
+    "Iu-",
+    "Iu*",
+    "Iuquot",
+    "Iurem",
+    "Iusubtract",
+    "Iand",
+    "Ior",
+    "Ixor",
+    "Ishl",
+    "Ishr",
+    "Iashr",
+    "I==",
+    "I/=",
+    "I<",
+    "I<=",
+    "I>",
+    "I>=",
+    "Iu<",
+    "Iu<=",
+    "Iu>",
+    "Iu>=",
+    "Iicmp",
+    "Iucmp",
+    "Ineg",
+    "Iuneg",
+    "Iinv",
+    "Ipopcount",
+    "Iclz",
+    "Ictz",
+    "d+",
+    "d-",
+    "d*",
+    "d/",
+    "d==",
+    "d/=",
+    "d<",
+    "d<=",
+    "d>",
+    "d>=",
+    "dneg",
+    "f+",
+    "f-",
+    "f*",
+    "f/",
+    "f==",
+    "f/=",
+    "f<",
+    "f<=",
+    "f>",
+    "f>=",
+    "fneg",
+    "itoI",
+    "utoU",
+    "Itoi",
+    "Utou",
+    "itod",
+    "utod",
+    "Itod",
+    "dtoi",
+    "itof",
+    "utof",
+    "Itof",
+    "ftoi",
+    "dtof",
+    "ftod",
+    "toDbl",
+    "fromDbl",
+    "toFlt",
+    "fromFlt",
+    "toInt",
+    "toPtr",
+    "toFunPtr",
+    "fp+",
+    "fp2bs",
+    "fpnew",
+    "fpfin",
+    "bs2fp",
+    "fp2p",
+    "A.alloc",
+    "A.read",
+    "A.write",
+    "A.trunc",
+    "A.==",
+    "A.copy",
+    "A.size",
+    "SPnew",
+    "SPderef",
+    "SPfree",
+    "Wknewfin",
+    "Wknew",
+    "Wkderef",
+    "Wkfinal",
+    "packCString",
+    "packCStringLen",
+    "bsgrab",
+    "bsgrablen",
+    "bsnew",
+    "bsread",
+    "bswrite",
+    "bsfreeze",
+    "bsappbyte",
+    "bsappchar",
+    "bs++",
+    "bs++.",
+    "bs==",
+    "bs/=",
+    "bs<",
+    "bs<=",
+    "bs>",
+    "bs>=",
+    "bscmp",
+    "bsreplicate",
+    "bsindex",
+    "bssubstr",
+    "bslength",
+    "headUTF8",
+    "tailUTF8",
+    "bsunpack",
+    "fromUTF8",
+    "IO.deserialize",
+    "IO.fork",
+    "IO.throwto",
+    "IO.threaddelay",
+    "IO.waitrdfd",
+    "IO.waitwrfd",
+];
+
 #[derive(Clone, Debug)]
 pub enum Node {
     App(NodeId, NodeId),
     Indir(Option<NodeId>),
+    Free(Option<NodeId>),
     Prim(Prim),
     Int(i64),
     Int64(i64),
@@ -321,15 +659,306 @@ pub enum Node {
     ForeignPtr(Box<ForeignPtrNode>),
     Weak(Box<WeakNode>),
     MVar(Option<NodeId>),
-    BigInt(Vec<u8>),
-    Bytes(Vec<u8>),
+    BigInt(Box<Vec<u8>>),
+    Bytes(Box<Vec<u8>>),
+    BytesView(Box<BytesViewNode>),
     MutableBytes(Box<MutableBytesNode>),
-    Array(Vec<NodeId>),
-    Ffi(String),
+    Array(Box<Vec<NodeId>>),
+    Ffi(Box<String>),
     JsCall(Box<JsCallNode>),
-    JsWrap { tags: String },
-    FunPtr(String),
-    Tick(Vec<u8>),
+    JsWrap { tags: Box<String> },
+    FunPtr(Box<String>),
+    Tick(Box<Vec<u8>>),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Cell {
+    word0: u64,
+    word1: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CellTag {
+    App,
+    Indir,
+    Free,
+    KnownPrim,
+    RuntimePrim,
+    Int,
+    Int64,
+    Float64,
+    Float32,
+    ThreadId,
+    Ptr,
+    RawFunPtr,
+    Cold,
+}
+
+const CELL_TAG_BITS: u64 = 0xff;
+const CELL_PAYLOAD_SHIFT: u64 = 8;
+const CELL_NONE_ID: u64 = u64::MAX;
+
+impl CellTag {
+    fn from_bits(bits: u64) -> Self {
+        match bits & CELL_TAG_BITS {
+            0 => Self::App,
+            1 => Self::Indir,
+            2 => Self::Free,
+            3 => Self::KnownPrim,
+            4 => Self::RuntimePrim,
+            5 => Self::Int,
+            6 => Self::Int64,
+            7 => Self::Float64,
+            8 => Self::Float32,
+            9 => Self::ThreadId,
+            10 => Self::Ptr,
+            11 => Self::RawFunPtr,
+            12 => Self::Cold,
+            _ => unreachable!("invalid cell tag"),
+        }
+    }
+
+    fn bits(self) -> u64 {
+        match self {
+            Self::App => 0,
+            Self::Indir => 1,
+            Self::Free => 2,
+            Self::KnownPrim => 3,
+            Self::RuntimePrim => 4,
+            Self::Int => 5,
+            Self::Int64 => 6,
+            Self::Float64 => 7,
+            Self::Float32 => 8,
+            Self::ThreadId => 9,
+            Self::Ptr => 10,
+            Self::RawFunPtr => 11,
+            Self::Cold => 12,
+        }
+    }
+}
+
+impl Cell {
+    #[inline]
+    fn tag_bits(self) -> u64 {
+        self.word0 & CELL_TAG_BITS
+    }
+
+    #[inline]
+    fn has_tag(self, tag: CellTag) -> bool {
+        self.tag_bits() == tag.bits()
+    }
+
+    fn from_node(node: Node, cold_nodes: &mut Vec<Option<Node>>) -> Self {
+        match node {
+            Node::App(fun, arg) => Self::app(fun, arg),
+            Node::Indir(target) => Self::indir(target),
+            Node::Free(next) => Self::free(next),
+            Node::Prim(Prim::Known(known)) => Self::known_prim(known),
+            Node::Prim(Prim::Runtime(runtime)) => Self::runtime_prim(runtime),
+            Node::Int(value) => Self::int(value),
+            Node::Int64(value) => Self::int64(value),
+            Node::Float64(value) => Self::float64(value),
+            Node::Float32(value) => Self::float32(value),
+            Node::ThreadId(value) => Self::thread_id(value),
+            Node::Ptr(value) => Self::ptr(value),
+            Node::RawFunPtr(value) => Self::raw_fun_ptr(value),
+            cold => {
+                let index = cold_nodes.len();
+                cold_nodes.push(Some(cold));
+                Self::cold(index)
+            }
+        }
+    }
+
+    fn to_node(self, cold_nodes: &[Option<Node>]) -> Node {
+        match self.tag() {
+            CellTag::App => Node::App(self.id_payload(), self.id_word1()),
+            CellTag::Indir => Node::Indir(self.option_id_word1()),
+            CellTag::Free => Node::Free(self.option_id_word1()),
+            CellTag::KnownPrim => Node::Prim(Prim::Known(decode_known_prim(self.word1 as u16))),
+            CellTag::RuntimePrim => Node::Prim(Prim::Runtime(RuntimePrim(self.word1 as u16))),
+            CellTag::Int => Node::Int(self.word1 as i64),
+            CellTag::Int64 => Node::Int64(self.word1 as i64),
+            CellTag::Float64 => Node::Float64(f64::from_bits(self.word1)),
+            CellTag::Float32 => Node::Float32(f32::from_bits(self.word1 as u32)),
+            CellTag::ThreadId => Node::ThreadId(self.word1 as i64),
+            CellTag::Ptr => Node::Ptr(self.word1 as i64),
+            CellTag::RawFunPtr => Node::RawFunPtr(self.word1 as i64),
+            CellTag::Cold => cold_nodes[self.word1 as usize]
+                .as_ref()
+                .expect("live cold cell pointed at freed cold node")
+                .clone(),
+        }
+    }
+
+    fn tag(self) -> CellTag {
+        CellTag::from_bits(self.tag_bits())
+    }
+
+    fn app(fun: NodeId, arg: NodeId) -> Self {
+        Self {
+            word0: (u64::from(fun.0) << CELL_PAYLOAD_SHIFT) | CellTag::App.bits(),
+            word1: u64::from(arg.0),
+        }
+    }
+
+    fn indir(target: Option<NodeId>) -> Self {
+        Self {
+            word0: CellTag::Indir.bits(),
+            word1: pack_option_id(target),
+        }
+    }
+
+    fn free(next: Option<NodeId>) -> Self {
+        Self {
+            word0: CellTag::Free.bits(),
+            word1: pack_option_id(next),
+        }
+    }
+
+    fn known_prim(known: KnownPrim) -> Self {
+        Self {
+            word0: CellTag::KnownPrim.bits(),
+            word1: u64::from(encode_known_prim(known)),
+        }
+    }
+
+    fn runtime_prim(runtime: RuntimePrim) -> Self {
+        Self {
+            word0: CellTag::RuntimePrim.bits(),
+            word1: u64::from(runtime.0),
+        }
+    }
+
+    fn int(value: i64) -> Self {
+        Self {
+            word0: CellTag::Int.bits(),
+            word1: value as u64,
+        }
+    }
+
+    fn int64(value: i64) -> Self {
+        Self {
+            word0: CellTag::Int64.bits(),
+            word1: value as u64,
+        }
+    }
+
+    fn float64(value: f64) -> Self {
+        Self {
+            word0: CellTag::Float64.bits(),
+            word1: value.to_bits(),
+        }
+    }
+
+    fn float32(value: f32) -> Self {
+        Self {
+            word0: CellTag::Float32.bits(),
+            word1: u64::from(value.to_bits()),
+        }
+    }
+
+    fn thread_id(value: i64) -> Self {
+        Self {
+            word0: CellTag::ThreadId.bits(),
+            word1: value as u64,
+        }
+    }
+
+    fn ptr(value: i64) -> Self {
+        Self {
+            word0: CellTag::Ptr.bits(),
+            word1: value as u64,
+        }
+    }
+
+    fn raw_fun_ptr(value: i64) -> Self {
+        Self {
+            word0: CellTag::RawFunPtr.bits(),
+            word1: value as u64,
+        }
+    }
+
+    fn cold(index: usize) -> Self {
+        Self {
+            word0: CellTag::Cold.bits(),
+            word1: u64::try_from(index).expect("cold node table exceeded u64"),
+        }
+    }
+
+    fn id_payload(self) -> NodeId {
+        NodeId((self.word0 >> CELL_PAYLOAD_SHIFT) as u32)
+    }
+
+    fn id_word1(self) -> NodeId {
+        NodeId(self.word1 as u32)
+    }
+
+    fn option_id_word1(self) -> Option<NodeId> {
+        unpack_option_id(self.word1)
+    }
+
+    fn app_fields(self) -> Option<(NodeId, NodeId)> {
+        self.has_tag(CellTag::App)
+            .then(|| (self.id_payload(), self.id_word1()))
+    }
+
+    fn prim(self) -> Option<Prim> {
+        match self.tag_bits() {
+            3 => Some(Prim::Known(decode_known_prim(self.word1 as u16))),
+            4 => Some(Prim::Runtime(RuntimePrim(self.word1 as u16))),
+            _ => None,
+        }
+    }
+
+    fn int_value(self) -> Option<i64> {
+        self.has_tag(CellTag::Int).then_some(self.word1 as i64)
+    }
+
+    fn int64_value(self) -> Option<i64> {
+        self.has_tag(CellTag::Int64).then_some(self.word1 as i64)
+    }
+
+    fn thread_id_value(self) -> Option<i64> {
+        self.has_tag(CellTag::ThreadId).then_some(self.word1 as i64)
+    }
+
+    fn ptr_value(self) -> Option<i64> {
+        self.has_tag(CellTag::Ptr).then_some(self.word1 as i64)
+    }
+
+    fn raw_fun_ptr_value(self) -> Option<i64> {
+        self.has_tag(CellTag::RawFunPtr)
+            .then_some(self.word1 as i64)
+    }
+
+    fn float64_value(self) -> Option<f64> {
+        self.has_tag(CellTag::Float64)
+            .then_some(f64::from_bits(self.word1))
+    }
+
+    fn float32_value(self) -> Option<f32> {
+        self.has_tag(CellTag::Float32)
+            .then_some(f32::from_bits(self.word1 as u32))
+    }
+
+    fn cold_index(self) -> Option<usize> {
+        self.has_tag(CellTag::Cold).then_some(self.word1 as usize)
+    }
+}
+
+fn pack_option_id(id: Option<NodeId>) -> u64 {
+    id.map_or(CELL_NONE_ID, |id| u64::from(id.0))
+}
+
+fn unpack_option_id(word: u64) -> Option<NodeId> {
+    (word != CELL_NONE_ID).then_some(NodeId(word as u32))
+}
+
+#[derive(Default)]
+struct SerializationLabels {
+    shared: HashSet<NodeId>,
+    printed: HashSet<NodeId>,
 }
 
 #[derive(Clone, Debug)]
@@ -337,7 +966,27 @@ pub struct ForeignPtrNode {
     pub(crate) bytes: Option<Vec<u8>>,
     pub(crate) offset: usize,
     pub(crate) ptr: i64,
-    pub(crate) finalizer: Option<NodeId>,
+    pub(crate) finalizer: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+enum ForeignFinalizer {
+    Free,
+    CloseB,
+    RawZero,
+}
+
+#[derive(Clone, Debug)]
+struct ForeignFinalizerState {
+    arg: i64,
+    finalizer: Option<ForeignFinalizer>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BytesViewNode {
+    pub(crate) base: NodeId,
+    pub(crate) offset: usize,
+    pub(crate) len: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -367,7 +1016,43 @@ impl MutableBytesNode {
 
 impl Node {
     pub fn prim(name: &str) -> Self {
-        Self::Prim(Prim::from_name(name))
+        let prim = Prim::from_name(name)
+            .unwrap_or_else(|| panic!("unknown runtime primitive requested internally: {name}"));
+        Self::Prim(prim)
+    }
+
+    pub fn bigint(bytes: Vec<u8>) -> Self {
+        Self::BigInt(Box::new(bytes))
+    }
+
+    pub fn bytes(bytes: Vec<u8>) -> Self {
+        Self::Bytes(Box::new(bytes))
+    }
+
+    fn bytes_view(base: NodeId, offset: usize, len: usize) -> Self {
+        Self::BytesView(Box::new(BytesViewNode { base, offset, len }))
+    }
+
+    pub fn array(items: Vec<NodeId>) -> Self {
+        Self::Array(Box::new(items))
+    }
+
+    pub fn ffi(name: String) -> Self {
+        Self::Ffi(Box::new(name))
+    }
+
+    pub fn js_wrap(tags: String) -> Self {
+        Self::JsWrap {
+            tags: Box::new(tags),
+        }
+    }
+
+    pub fn fun_ptr(name: impl Into<String>) -> Self {
+        Self::FunPtr(Box::new(name.into()))
+    }
+
+    pub fn tick(bytes: Vec<u8>) -> Self {
+        Self::Tick(Box::new(bytes))
     }
 }
 
@@ -385,6 +1070,7 @@ const BFILE_PTR_BASE: i64 = i64::MIN + (1_i64 << 32);
 const FORCE_REDUCTION_LIMIT: usize = usize::MAX;
 const RTS_EXN_DIVIDE_BY_ZERO: i64 = 4;
 const RTS_EXN_OVERFLOW: i64 = 7;
+const MASK_INTERRUPTIBLE: i64 = 1;
 const BFILE_PTR_STRIDE: i64 = 1_i64 << 32;
 const DIR_PTR_BASE: i64 = i64::MIN + (1_i64 << 61);
 const DIR_PTR_STRIDE: i64 = 1_i64 << 32;
@@ -395,7 +1081,7 @@ const SMALL_INT_MAX: i64 = 255;
 const SMALL_INT_COUNT: usize = (SMALL_INT_MAX - SMALL_INT_MIN + 1) as usize;
 const IGNORED_IO_SHORTCUT_RECURSION_LIMIT: usize = 256;
 const UTF8_ASCII_REFILL: usize = 1024;
-const GC_NODE_INTERVAL: usize = 16 * 1024 * 1024;
+const GC_NODE_INTERVAL: usize = 32 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 struct BFile {
@@ -544,6 +1230,7 @@ pub enum EvalError {
     InvalidHandle,
     UnknownPrim(String),
     UnknownFfi(String),
+    UnsupportedForeignFinalizer(String),
     UnsupportedJsFfi,
     UnsupportedSerialization(NodeId),
 }
@@ -575,6 +1262,9 @@ impl fmt::Display for EvalError {
             Self::InvalidHandle => write!(f, "invalid IO handle operation"),
             Self::UnknownPrim(name) => write!(f, "unknown primitive {name}"),
             Self::UnknownFfi(name) => write!(f, "unknown FFI symbol {name}"),
+            Self::UnsupportedForeignFinalizer(name) => {
+                write!(f, "unsupported ForeignPtr finalizer {name}")
+            }
             Self::UnsupportedJsFfi => write!(f, "JavaScript FFI is not supported in this runtime"),
             Self::UnsupportedSerialization(id) => {
                 write!(f, "cannot serialize node {id:?}")
@@ -609,20 +1299,39 @@ pub enum JsValue {
 
 #[derive(Clone, Debug)]
 pub struct Program {
-    nodes: Vec<Node>,
+    nodes: Vec<Cell>,
+    cold_nodes: Vec<Option<Node>>,
     root: NodeId,
     labels: HashMap<usize, NodeId>,
     node_pointers: Vec<NodeId>,
     node_pointer_slots: HashMap<NodeId, usize>,
-    free_nodes: Vec<usize>,
+    free_head: Option<NodeId>,
+    free_nodes: usize,
     gc_node_interval: usize,
-    next_gc_nodes: usize,
+    gc_allocations_since_collect: usize,
+    gc_last_allocations_since_collect: usize,
     gc_collections: usize,
     gc_freed_nodes_total: usize,
     gc_last_live_nodes: usize,
     gc_last_free_nodes: usize,
     gc_high_water_nodes: usize,
+    gc_last_pause_nanos: u128,
+    gc_total_pause_nanos: u128,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_last_mark_nanos: u128,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_total_mark_nanos: u128,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_last_sweep_nanos: u128,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_total_sweep_nanos: u128,
+    gc_marked: Vec<bool>,
+    gc_mark_work: Vec<NodeId>,
+    gc_foreign_finalizer_marked: Vec<bool>,
+    gc_events: Vec<GcEventStats>,
     stable_ptrs: Vec<Option<NodeId>>,
+    foreign_finalizers: Vec<Option<ForeignFinalizerState>>,
+    foreign_finalizer_free: Vec<usize>,
     allocations: Vec<Option<Vec<u8>>>,
     bfiles: Vec<Option<BFile>>,
     dirs: Vec<Option<DirHandle>>,
@@ -636,12 +1345,15 @@ pub struct Program {
     js_program_handle: Option<u32>,
     js_wrapper_tags: Vec<String>,
     prim_cache: PrimCache,
+    compound_cache: CompoundCache,
     small_ints: [Option<NodeId>; SMALL_INT_COUNT],
     world: Option<NodeId>,
     profile: Option<EvalProfile>,
+    trace_expected_bytes: bool,
+    reduce_depth: usize,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct GcStats {
     pub collections: usize,
     pub freed_nodes_total: usize,
@@ -650,6 +1362,34 @@ pub struct GcStats {
     pub high_water_nodes: usize,
     pub current_nodes: usize,
     pub current_free_nodes: usize,
+    pub last_pause_nanos: u128,
+    pub total_pause_nanos: u128,
+    #[cfg(feature = "gc-phase-profile")]
+    pub last_mark_nanos: u128,
+    #[cfg(feature = "gc-phase-profile")]
+    pub total_mark_nanos: u128,
+    #[cfg(feature = "gc-phase-profile")]
+    pub last_sweep_nanos: u128,
+    #[cfg(feature = "gc-phase-profile")]
+    pub total_sweep_nanos: u128,
+    pub last_allocations_since_collect: usize,
+    pub current_allocations_since_collect: usize,
+    pub events: Vec<GcEventStats>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GcEventStats {
+    pub collection: usize,
+    pub pause_nanos: u128,
+    #[cfg(feature = "gc-phase-profile")]
+    pub mark_nanos: u128,
+    #[cfg(feature = "gc-phase-profile")]
+    pub sweep_nanos: u128,
+    pub live_nodes: usize,
+    pub free_nodes: usize,
+    pub arena_nodes: usize,
+    pub freed_nodes: usize,
+    pub allocations_since_collect: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -664,6 +1404,65 @@ pub struct EvalProfile {
     pub spine_rewrite_extra_args: usize,
     pub app_rewrites: usize,
     pub app_rewrite_extra_args: usize,
+    pub stack_rewrites: usize,
+    pub stack_rewrite_apps: usize,
+    pub stack_rewrite_indirections: usize,
+    pub stack_app_updates: usize,
+    pub stack_app_update_apps: usize,
+    pub stack_app_update_allocations: usize,
+    pub stack_rethreads: usize,
+    pub stack_rethread_apps: usize,
+    pub stack_descent_pushes: usize,
+    pub stack_arg_reads: usize,
+    pub stack_arg_batches: usize,
+    pub stack_loop_iterations: usize,
+    pub stack_ready_checks: usize,
+    pub stack_ready_successes: usize,
+    pub stack_eval_step_calls: usize,
+    pub stack_step_reduced: usize,
+    pub stack_step_force: usize,
+    pub stack_step_whnf: usize,
+    pub stack_step_fallback: usize,
+    pub stack_gc_check_nanos: u128,
+    pub stack_resolve_nanos: u128,
+    pub stack_ready_frame_nanos: u128,
+    pub stack_descent_nanos: u128,
+    pub stack_eval_step_nanos: u128,
+    pub stack_whnf_finish_nanos: u128,
+    pub stack_arg_read_nanos: u128,
+    pub stack_app_alloc_nanos: u128,
+    pub stack_apply_rewrite_nanos: u128,
+    pub stack_apply_app_nanos: u128,
+    pub stack_force_frame_nanos: u128,
+    pub stack_inner_descent_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
+    pub profile_step_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
+    pub profile_reduction_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
+    pub profile_stack_head_time_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
+    pub profile_app_alloc_bookkeeping_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
+    pub stack_arg_read_head_nanos: HashMap<String, u128>,
+    #[cfg(feature = "eval-phase-profile")]
+    pub stack_app_alloc_site_nanos: HashMap<String, u128>,
+    #[cfg(feature = "eval-phase-profile")]
+    pub stack_apply_rewrite_head_nanos: HashMap<String, u128>,
+    #[cfg(feature = "eval-phase-profile")]
+    pub stack_apply_app_head_nanos: HashMap<String, u128>,
+    #[cfg(feature = "eval-phase-profile")]
+    pub stack_force_frame_head_nanos: HashMap<String, u128>,
+    #[cfg(feature = "eval-phase-profile")]
+    pub stack_inner_descent_head_nanos: HashMap<String, u128>,
+    pub persistent_forces: usize,
+    pub persistent_fallbacks: usize,
+    pub fallback_eval_loop_steps: usize,
+    pub strict_redex_snapshots: usize,
+    pub strict_redex_snapshot_apps: usize,
+    pub remaining_app_scans: usize,
+    pub remaining_app_scan_apps: usize,
+    pub eval_frame_pushes: usize,
     pub small_int_cache_hits: usize,
     pub small_int_cache_misses: usize,
     pub non_small_int_allocations: usize,
@@ -681,6 +1480,9 @@ pub struct EvalProfile {
     pub primitive_dispatch_hits: HashMap<String, usize>,
     pub node_allocations: HashMap<String, usize>,
     pub app_allocation_sites: HashMap<String, usize>,
+    pub eval_frame_push_kinds: HashMap<String, usize>,
+    pub stack_fallback_heads: HashMap<String, usize>,
+    pub stack_eval_step_head_nanos: HashMap<String, u128>,
 }
 
 impl EvalProfile {
@@ -711,9 +1513,61 @@ impl EvalProfile {
     pub fn top_app_allocation_sites(&self, limit: usize) -> Vec<(&str, usize)> {
         sorted_profile_counts(&self.app_allocation_sites, limit)
     }
+
+    pub fn top_eval_frame_push_kinds(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.eval_frame_push_kinds, limit)
+    }
+
+    pub fn top_stack_fallback_heads(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.stack_fallback_heads, limit)
+    }
+
+    pub fn top_stack_eval_step_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
+        sorted_profile_times(&self.stack_eval_step_head_nanos, limit)
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_stack_arg_read_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
+        sorted_profile_times(&self.stack_arg_read_head_nanos, limit)
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_stack_app_alloc_site_times(&self, limit: usize) -> Vec<(&str, u128)> {
+        sorted_profile_times(&self.stack_app_alloc_site_nanos, limit)
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_stack_apply_rewrite_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
+        sorted_profile_times(&self.stack_apply_rewrite_head_nanos, limit)
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_stack_apply_app_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
+        sorted_profile_times(&self.stack_apply_app_head_nanos, limit)
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_stack_force_frame_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
+        sorted_profile_times(&self.stack_force_frame_head_nanos, limit)
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_stack_inner_descent_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
+        sorted_profile_times(&self.stack_inner_descent_head_nanos, limit)
+    }
 }
 
 fn sorted_profile_counts(map: &HashMap<String, usize>, limit: usize) -> Vec<(&str, usize)> {
+    let mut counts: Vec<_> = map
+        .iter()
+        .map(|(key, value)| (key.as_str(), *value))
+        .collect();
+    counts.sort_unstable_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
+    counts.truncate(limit);
+    counts
+}
+
+fn sorted_profile_times(map: &HashMap<String, u128>, limit: usize) -> Vec<(&str, u128)> {
     let mut counts: Vec<_> = map
         .iter()
         .map(|(key, value)| (key.as_str(), *value))
@@ -727,6 +1581,7 @@ fn node_allocation_key(node: &Node) -> &'static str {
     match node {
         Node::App(_, _) => "App",
         Node::Indir(_) => "Indir",
+        Node::Free(_) => "Free",
         Node::Prim(_) => "Prim",
         Node::Int(_) => "Int",
         Node::Int64(_) => "Int64",
@@ -740,6 +1595,7 @@ fn node_allocation_key(node: &Node) -> &'static str {
         Node::MVar(_) => "MVar",
         Node::BigInt(_) => "BigInt",
         Node::Bytes(_) => "Bytes",
+        Node::BytesView(_) => "BytesView",
         Node::MutableBytes(_) => "MutableBytes",
         Node::Array(_) => "Array",
         Node::Ffi(_) => "Ffi",
@@ -748,6 +1604,18 @@ fn node_allocation_key(node: &Node) -> &'static str {
         Node::FunPtr(_) => "FunPtr",
         Node::Tick(_) => "Tick",
     }
+}
+
+fn serialization_shareable_node(node: &Node) -> bool {
+    matches!(
+        node,
+        Node::App(_, _)
+            | Node::ForeignPtr(_)
+            | Node::BigInt(_)
+            | Node::Bytes(_)
+            | Node::MutableBytes(_)
+            | Node::Array(_)
+    )
 }
 
 #[derive(Clone, Debug, Default)]
@@ -766,6 +1634,14 @@ struct PrimCache {
     z: Option<NodeId>,
     io_bind: Option<NodeId>,
     io_perform_io: Option<NodeId>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CompoundCache {
+    fst: Option<NodeId>,
+    snd: Option<NodeId>,
+    just: Option<NodeId>,
+    pair_unit: Option<NodeId>,
 }
 
 struct Spine {
@@ -796,7 +1672,6 @@ enum SpineStorage {
 
 #[derive(Default)]
 struct PersistentSpine {
-    args: VecDeque<NodeId>,
     apps: VecDeque<NodeId>,
 }
 
@@ -805,6 +1680,285 @@ enum PersistentStep {
     Force { node: NodeId },
     Whnf { node: NodeId },
     Fallback { root: NodeId },
+}
+
+enum PersistentHead {
+    Ffi(String),
+    JsCall { tags: String, body: Vec<u8> },
+    JsWrap { tags: String },
+    Known(KnownPrim),
+    Other(StrictPrimitiveAction),
+    Whnf,
+}
+
+enum EvalHead {
+    Ffi(String),
+    JsCall {
+        tags: String,
+        body: Vec<u8>,
+    },
+    JsWrap {
+        tags: String,
+    },
+    Known(KnownPrim),
+    Other {
+        action: StrictPrimitiveAction,
+        fallback_name: Option<&'static str>,
+    },
+    Whnf,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum StrictPrimitiveAction {
+    None,
+    IntBin(IntBinOp),
+    IntUn(IntUnOp),
+    Int64Bin(Int64BinOp),
+    Int64Un(Int64UnOp),
+    Float64Bin(Float64BinOp),
+    Float64Un(Float64UnOp),
+    Float32Bin(Float32BinOp),
+    Float32Un(Float32UnOp),
+    BytesBin(BytesBinOp),
+    Conversion(ConversionFrameKind),
+}
+
+const INT_BIN_RUNTIME_START: u16 = 0;
+const INT_BIN_RUNTIME_OPS: [IntBinOp; 30] = [
+    IntBinOp::Add,
+    IntBinOp::Sub,
+    IntBinOp::Mul,
+    IntBinOp::Quot,
+    IntBinOp::Rem,
+    IntBinOp::SubR,
+    IntBinOp::UAdd,
+    IntBinOp::USub,
+    IntBinOp::UMul,
+    IntBinOp::UQuot,
+    IntBinOp::URem,
+    IntBinOp::USubR,
+    IntBinOp::And,
+    IntBinOp::Or,
+    IntBinOp::Xor,
+    IntBinOp::Shl,
+    IntBinOp::Shr,
+    IntBinOp::Ashr,
+    IntBinOp::Eq,
+    IntBinOp::Ne,
+    IntBinOp::Lt,
+    IntBinOp::Le,
+    IntBinOp::Gt,
+    IntBinOp::Ge,
+    IntBinOp::Ult,
+    IntBinOp::Ule,
+    IntBinOp::Ugt,
+    IntBinOp::Uge,
+    IntBinOp::ICmp,
+    IntBinOp::UCmp,
+];
+
+const INT_UN_RUNTIME_START: u16 = 30;
+const INT_UN_RUNTIME_OPS: [IntUnOp; 6] = [
+    IntUnOp::Neg,
+    IntUnOp::UNeg,
+    IntUnOp::Inv,
+    IntUnOp::PopCount,
+    IntUnOp::Clz,
+    IntUnOp::Ctz,
+];
+
+const INT64_BIN_RUNTIME_START: u16 = 36;
+const INT64_BIN_RUNTIME_OPS: [Int64BinOp; 30] = [
+    Int64BinOp::Add,
+    Int64BinOp::Sub,
+    Int64BinOp::Mul,
+    Int64BinOp::Quot,
+    Int64BinOp::Rem,
+    Int64BinOp::SubR,
+    Int64BinOp::UAdd,
+    Int64BinOp::USub,
+    Int64BinOp::UMul,
+    Int64BinOp::UQuot,
+    Int64BinOp::URem,
+    Int64BinOp::USubR,
+    Int64BinOp::And,
+    Int64BinOp::Or,
+    Int64BinOp::Xor,
+    Int64BinOp::Shl,
+    Int64BinOp::Shr,
+    Int64BinOp::Ashr,
+    Int64BinOp::Eq,
+    Int64BinOp::Ne,
+    Int64BinOp::Lt,
+    Int64BinOp::Le,
+    Int64BinOp::Gt,
+    Int64BinOp::Ge,
+    Int64BinOp::Ult,
+    Int64BinOp::Ule,
+    Int64BinOp::Ugt,
+    Int64BinOp::Uge,
+    Int64BinOp::ICmp,
+    Int64BinOp::UCmp,
+];
+
+const INT64_UN_RUNTIME_START: u16 = 66;
+const INT64_UN_RUNTIME_OPS: [Int64UnOp; 6] = [
+    Int64UnOp::Neg,
+    Int64UnOp::UNeg,
+    Int64UnOp::Inv,
+    Int64UnOp::PopCount,
+    Int64UnOp::Clz,
+    Int64UnOp::Ctz,
+];
+
+const FLOAT64_BIN_RUNTIME_START: u16 = 72;
+const FLOAT64_BIN_RUNTIME_OPS: [Float64BinOp; 10] = [
+    Float64BinOp::Add,
+    Float64BinOp::Sub,
+    Float64BinOp::Mul,
+    Float64BinOp::Div,
+    Float64BinOp::Eq,
+    Float64BinOp::Ne,
+    Float64BinOp::Lt,
+    Float64BinOp::Le,
+    Float64BinOp::Gt,
+    Float64BinOp::Ge,
+];
+
+const FLOAT64_UN_RUNTIME_START: u16 = 82;
+const FLOAT64_UN_RUNTIME_OPS: [Float64UnOp; 1] = [Float64UnOp::Neg];
+
+const FLOAT32_BIN_RUNTIME_START: u16 = 83;
+const FLOAT32_BIN_RUNTIME_OPS: [Float32BinOp; 10] = [
+    Float32BinOp::Add,
+    Float32BinOp::Sub,
+    Float32BinOp::Mul,
+    Float32BinOp::Div,
+    Float32BinOp::Eq,
+    Float32BinOp::Ne,
+    Float32BinOp::Lt,
+    Float32BinOp::Le,
+    Float32BinOp::Gt,
+    Float32BinOp::Ge,
+];
+
+const FLOAT32_UN_RUNTIME_START: u16 = 93;
+const FLOAT32_UN_RUNTIME_OPS: [Float32UnOp; 1] = [Float32UnOp::Neg];
+
+const CONVERSION_RUNTIME_START: u16 = 94;
+const CONVERSION_RUNTIME_OPS: [ConversionFrameKind; 18] = [
+    ConversionFrameKind::IntToInt64,
+    ConversionFrameKind::IntToInt64,
+    ConversionFrameKind::Int64ToInt,
+    ConversionFrameKind::Int64ToInt,
+    ConversionFrameKind::IntToFloat64 { unsigned: false },
+    ConversionFrameKind::IntToFloat64 { unsigned: true },
+    ConversionFrameKind::Int64ToFloat64,
+    ConversionFrameKind::Float64ToInt,
+    ConversionFrameKind::IntToFloat32 { unsigned: false },
+    ConversionFrameKind::IntToFloat32 { unsigned: true },
+    ConversionFrameKind::Int64ToFloat32,
+    ConversionFrameKind::Float32ToInt,
+    ConversionFrameKind::Float64ToFloat32,
+    ConversionFrameKind::Float32ToFloat64,
+    ConversionFrameKind::Int64BitsToFloat64,
+    ConversionFrameKind::Float64BitsToInt64,
+    ConversionFrameKind::IntBitsToFloat32,
+    ConversionFrameKind::Float32BitsToInt,
+];
+
+const BYTES_BIN_RUNTIME_START: u16 = 145;
+const BYTES_BIN_RUNTIME_OPS: [BytesBinOp; 9] = [
+    BytesBinOp::Append,
+    BytesBinOp::AppendDot,
+    BytesBinOp::Eq,
+    BytesBinOp::Ne,
+    BytesBinOp::Lt,
+    BytesBinOp::Le,
+    BytesBinOp::Gt,
+    BytesBinOp::Ge,
+    BytesBinOp::Cmp,
+];
+
+#[inline(always)]
+fn runtime_prim_op<T: Copy, const N: usize>(index: u16, start: u16, ops: &[T; N]) -> Option<T> {
+    let offset = index.checked_sub(start)? as usize;
+    ops.get(offset).copied()
+}
+
+impl RuntimePrim {
+    #[inline(always)]
+    fn strict_action(self, args_len: usize) -> StrictPrimitiveAction {
+        let index = self.0;
+
+        if args_len >= 2 {
+            if let Some(op) = runtime_prim_op(index, INT_BIN_RUNTIME_START, &INT_BIN_RUNTIME_OPS) {
+                return StrictPrimitiveAction::IntBin(op);
+            }
+        }
+        if args_len >= 1 {
+            if let Some(op) = runtime_prim_op(index, INT_UN_RUNTIME_START, &INT_UN_RUNTIME_OPS) {
+                return StrictPrimitiveAction::IntUn(op);
+            }
+        }
+        if args_len >= 2 {
+            if let Some(op) =
+                runtime_prim_op(index, INT64_BIN_RUNTIME_START, &INT64_BIN_RUNTIME_OPS)
+            {
+                return StrictPrimitiveAction::Int64Bin(op);
+            }
+        }
+        if args_len >= 1 {
+            if let Some(op) = runtime_prim_op(index, INT64_UN_RUNTIME_START, &INT64_UN_RUNTIME_OPS)
+            {
+                return StrictPrimitiveAction::Int64Un(op);
+            }
+        }
+        if args_len >= 2 {
+            if let Some(op) =
+                runtime_prim_op(index, FLOAT64_BIN_RUNTIME_START, &FLOAT64_BIN_RUNTIME_OPS)
+            {
+                return StrictPrimitiveAction::Float64Bin(op);
+            }
+        }
+        if args_len >= 1 {
+            if let Some(op) =
+                runtime_prim_op(index, FLOAT64_UN_RUNTIME_START, &FLOAT64_UN_RUNTIME_OPS)
+            {
+                return StrictPrimitiveAction::Float64Un(op);
+            }
+        }
+        if args_len >= 2 {
+            if let Some(op) =
+                runtime_prim_op(index, FLOAT32_BIN_RUNTIME_START, &FLOAT32_BIN_RUNTIME_OPS)
+            {
+                return StrictPrimitiveAction::Float32Bin(op);
+            }
+        }
+        if args_len >= 1 {
+            if let Some(op) =
+                runtime_prim_op(index, FLOAT32_UN_RUNTIME_START, &FLOAT32_UN_RUNTIME_OPS)
+            {
+                return StrictPrimitiveAction::Float32Un(op);
+            }
+        }
+        if args_len >= 2 {
+            if let Some(op) =
+                runtime_prim_op(index, BYTES_BIN_RUNTIME_START, &BYTES_BIN_RUNTIME_OPS)
+            {
+                return StrictPrimitiveAction::BytesBin(op);
+            }
+        }
+        if args_len >= 1 {
+            if let Some(kind) =
+                runtime_prim_op(index, CONVERSION_RUNTIME_START, &CONVERSION_RUNTIME_OPS)
+            {
+                return StrictPrimitiveAction::Conversion(kind);
+            }
+        }
+
+        StrictPrimitiveAction::None
+    }
 }
 
 impl Default for EvalSpine {
@@ -915,14 +2069,11 @@ impl EvalSpine {
         }
     }
 
-    fn write_spine_head_order(&self, args: &mut Vec<NodeId>, apps: &mut Vec<NodeId>) {
-        args.clear();
+    fn write_apps_head_order(&self, apps: &mut Vec<NodeId>) {
         apps.clear();
         let len = self.len();
-        args.reserve(len);
         apps.reserve(len);
         for desc_idx in (0..len).rev() {
-            args.push(self.desc_arg(desc_idx));
             apps.push(self.desc_app(desc_idx));
         }
     }
@@ -930,33 +2081,48 @@ impl EvalSpine {
 
 impl PersistentSpine {
     fn clear(&mut self) {
-        self.args.clear();
         self.apps.clear();
     }
 
     fn len(&self) -> usize {
-        self.args.len()
+        self.apps.len()
     }
 
-    fn push_front(&mut self, arg: NodeId, app: NodeId) {
-        self.args.push_front(arg);
+    fn push_front(&mut self, app: NodeId) {
         self.apps.push_front(app);
     }
 
     fn consume(&mut self, used: usize) {
         debug_assert!(used <= self.len());
         for _ in 0..used {
-            self.args.pop_front();
             self.apps.pop_front();
         }
     }
 
-    fn arg(&self, index: usize) -> NodeId {
-        self.args[index]
+    fn arg(&self, nodes: &[Cell], index: usize) -> Result<NodeId, EvalError> {
+        let app = self.app(index);
+        nodes
+            .get(app.index())
+            .and_then(|cell| cell.app_fields())
+            .map(|(_, arg)| arg)
+            .ok_or(EvalError::DanglingIndirection(app))
     }
 
     fn app(&self, index: usize) -> NodeId {
         self.apps[index]
+    }
+
+    fn write_args_head_order(
+        &self,
+        nodes: &[Cell],
+        args: &mut Vec<NodeId>,
+    ) -> Result<(), EvalError> {
+        args.clear();
+        args.reserve(self.len());
+        for index in 0..self.len() {
+            args.push(self.arg(nodes, index)?);
+        }
+        Ok(())
     }
 
     fn outer_root(&self, head: NodeId) -> NodeId {
@@ -1004,9 +2170,11 @@ struct EvalLoopStep {
     reductions: usize,
 }
 
+type ProfileHead = Option<NodeId>;
+
 struct WhnfFrame {
     redex: StrictRedex,
-    profile_head: Option<String>,
+    profile_head: ProfileHead,
     kind: WhnfFrameKind,
 }
 
@@ -1018,7 +2186,7 @@ enum WhnfFrameKind {
 
 struct IntFrame {
     redex: StrictRedex,
-    profile_head: Option<String>,
+    profile_head: ProfileHead,
     kind: IntFrameKind,
 }
 
@@ -1027,7 +2195,6 @@ enum StrictRedex {
     Spine {
         root: NodeId,
         used: usize,
-        args: Vec<NodeId>,
         apps: Vec<NodeId>,
     },
 }
@@ -1040,7 +2207,7 @@ enum IntFrameKind {
 
 struct Int64Frame {
     redex: StrictRedex,
-    profile_head: Option<String>,
+    profile_head: ProfileHead,
     kind: Int64FrameKind,
 }
 
@@ -1053,14 +2220,14 @@ enum Int64FrameKind {
 
 struct Int64ShiftFrame {
     redex: StrictRedex,
-    profile_head: Option<String>,
+    profile_head: ProfileHead,
     op: Int64BinOp,
     x: NodeId,
 }
 
 struct Float64Frame {
     redex: StrictRedex,
-    profile_head: Option<String>,
+    profile_head: ProfileHead,
     kind: Float64FrameKind,
 }
 
@@ -1072,7 +2239,7 @@ enum Float64FrameKind {
 
 struct Float32Frame {
     redex: StrictRedex,
-    profile_head: Option<String>,
+    profile_head: ProfileHead,
     kind: Float32FrameKind,
 }
 
@@ -1084,7 +2251,7 @@ enum Float32FrameKind {
 
 struct BytesFrame {
     redex: StrictRedex,
-    profile_head: Option<String>,
+    profile_head: ProfileHead,
     kind: BytesFrameKind,
 }
 
@@ -1095,7 +2262,7 @@ enum BytesFrameKind {
 
 struct ConversionFrame {
     redex: StrictRedex,
-    profile_head: Option<String>,
+    profile_head: ProfileHead,
     kind: ConversionFrameKind,
 }
 
@@ -1169,60 +2336,448 @@ impl<T> FrameStack<T> {
 
 type EvalFrameStack = FrameStack<EvalFrame>;
 
+struct StackWhnfFrame {
+    prev_app_base: usize,
+    redex: NodeId,
+    used: usize,
+    profile_head: ProfileHead,
+    kind: WhnfFrameKind,
+}
+
+struct StackIntFrame {
+    prev_app_base: usize,
+    redex: NodeId,
+    profile_head: ProfileHead,
+    kind: IntFrameKind,
+}
+
+struct StackInt64Frame {
+    prev_app_base: usize,
+    app_end: usize,
+    used: usize,
+    profile_head: ProfileHead,
+    kind: Int64FrameKind,
+}
+
+struct StackInt64ShiftFrame {
+    prev_app_base: usize,
+    app_end: usize,
+    used: usize,
+    profile_head: ProfileHead,
+    op: Int64BinOp,
+    x: NodeId,
+}
+
+struct StackFloat64Frame {
+    prev_app_base: usize,
+    app_end: usize,
+    used: usize,
+    profile_head: ProfileHead,
+    kind: Float64FrameKind,
+}
+
+struct StackFloat32Frame {
+    prev_app_base: usize,
+    app_end: usize,
+    used: usize,
+    profile_head: ProfileHead,
+    kind: Float32FrameKind,
+}
+
+struct StackBytesFrame {
+    prev_app_base: usize,
+    app_end: usize,
+    used: usize,
+    profile_head: ProfileHead,
+    kind: BytesFrameKind,
+}
+
+struct StackConversionFrame {
+    prev_app_base: usize,
+    app_end: usize,
+    used: usize,
+    profile_head: ProfileHead,
+    kind: ConversionFrameKind,
+}
+
+enum StackFrame {
+    Whnf(StackWhnfFrame),
+    Int(StackIntFrame),
+    Int64(StackInt64Frame),
+    Int64Shift(StackInt64ShiftFrame),
+    Float64(StackFloat64Frame),
+    Float32(StackFloat32Frame),
+    Bytes(StackBytesFrame),
+    Conversion(StackConversionFrame),
+}
+
+#[derive(Default)]
+struct EvalStack {
+    apps: Vec<NodeId>,
+    frames: Vec<StackFrame>,
+    app_base: usize,
+}
+
+enum StackStep {
+    Reduced {
+        node: NodeId,
+        reductions: usize,
+    },
+    Whnf {
+        node: NodeId,
+        head: NodeId,
+        reductions: usize,
+    },
+    Fallback {
+        root: NodeId,
+        head: NodeId,
+        reductions: usize,
+    },
+}
+
+impl StackFrame {
+    fn prev_app_base(&self) -> usize {
+        match self {
+            Self::Whnf(frame) => frame.prev_app_base,
+            Self::Int(frame) => frame.prev_app_base,
+            Self::Int64(frame) => frame.prev_app_base,
+            Self::Int64Shift(frame) => frame.prev_app_base,
+            Self::Float64(frame) => frame.prev_app_base,
+            Self::Float32(frame) => frame.prev_app_base,
+            Self::Bytes(frame) => frame.prev_app_base,
+            Self::Conversion(frame) => frame.prev_app_base,
+        }
+    }
+}
+
+impl EvalStack {
+    fn push_app(&mut self, app: NodeId) {
+        self.apps.push(app);
+    }
+
+    fn app_unchecked(&self, index: usize) -> NodeId {
+        debug_assert!(index < self.apps.len());
+        unsafe { *self.apps.get_unchecked(index) }
+    }
+
+    fn app_base(&self) -> usize {
+        self.app_base
+    }
+
+    fn app_len(&self) -> usize {
+        self.apps.len() - self.app_base()
+    }
+
+    fn arg(&self, nodes: &[Cell], index: usize) -> NodeId {
+        let app_index = self.apps.len() - index - 1;
+        self.arg_at_app(nodes, app_index)
+    }
+
+    fn arg_at_app(&self, nodes: &[Cell], app_index: usize) -> NodeId {
+        debug_assert!(app_index < self.apps.len());
+        // The stack app segment is built only by descending through App
+        // cells. Match eval.c's ARG(TOP(i)) discipline in the hot path.
+        unsafe {
+            let app = *self.apps.get_unchecked(app_index);
+            nodes.get_unchecked(app.index()).id_word1()
+        }
+    }
+
+    fn arg_from_app(nodes: &[Cell], app: NodeId) -> NodeId {
+        unsafe { nodes.get_unchecked(app.index()).id_word1() }
+    }
+
+    fn take_args1(&mut self, nodes: &[Cell]) -> (NodeId, NodeId) {
+        let end = self.apps.len();
+        debug_assert!(self.app_len() >= 1);
+        let redex_index = end - 1;
+        let redex = unsafe { *self.apps.get_unchecked(redex_index) };
+        let x = Self::arg_from_app(nodes, redex);
+        self.apps.truncate(redex_index);
+        (redex, x)
+    }
+
+    fn take_args2(&mut self, nodes: &[Cell]) -> (NodeId, NodeId, NodeId) {
+        let end = self.apps.len();
+        debug_assert!(self.app_len() >= 2);
+        let redex_index = end - 2;
+        let x_app = unsafe { *self.apps.get_unchecked(end - 1) };
+        let redex = unsafe { *self.apps.get_unchecked(redex_index) };
+        let x = Self::arg_from_app(nodes, x_app);
+        let y = Self::arg_from_app(nodes, redex);
+        self.apps.truncate(redex_index);
+        (redex, x, y)
+    }
+
+    fn take_args3(&mut self, nodes: &[Cell]) -> (NodeId, NodeId, NodeId, NodeId) {
+        let end = self.apps.len();
+        debug_assert!(self.app_len() >= 3);
+        let redex_index = end - 3;
+        let x_app = unsafe { *self.apps.get_unchecked(end - 1) };
+        let y_app = unsafe { *self.apps.get_unchecked(end - 2) };
+        let redex = unsafe { *self.apps.get_unchecked(redex_index) };
+        let x = Self::arg_from_app(nodes, x_app);
+        let y = Self::arg_from_app(nodes, y_app);
+        let z = Self::arg_from_app(nodes, redex);
+        self.apps.truncate(redex_index);
+        (redex, x, y, z)
+    }
+
+    fn take_args4(&mut self, nodes: &[Cell]) -> (NodeId, NodeId, NodeId, NodeId, NodeId) {
+        let end = self.apps.len();
+        debug_assert!(self.app_len() >= 4);
+        let redex_index = end - 4;
+        let x_app = unsafe { *self.apps.get_unchecked(end - 1) };
+        let y_app = unsafe { *self.apps.get_unchecked(end - 2) };
+        let z_app = unsafe { *self.apps.get_unchecked(end - 3) };
+        let redex = unsafe { *self.apps.get_unchecked(redex_index) };
+        let x = Self::arg_from_app(nodes, x_app);
+        let y = Self::arg_from_app(nodes, y_app);
+        let z = Self::arg_from_app(nodes, z_app);
+        let w = Self::arg_from_app(nodes, redex);
+        self.apps.truncate(redex_index);
+        (redex, x, y, z, w)
+    }
+
+    fn take_args5(&mut self, nodes: &[Cell]) -> (NodeId, NodeId, NodeId, NodeId, NodeId, NodeId) {
+        let end = self.apps.len();
+        debug_assert!(self.app_len() >= 5);
+        let redex_index = end - 5;
+        let x_app = unsafe { *self.apps.get_unchecked(end - 1) };
+        let y_app = unsafe { *self.apps.get_unchecked(end - 2) };
+        let z_app = unsafe { *self.apps.get_unchecked(end - 3) };
+        let w_app = unsafe { *self.apps.get_unchecked(end - 4) };
+        let redex = unsafe { *self.apps.get_unchecked(redex_index) };
+        let x = Self::arg_from_app(nodes, x_app);
+        let y = Self::arg_from_app(nodes, y_app);
+        let z = Self::arg_from_app(nodes, z_app);
+        let w = Self::arg_from_app(nodes, w_app);
+        let v = Self::arg_from_app(nodes, redex);
+        self.apps.truncate(redex_index);
+        (redex, x, y, z, w, v)
+    }
+
+    fn outer_root(&self, head: NodeId) -> NodeId {
+        let base = self.app_base();
+        if base == self.apps.len() {
+            return head;
+        }
+        self.apps[base]
+    }
+
+    fn has_frame_below_apps(&self) -> bool {
+        !self.frames.is_empty()
+    }
+
+    fn top_is_frame(&self) -> bool {
+        !self.frames.is_empty() && self.apps.len() == self.app_base
+    }
+
+    fn peek_frame(&self) -> Option<&StackFrame> {
+        if self.top_is_frame() {
+            self.frames.last()
+        } else {
+            None
+        }
+    }
+
+    fn push_whnf_frame(
+        &mut self,
+        redex: NodeId,
+        used: usize,
+        profile_head: ProfileHead,
+        kind: WhnfFrameKind,
+    ) {
+        let prev_app_base = self.app_base;
+        self.frames.push(StackFrame::Whnf(StackWhnfFrame {
+            prev_app_base,
+            redex,
+            used,
+            profile_head,
+            kind,
+        }));
+        self.app_base = self.apps.len();
+    }
+
+    fn push_int_frame(&mut self, redex: NodeId, profile_head: ProfileHead, kind: IntFrameKind) {
+        let prev_app_base = self.app_base;
+        self.frames.push(StackFrame::Int(StackIntFrame {
+            prev_app_base,
+            redex,
+            profile_head,
+            kind,
+        }));
+        self.app_base = self.apps.len();
+    }
+
+    fn push_int64_frame(
+        &mut self,
+        app_end: usize,
+        used: usize,
+        profile_head: ProfileHead,
+        kind: Int64FrameKind,
+    ) {
+        let prev_app_base = self.app_base;
+        self.frames.push(StackFrame::Int64(StackInt64Frame {
+            prev_app_base,
+            app_end,
+            used,
+            profile_head,
+            kind,
+        }));
+        self.app_base = self.apps.len();
+    }
+
+    fn push_int64_shift_frame(
+        &mut self,
+        app_end: usize,
+        used: usize,
+        profile_head: ProfileHead,
+        op: Int64BinOp,
+        x: NodeId,
+    ) {
+        let prev_app_base = self.app_base;
+        self.frames
+            .push(StackFrame::Int64Shift(StackInt64ShiftFrame {
+                prev_app_base,
+                app_end,
+                used,
+                profile_head,
+                op,
+                x,
+            }));
+        self.app_base = self.apps.len();
+    }
+
+    fn push_float64_frame(
+        &mut self,
+        app_end: usize,
+        used: usize,
+        profile_head: ProfileHead,
+        kind: Float64FrameKind,
+    ) {
+        let prev_app_base = self.app_base;
+        self.frames.push(StackFrame::Float64(StackFloat64Frame {
+            prev_app_base,
+            app_end,
+            used,
+            profile_head,
+            kind,
+        }));
+        self.app_base = self.apps.len();
+    }
+
+    fn push_float32_frame(
+        &mut self,
+        app_end: usize,
+        used: usize,
+        profile_head: ProfileHead,
+        kind: Float32FrameKind,
+    ) {
+        let prev_app_base = self.app_base;
+        self.frames.push(StackFrame::Float32(StackFloat32Frame {
+            prev_app_base,
+            app_end,
+            used,
+            profile_head,
+            kind,
+        }));
+        self.app_base = self.apps.len();
+    }
+
+    fn push_bytes_frame(
+        &mut self,
+        app_end: usize,
+        used: usize,
+        profile_head: ProfileHead,
+        kind: BytesFrameKind,
+    ) {
+        let prev_app_base = self.app_base;
+        self.frames.push(StackFrame::Bytes(StackBytesFrame {
+            prev_app_base,
+            app_end,
+            used,
+            profile_head,
+            kind,
+        }));
+        self.app_base = self.apps.len();
+    }
+
+    fn push_conversion_frame(
+        &mut self,
+        app_end: usize,
+        used: usize,
+        profile_head: ProfileHead,
+        kind: ConversionFrameKind,
+    ) {
+        let prev_app_base = self.app_base;
+        self.frames
+            .push(StackFrame::Conversion(StackConversionFrame {
+                prev_app_base,
+                app_end,
+                used,
+                profile_head,
+                kind,
+            }));
+        self.app_base = self.apps.len();
+    }
+
+    fn pop_frame(&mut self) -> Option<StackFrame> {
+        if self.top_is_frame() {
+            let frame = self.frames.pop().expect("frame marker must have payload");
+            self.app_base = frame.prev_app_base();
+            Some(frame)
+        } else {
+            None
+        }
+    }
+
+    fn write_args_head_order(
+        &self,
+        nodes: &[Cell],
+        args: &mut Vec<NodeId>,
+    ) -> Result<(), EvalError> {
+        args.clear();
+        args.reserve(self.app_len());
+        for index in 0..self.app_len() {
+            args.push(self.arg(nodes, index));
+        }
+        Ok(())
+    }
+
+    fn write_args_head_order_prefix(
+        &self,
+        nodes: &[Cell],
+        args: &mut Vec<NodeId>,
+        limit: usize,
+    ) -> Result<(), EvalError> {
+        args.clear();
+        let len = self.app_len().min(limit);
+        args.reserve(len);
+        for index in 0..len {
+            args.push(self.arg(nodes, index));
+        }
+        Ok(())
+    }
+}
+
 impl ConversionFrameKind {
-    fn from_prim_named(name: &str) -> Option<(Self, &'static str)> {
-        Some(match name {
-            "itoI" => (Self::IntToInt64, "itoI"),
-            "utoU" => (Self::IntToInt64, "utoU"),
-            "Itoi" => (Self::Int64ToInt, "Itoi"),
-            "Utou" => (Self::Int64ToInt, "Utou"),
-            "itod" => (Self::IntToFloat64 { unsigned: false }, "itod"),
-            "utod" => (Self::IntToFloat64 { unsigned: true }, "utod"),
-            "Itod" => (Self::Int64ToFloat64, "Itod"),
-            "dtoi" => (Self::Float64ToInt, "dtoi"),
-            "itof" => (Self::IntToFloat32 { unsigned: false }, "itof"),
-            "utof" => (Self::IntToFloat32 { unsigned: true }, "utof"),
-            "Itof" => (Self::Int64ToFloat32, "Itof"),
-            "ftoi" => (Self::Float32ToInt, "ftoi"),
-            "dtof" => (Self::Float64ToFloat32, "dtof"),
-            "ftod" => (Self::Float32ToFloat64, "ftod"),
-            "toDbl" => (Self::Int64BitsToFloat64, "toDbl"),
-            "fromDbl" => (Self::Float64BitsToInt64, "fromDbl"),
-            "toFlt" => (Self::IntBitsToFloat32, "toFlt"),
-            "fromFlt" => (Self::Float32BitsToInt, "fromFlt"),
-            _ => return None,
-        })
-    }
-
-    fn from_prim(name: &str) -> Option<Self> {
-        Self::from_prim_named(name).map(|(kind, _)| kind)
-    }
-
-    fn ready_value(self, node: &Node) -> Option<ConversionValue> {
-        match (self, node) {
-            (
-                Self::IntToInt64
-                | Self::IntToFloat64 { .. }
-                | Self::IntToFloat32 { .. }
-                | Self::IntBitsToFloat32,
-                Node::Int(value),
-            ) => Some(ConversionValue::Int(*value)),
-            (
-                Self::Int64ToInt
-                | Self::Int64ToFloat64
-                | Self::Int64ToFloat32
-                | Self::Int64BitsToFloat64,
-                Node::Int64(value),
-            ) => Some(ConversionValue::Int64(*value)),
-            (
-                Self::Float64ToInt | Self::Float64ToFloat32 | Self::Float64BitsToInt64,
-                Node::Float64(value),
-            ) => Some(ConversionValue::Float64(*value)),
-            (
-                Self::Float32ToInt | Self::Float32ToFloat64 | Self::Float32BitsToInt,
-                Node::Float32(value),
-            ) => Some(ConversionValue::Float32(*value)),
-            _ => None,
+    fn ready_cell_value(self, cell: Cell) -> Option<ConversionValue> {
+        match self {
+            Self::IntToInt64
+            | Self::IntToFloat64 { .. }
+            | Self::IntToFloat32 { .. }
+            | Self::IntBitsToFloat32 => cell.int_value().map(ConversionValue::Int),
+            Self::Int64ToInt
+            | Self::Int64ToFloat64
+            | Self::Int64ToFloat32
+            | Self::Int64BitsToFloat64 => cell.int64_value().map(ConversionValue::Int64),
+            Self::Float64ToInt | Self::Float64ToFloat32 | Self::Float64BitsToInt64 => {
+                cell.float64_value().map(ConversionValue::Float64)
+            }
+            Self::Float32ToInt | Self::Float32ToFloat64 | Self::Float32BitsToInt => {
+                cell.float32_value().map(ConversionValue::Float32)
+            }
         }
     }
 
@@ -1253,34 +2808,53 @@ impl Program {
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(GC_NODE_INTERVAL);
         let high_water_nodes = nodes.len();
-        let next_gc_nodes = if gc_node_interval == 0 {
-            usize::MAX
-        } else {
-            nodes.len().saturating_add(gc_node_interval)
-        };
+        let mut cold_nodes = Vec::new();
+        let nodes = nodes
+            .into_iter()
+            .map(|node| Cell::from_node(node, &mut cold_nodes))
+            .collect::<Vec<_>>();
         let mut small_ints = [None; SMALL_INT_COUNT];
         for (index, node) in nodes.iter().enumerate() {
-            if let Node::Int(value) = node {
-                if let Some(slot) = small_int_index(*value) {
-                    small_ints[slot].get_or_insert(NodeId(index));
+            if let Some(value) = node.int_value() {
+                if let Some(slot) = small_int_index(value) {
+                    small_ints[slot].get_or_insert(NodeId::from_index(index));
                 }
             }
         }
         Self {
             nodes,
+            cold_nodes,
             root,
             labels,
             node_pointers: Vec::new(),
             node_pointer_slots: HashMap::new(),
-            free_nodes: Vec::new(),
+            free_head: None,
+            free_nodes: 0,
             gc_node_interval,
-            next_gc_nodes,
+            gc_allocations_since_collect: 0,
+            gc_last_allocations_since_collect: 0,
             gc_collections: 0,
             gc_freed_nodes_total: 0,
             gc_last_live_nodes: high_water_nodes,
             gc_last_free_nodes: 0,
             gc_high_water_nodes: high_water_nodes,
+            gc_last_pause_nanos: 0,
+            gc_total_pause_nanos: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_last_mark_nanos: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_total_mark_nanos: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_last_sweep_nanos: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_total_sweep_nanos: 0,
+            gc_marked: Vec::new(),
+            gc_mark_work: Vec::new(),
+            gc_foreign_finalizer_marked: Vec::new(),
+            gc_events: Vec::new(),
             stable_ptrs: vec![None],
+            foreign_finalizers: Vec::new(),
+            foreign_finalizer_free: Vec::new(),
             allocations: Vec::new(),
             bfiles: Vec::new(),
             dirs: Vec::new(),
@@ -1294,9 +2868,12 @@ impl Program {
             js_program_handle: None,
             js_wrapper_tags: Vec::new(),
             prim_cache: PrimCache::default(),
+            compound_cache: CompoundCache::default(),
             small_ints,
             world: None,
             profile: None,
+            trace_expected_bytes: std::env::var_os("MHS_TRACE_EXPECTED_BYTES").is_some(),
+            reduce_depth: 0,
         }
     }
 
@@ -1304,8 +2881,90 @@ impl Program {
         self.root
     }
 
-    pub fn nodes(&self) -> &[Node] {
-        &self.nodes
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn node_for_debug(&self, id: NodeId) -> Node {
+        self.nodes[id.index()].to_node(&self.cold_nodes)
+    }
+
+    pub fn nodes(&self) -> Vec<Node> {
+        self.nodes
+            .iter()
+            .copied()
+            .map(|cell| cell.to_node(&self.cold_nodes))
+            .collect()
+    }
+
+    fn cell(&self, id: NodeId) -> Cell {
+        self.nodes[id.index()]
+    }
+
+    fn cell_at(&self, index: usize) -> Cell {
+        self.nodes[index]
+    }
+
+    #[inline]
+    fn app_fun(&self, id: NodeId) -> Option<NodeId> {
+        let word0 = self.nodes[id.index()].word0;
+        ((word0 & CELL_TAG_BITS) == CellTag::App.bits())
+            .then(|| NodeId((word0 >> CELL_PAYLOAD_SHIFT) as u32))
+    }
+
+    fn set_cell_at(&mut self, index: usize, cell: Cell) {
+        self.drop_cold_payload(index);
+        self.nodes[index] = cell;
+    }
+
+    fn set_app_cell_at(&mut self, index: usize, cell: Cell) {
+        debug_assert_eq!(self.nodes[index].tag(), CellTag::App);
+        self.nodes[index] = cell;
+    }
+
+    fn set_free_cell_at(&mut self, index: usize, cell: Cell) {
+        debug_assert_eq!(self.nodes[index].tag(), CellTag::Free);
+        self.nodes[index] = cell;
+    }
+
+    fn set_app_node_at(&mut self, index: usize, node: Node) {
+        debug_assert_eq!(self.nodes[index].tag(), CellTag::App);
+        self.nodes[index] = Cell::from_node(node, &mut self.cold_nodes);
+    }
+
+    fn set_node_at(&mut self, index: usize, node: Node) {
+        self.drop_cold_payload(index);
+        self.nodes[index] = Cell::from_node(node, &mut self.cold_nodes);
+    }
+
+    fn push_cell(&mut self, cell: Cell) -> NodeId {
+        let id = NodeId::from_index(self.nodes.len());
+        self.nodes.push(cell);
+        self.gc_high_water_nodes = self.gc_high_water_nodes.max(self.nodes.len());
+        id
+    }
+
+    fn push_node_fresh(&mut self, node: Node) -> NodeId {
+        let cell = Cell::from_node(node, &mut self.cold_nodes);
+        self.push_cell(cell)
+    }
+
+    fn cold_node(&self, id: NodeId) -> Option<&Node> {
+        let cold = self.cell(id).cold_index()?;
+        self.cold_nodes.get(cold)?.as_ref()
+    }
+
+    fn cold_node_mut(&mut self, id: NodeId) -> Option<&mut Node> {
+        let cold = self.cell(id).cold_index()?;
+        self.cold_nodes.get_mut(cold)?.as_mut()
+    }
+
+    fn drop_cold_payload(&mut self, index: usize) {
+        if let Some(cold) = self.nodes[index].cold_index() {
+            if let Some(slot) = self.cold_nodes.get_mut(cold) {
+                *slot = None;
+            }
+        }
     }
 
     pub fn set_program_args(&mut self, args: Vec<Vec<u8>>) {
@@ -1333,18 +2992,62 @@ impl Program {
         self.labels.get(&label).copied()
     }
 
+    #[inline]
+    fn pop_free_node(&mut self) -> Option<usize> {
+        if self.free_nodes == 0 {
+            return None;
+        }
+        let head = match self.free_head {
+            Some(head) => head,
+            None => unsafe {
+                std::hint::unreachable_unchecked();
+            },
+        };
+        let index = head.index();
+        let cell = self.cell_at(index);
+        debug_assert_eq!(
+            cell.tag(),
+            CellTag::Free,
+            "free-list head did not point to a free node"
+        );
+        self.free_head = cell.option_id_word1();
+        self.free_nodes -= 1;
+        Some(index)
+    }
+
+    fn push_free_node(&mut self, index: usize) {
+        self.set_cell_at(
+            index,
+            Cell {
+                word0: CellTag::Free.bits(),
+                word1: pack_option_id(self.free_head),
+            },
+        );
+        self.free_head = Some(NodeId::from_index(index));
+        self.free_nodes += 1;
+    }
+
     pub fn push_node(&mut self, node: Node) -> NodeId {
         if self.profile.is_some() {
             self.profile_node_allocation(&node);
         }
-        if let Some(index) = self.free_nodes.pop() {
-            self.nodes[index] = node;
-            NodeId(index)
+        self.gc_allocations_since_collect = self.gc_allocations_since_collect.saturating_add(1);
+        if let Some(index) = self.pop_free_node() {
+            self.set_node_at(index, node);
+            NodeId::from_index(index)
         } else {
-            let id = NodeId(self.nodes.len());
-            self.nodes.push(node);
-            self.gc_high_water_nodes = self.gc_high_water_nodes.max(self.nodes.len());
-            id
+            self.push_node_fresh(node)
+        }
+    }
+
+    #[inline]
+    fn push_app_node(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
+        self.gc_allocations_since_collect = self.gc_allocations_since_collect.saturating_add(1);
+        if let Some(index) = self.pop_free_node() {
+            self.set_free_cell_at(index, Cell::app(fun, arg));
+            NodeId::from_index(index)
+        } else {
+            self.push_cell(Cell::app(fun, arg))
         }
     }
 
@@ -1356,12 +3059,25 @@ impl Program {
             last_free_nodes: self.gc_last_free_nodes,
             high_water_nodes: self.gc_high_water_nodes,
             current_nodes: self.nodes.len(),
-            current_free_nodes: self.free_nodes.len(),
+            current_free_nodes: self.free_nodes,
+            last_pause_nanos: self.gc_last_pause_nanos,
+            total_pause_nanos: self.gc_total_pause_nanos,
+            #[cfg(feature = "gc-phase-profile")]
+            last_mark_nanos: self.gc_last_mark_nanos,
+            #[cfg(feature = "gc-phase-profile")]
+            total_mark_nanos: self.gc_total_mark_nanos,
+            #[cfg(feature = "gc-phase-profile")]
+            last_sweep_nanos: self.gc_last_sweep_nanos,
+            #[cfg(feature = "gc-phase-profile")]
+            total_sweep_nanos: self.gc_total_sweep_nanos,
+            last_allocations_since_collect: self.gc_last_allocations_since_collect,
+            current_allocations_since_collect: self.gc_allocations_since_collect,
+            events: self.gc_events.clone(),
         }
     }
 
     fn mark_node_id(marked: &mut [bool], work: &mut Vec<NodeId>, id: NodeId) {
-        if let Some(mark) = marked.get_mut(id.0) {
+        if let Some(mark) = marked.get_mut(id.index()) {
             if !*mark {
                 *mark = true;
                 work.push(id);
@@ -1389,11 +3105,9 @@ impl Program {
     fn mark_strict_redex(marked: &mut [bool], work: &mut Vec<NodeId>, redex: &StrictRedex) {
         match redex {
             StrictRedex::Root(root) => Self::mark_node_id(marked, work, *root),
-            StrictRedex::Spine {
-                root, args, apps, ..
-            } => {
+            StrictRedex::Spine { root, apps, .. } => {
                 Self::mark_node_id(marked, work, *root);
-                for id in args.iter().chain(apps) {
+                for id in apps {
                     Self::mark_node_id(marked, work, *id);
                 }
             }
@@ -1415,8 +3129,9 @@ impl Program {
             }
             EvalFrame::Int(frame) => {
                 Self::mark_strict_redex(marked, work, &frame.redex);
-                if let IntFrameKind::BinSecond { x, .. } = &frame.kind {
-                    Self::mark_node_id(marked, work, *x);
+                match &frame.kind {
+                    IntFrameKind::BinSecond { x, .. } => Self::mark_node_id(marked, work, *x),
+                    IntFrameKind::BinFirst { .. } | IntFrameKind::Un { .. } => {}
                 }
             }
             EvalFrame::Int64(frame) => {
@@ -1466,6 +3181,59 @@ impl Program {
         }
     }
 
+    fn mark_machine_stack(&self, marked: &mut [bool], work: &mut Vec<NodeId>, stack: &EvalStack) {
+        for app in &stack.apps {
+            Self::mark_node_id(marked, work, *app);
+        }
+        for frame in &stack.frames {
+            match frame {
+                StackFrame::Whnf(frame) => {
+                    Self::mark_node_id(marked, work, frame.redex);
+                    match &frame.kind {
+                        WhnfFrameKind::Seq { result } => Self::mark_node_id(marked, work, *result),
+                        WhnfFrameKind::IoStrict { action, value } => {
+                            Self::mark_node_id(marked, work, *action);
+                            Self::mark_node_id(marked, work, *value);
+                        }
+                        WhnfFrameKind::IsInt => {}
+                    }
+                }
+                StackFrame::Int(frame) => match &frame.kind {
+                    IntFrameKind::BinSecond { x, .. } => {
+                        Self::mark_node_id(marked, work, frame.redex);
+                        Self::mark_node_id(marked, work, *x);
+                    }
+                    IntFrameKind::BinFirst { .. } | IntFrameKind::Un { .. } => {
+                        Self::mark_node_id(marked, work, frame.redex);
+                    }
+                },
+                StackFrame::Int64(frame) => {
+                    if let Int64FrameKind::BinSecond { x, .. } = &frame.kind {
+                        Self::mark_node_id(marked, work, *x);
+                    }
+                }
+                StackFrame::Int64Shift(frame) => {
+                    Self::mark_node_id(marked, work, frame.x);
+                }
+                StackFrame::Float64(frame) => {
+                    if let Float64FrameKind::BinSecond { x, .. } = &frame.kind {
+                        Self::mark_node_id(marked, work, *x);
+                    }
+                }
+                StackFrame::Float32(frame) => {
+                    if let Float32FrameKind::BinSecond { x, .. } = &frame.kind {
+                        Self::mark_node_id(marked, work, *x);
+                    }
+                }
+                StackFrame::Bytes(frame) => match &frame.kind {
+                    BytesFrameKind::BinSecond { x, .. } => Self::mark_node_id(marked, work, *x),
+                    BytesFrameKind::BinFirst { y, .. } => Self::mark_node_id(marked, work, *y),
+                },
+                StackFrame::Conversion(_) => {}
+            }
+        }
+    }
+
     fn mark_eval_spine(marked: &mut [bool], work: &mut Vec<NodeId>, spine: &EvalSpine) {
         for idx in 0..spine.len() {
             Self::mark_node_id(marked, work, spine.desc_arg(idx));
@@ -1474,7 +3242,7 @@ impl Program {
     }
 
     fn mark_persistent_spine(marked: &mut [bool], work: &mut Vec<NodeId>, spine: &PersistentSpine) {
-        for id in spine.args.iter().chain(&spine.apps) {
+        for id in &spine.apps {
             Self::mark_node_id(marked, work, *id);
         }
     }
@@ -1489,12 +3257,10 @@ impl Program {
         persistent_spine: &PersistentSpine,
         scratch_args: &[NodeId],
         scratch_apps: &[NodeId],
+        machine_stack: Option<&EvalStack>,
     ) {
         Self::mark_node_id(marked, work, self.root);
         Self::mark_node_id(marked, work, current_root);
-        for id in self.labels.values() {
-            Self::mark_node_id(marked, work, *id);
-        }
         for id in self.stable_ptrs.iter().flatten() {
             Self::mark_node_id(marked, work, *id);
         }
@@ -1522,6 +3288,10 @@ impl Program {
             self.prim_cache.z,
             self.prim_cache.io_bind,
             self.prim_cache.io_perform_io,
+            self.compound_cache.fst,
+            self.compound_cache.snd,
+            self.compound_cache.just,
+            self.compound_cache.pair_unit,
         ]
         .into_iter()
         .flatten()
@@ -1529,6 +3299,9 @@ impl Program {
             Self::mark_node_id(marked, work, id);
         }
         self.mark_eval_stack(marked, work, frame_stack);
+        if let Some(machine_stack) = machine_stack {
+            self.mark_machine_stack(marked, work, machine_stack);
+        }
         Self::mark_eval_spine(marked, work, eval_spine);
         Self::mark_persistent_spine(marked, work, persistent_spine);
         for id in scratch_args.iter().chain(scratch_apps) {
@@ -1536,58 +3309,161 @@ impl Program {
         }
     }
 
-    fn mark_reachable(&self, marked: &mut [bool], work: &mut Vec<NodeId>) {
-        while let Some(id) = work.pop() {
-            let Some(node) = self.nodes.get(id.0) else {
-                continue;
-            };
-            match node {
-                Node::App(fun, arg) => {
-                    Self::mark_node_id(marked, work, *fun);
-                    Self::mark_node_id(marked, work, *arg);
-                }
-                Node::Indir(Some(next)) => Self::mark_node_id(marked, work, *next),
-                Node::ForeignPtr(foreign_ptr) => {
-                    if let Some(finalizer) = foreign_ptr.finalizer {
-                        Self::mark_node_id(marked, work, finalizer);
-                    }
-                    self.mark_pointer_target(marked, work, foreign_ptr.ptr);
-                }
-                Node::Weak(weak) => {
-                    if let Some(value) = weak.value {
-                        Self::mark_node_id(marked, work, value);
-                    }
-                    if let Some(finalizer) = weak.finalizer {
-                        Self::mark_node_id(marked, work, finalizer);
+    fn compress_marked_indirection(&mut self, id: NodeId) -> Option<NodeId> {
+        let mut current = id;
+        let mut depth = 0usize;
+        loop {
+            match self.nodes.get(current.index()).map(|cell| cell.tag()) {
+                Some(CellTag::Indir) => {
+                    let Some(next) = self.nodes[current.index()].option_id_word1() else {
+                        return None;
+                    };
+                    current = next;
+                    depth += 1;
+                    if depth > self.nodes.len() {
+                        return None;
                     }
                 }
-                Node::MVar(Some(value)) => Self::mark_node_id(marked, work, *value),
-                Node::Array(items) => {
-                    for item in items {
-                        Self::mark_node_id(marked, work, *item);
-                    }
-                }
-                Node::Ptr(ptr) | Node::RawFunPtr(ptr) => {
-                    self.mark_pointer_target(marked, work, *ptr);
-                }
-                Node::Indir(None)
-                | Node::Prim(_)
-                | Node::Int(_)
-                | Node::Int64(_)
-                | Node::Float64(_)
-                | Node::Float32(_)
-                | Node::ThreadId(_)
-                | Node::MVar(None)
-                | Node::BigInt(_)
-                | Node::Bytes(_)
-                | Node::MutableBytes(_)
-                | Node::Ffi(_)
-                | Node::JsCall(_)
-                | Node::JsWrap { .. }
-                | Node::FunPtr(_)
-                | Node::Tick(_) => {}
+                Some(CellTag::Free) | None => return None,
+                Some(_) => break,
             }
         }
+        if depth > 1 {
+            self.set_cell_at(id.index(), Cell::indir(Some(current)));
+        }
+        Some(current)
+    }
+
+    fn canonical_gc_target(&mut self, id: NodeId) -> Option<NodeId> {
+        let target = if matches!(
+            self.nodes.get(id.index()).map(|cell| cell.tag()),
+            Some(CellTag::Indir)
+        ) {
+            self.compress_marked_indirection(id)?
+        } else {
+            id
+        };
+        if let Some(value) = self.nodes.get(target.index())?.int_value() {
+            if let Some(slot) = small_int_index(value) {
+                if let Some(canonical) = self.small_ints[slot] {
+                    if canonical != target {
+                        self.set_cell_at(target.index(), Cell::indir(Some(canonical)));
+                    }
+                    return Some(canonical);
+                }
+            }
+        }
+        Some(target)
+    }
+
+    fn mark_canonical_child(
+        &mut self,
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        child: NodeId,
+    ) -> NodeId {
+        let target = self.canonical_gc_target(child).unwrap_or(child);
+        Self::mark_node_id(marked, work, target);
+        target
+    }
+
+    fn mark_reachable(
+        &mut self,
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        foreign_finalizer_marked: &mut [bool],
+    ) {
+        while let Some(id) = work.pop() {
+            if matches!(
+                self.nodes.get(id.index()).map(|cell| cell.tag()),
+                Some(CellTag::Indir)
+            ) {
+                if let Some(target) = self.compress_marked_indirection(id) {
+                    Self::mark_node_id(marked, work, target);
+                }
+                continue;
+            }
+            let Some(cell) = self.nodes.get(id.index()).copied() else {
+                continue;
+            };
+            if let Some((fun, arg)) = cell.app_fields() {
+                let fun = self.mark_canonical_child(marked, work, fun);
+                let arg = self.mark_canonical_child(marked, work, arg);
+                if fun != cell.id_payload() || arg != cell.id_word1() {
+                    self.set_app_cell_at(id.index(), Cell::app(fun, arg));
+                }
+                continue;
+            }
+            match cell.tag() {
+                CellTag::Ptr | CellTag::RawFunPtr => {
+                    self.mark_pointer_target(marked, work, cell.word1 as i64);
+                }
+                CellTag::Cold => match self.cold_node(id) {
+                    Some(Node::ForeignPtr(foreign_ptr)) => {
+                        if let Some(finalizer) = foreign_ptr.finalizer {
+                            if let Some(marked) = foreign_finalizer_marked.get_mut(finalizer) {
+                                *marked = true;
+                            }
+                        }
+                        self.mark_pointer_target(marked, work, foreign_ptr.ptr);
+                    }
+                    Some(Node::Weak(weak)) => {
+                        if let Some(value) = weak.value {
+                            Self::mark_node_id(marked, work, value);
+                        }
+                        if let Some(finalizer) = weak.finalizer {
+                            Self::mark_node_id(marked, work, finalizer);
+                        }
+                    }
+                    Some(Node::BytesView(view)) => Self::mark_node_id(marked, work, view.base),
+                    Some(Node::MVar(Some(value))) => Self::mark_node_id(marked, work, *value),
+                    Some(Node::Array(items)) => {
+                        for item in items.iter() {
+                            Self::mark_node_id(marked, work, *item);
+                        }
+                    }
+                    _ => {}
+                },
+                CellTag::App
+                | CellTag::Indir
+                | CellTag::Free
+                | CellTag::KnownPrim
+                | CellTag::RuntimePrim
+                | CellTag::Int
+                | CellTag::Int64
+                | CellTag::Float64
+                | CellTag::Float32
+                | CellTag::ThreadId => {}
+            }
+        }
+    }
+
+    fn run_foreign_finalizer(
+        &mut self,
+        finalizer: ForeignFinalizer,
+        arg: i64,
+    ) -> Result<(), EvalError> {
+        match finalizer {
+            ForeignFinalizer::Free => self.free_memory(arg),
+            ForeignFinalizer::CloseB => self.close_bfile(arg),
+            ForeignFinalizer::RawZero => Ok(()),
+        }
+    }
+
+    fn run_dead_foreign_finalizers(&mut self, marked: &[bool]) -> Result<(), EvalError> {
+        for index in 0..self.foreign_finalizers.len() {
+            if marked.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let Some(state) = self.foreign_finalizers[index].take() else {
+                continue;
+            };
+            if let Some(finalizer) = state.finalizer {
+                self.run_foreign_finalizer(finalizer, state.arg)?;
+            }
+            self.foreign_finalizer_free.push(index);
+        }
+        Ok(())
     }
 
     fn collect_garbage_between_steps(
@@ -1598,9 +3474,20 @@ impl Program {
         persistent_spine: &PersistentSpine,
         scratch_args: &[NodeId],
         scratch_apps: &[NodeId],
-    ) -> usize {
-        let mut marked = vec![false; self.nodes.len()];
-        let mut work = Vec::new();
+        machine_stack: Option<&EvalStack>,
+    ) -> Result<usize, EvalError> {
+        let started = Instant::now();
+        let allocations_since_collect = self.gc_allocations_since_collect;
+        let mut marked = std::mem::take(&mut self.gc_marked);
+        marked.clear();
+        marked.resize(self.nodes.len(), false);
+        let mut work = std::mem::take(&mut self.gc_mark_work);
+        work.clear();
+        let mut foreign_finalizer_marked = std::mem::take(&mut self.gc_foreign_finalizer_marked);
+        foreign_finalizer_marked.clear();
+        foreign_finalizer_marked.resize(self.foreign_finalizers.len(), false);
+        #[cfg(feature = "gc-phase-profile")]
+        let mark_started = Instant::now();
         self.mark_program_roots(
             &mut marked,
             &mut work,
@@ -1610,30 +3497,65 @@ impl Program {
             persistent_spine,
             scratch_args,
             scratch_apps,
+            machine_stack,
         );
-        self.mark_reachable(&mut marked, &mut work);
+        self.mark_reachable(&mut marked, &mut work, &mut foreign_finalizer_marked);
+        #[cfg(feature = "gc-phase-profile")]
+        let mark_nanos = mark_started.elapsed().as_nanos();
+        work.clear();
+        self.labels
+            .retain(|_, id| marked.get(id.index()).copied().unwrap_or(false));
+        self.run_dead_foreign_finalizers(&foreign_finalizer_marked)?;
 
-        self.free_nodes.clear();
+        #[cfg(feature = "gc-phase-profile")]
+        let sweep_started = Instant::now();
+        self.free_head = None;
+        self.free_nodes = 0;
         let mut freed = 0;
         let mut live = 0;
-        for (index, mark) in marked.into_iter().enumerate() {
-            if mark {
+        for index in 0..marked.len() {
+            if marked[index] {
                 live += 1;
                 continue;
             }
-            if matches!(self.nodes[index], Node::Indir(None)) {
-                self.free_nodes.push(index);
-                continue;
-            }
-            self.nodes[index] = Node::Indir(None);
-            self.free_nodes.push(index);
             freed += 1;
+            self.push_free_node(index);
         }
+        #[cfg(feature = "gc-phase-profile")]
+        let sweep_nanos = sweep_started.elapsed().as_nanos();
+        self.gc_marked = marked;
+        self.gc_mark_work = work;
+        self.gc_foreign_finalizer_marked = foreign_finalizer_marked;
+        let pause_nanos = started.elapsed().as_nanos();
         self.gc_collections += 1;
         self.gc_freed_nodes_total = self.gc_freed_nodes_total.saturating_add(freed);
         self.gc_last_live_nodes = live;
-        self.gc_last_free_nodes = self.free_nodes.len();
-        freed
+        self.gc_last_free_nodes = self.free_nodes;
+        self.gc_last_pause_nanos = pause_nanos;
+        self.gc_total_pause_nanos = self.gc_total_pause_nanos.saturating_add(pause_nanos);
+        #[cfg(feature = "gc-phase-profile")]
+        {
+            self.gc_last_mark_nanos = mark_nanos;
+            self.gc_total_mark_nanos = self.gc_total_mark_nanos.saturating_add(mark_nanos);
+            self.gc_last_sweep_nanos = sweep_nanos;
+            self.gc_total_sweep_nanos = self.gc_total_sweep_nanos.saturating_add(sweep_nanos);
+        }
+        self.gc_last_allocations_since_collect = allocations_since_collect;
+        self.gc_allocations_since_collect = 0;
+        self.gc_events.push(GcEventStats {
+            collection: self.gc_collections,
+            pause_nanos,
+            #[cfg(feature = "gc-phase-profile")]
+            mark_nanos,
+            #[cfg(feature = "gc-phase-profile")]
+            sweep_nanos,
+            live_nodes: live,
+            free_nodes: self.free_nodes,
+            arena_nodes: self.nodes.len(),
+            freed_nodes: freed,
+            allocations_since_collect,
+        });
+        Ok(freed)
     }
 
     fn maybe_collect_garbage_between_steps(
@@ -1644,12 +3566,16 @@ impl Program {
         persistent_spine: &PersistentSpine,
         scratch_args: &[NodeId],
         scratch_apps: &[NodeId],
-    ) {
+        machine_stack: Option<&EvalStack>,
+    ) -> Result<(), EvalError> {
         if self.gc_node_interval == 0 {
-            return;
+            return Ok(());
         }
-        if self.nodes.len() < self.next_gc_nodes {
-            return;
+        if self.reduce_depth != 1 {
+            return Ok(());
+        }
+        if self.gc_allocations_since_collect < self.gc_node_interval {
+            return Ok(());
         }
         self.collect_garbage_between_steps(
             current_root,
@@ -1658,17 +3584,25 @@ impl Program {
             persistent_spine,
             scratch_args,
             scratch_apps,
-        );
-        self.next_gc_nodes = self.nodes.len().saturating_add(self.gc_node_interval);
+            machine_stack,
+        )?;
+        Ok(())
     }
 
     pub fn resolve(&self, mut id: NodeId) -> Result<NodeId, EvalError> {
         loop {
-            match self.nodes.get(id.0) {
-                Some(Node::Indir(Some(next))) => id = *next,
-                Some(Node::Indir(None)) => return Err(EvalError::DanglingIndirection(id)),
-                Some(_) => return Ok(id),
-                None => return Err(EvalError::DanglingIndirection(id)),
+            let Some(cell) = self.nodes.get(id.index()).copied() else {
+                return Err(EvalError::DanglingIndirection(id));
+            };
+            match cell.tag_bits() {
+                tag if tag == CellTag::Indir.bits() => match cell.option_id_word1() {
+                    Some(next) => id = next,
+                    None => return Err(EvalError::DanglingIndirection(id)),
+                },
+                tag if tag == CellTag::Free.bits() => {
+                    return Err(EvalError::DanglingIndirection(id));
+                }
+                _ => return Ok(id),
             }
         }
     }
@@ -1680,17 +3614,24 @@ impl Program {
 
         let mut depth = 0;
         loop {
-            match self.nodes.get(id.0) {
-                Some(Node::Indir(Some(next))) => {
-                    id = *next;
-                    depth += 1;
+            let Some(cell) = self.nodes.get(id.index()).copied() else {
+                return Err(EvalError::DanglingIndirection(id));
+            };
+            match cell.tag_bits() {
+                tag if tag == CellTag::Indir.bits() => match cell.option_id_word1() {
+                    Some(next) => {
+                        id = next;
+                        depth += 1;
+                    }
+                    None => return Err(EvalError::DanglingIndirection(id)),
+                },
+                tag if tag == CellTag::Free.bits() => {
+                    return Err(EvalError::DanglingIndirection(id));
                 }
-                Some(Node::Indir(None)) => return Err(EvalError::DanglingIndirection(id)),
-                Some(_) => {
+                _ => {
                     self.profile_resolve_chain(depth);
                     return Ok(id);
                 }
-                None => return Err(EvalError::DanglingIndirection(id)),
             }
         }
     }
@@ -1715,7 +3656,7 @@ impl Program {
 
     pub fn uncaught_exception_message_bytes(&mut self, exn: NodeId) -> Result<Vec<u8>, EvalError> {
         let exn = self.resolve(exn)?;
-        if let Node::Int(code) = self.nodes[exn.0] {
+        if let Some(code) = self.cell(exn).int_value() {
             return Ok(rts_exception_message(code).to_vec());
         }
 
@@ -1787,7 +3728,9 @@ impl Program {
     }
 
     #[cold]
-    fn profile_step(&mut self, head: NodeId, arity: usize, heap_spine: bool) -> Option<String> {
+    fn profile_step(&mut self, head: NodeId, arity: usize, heap_spine: bool) -> ProfileHead {
+        #[cfg(feature = "eval-phase-profile")]
+        let started = Instant::now();
         let key = self.profile_head_key(head);
         let profile = self.profile.as_mut().expect("profile checked");
         profile.step_attempts += 1;
@@ -1797,20 +3740,219 @@ impl Program {
             profile.heap_spines += 1;
         }
         profile.max_spine_arity = profile.max_spine_arity.max(arity);
-        Some(key)
+        #[cfg(feature = "eval-phase-profile")]
+        {
+            profile.profile_step_nanos = profile
+                .profile_step_nanos
+                .saturating_add(started.elapsed().as_nanos());
+        }
+        Some(head)
     }
 
     #[cold]
-    fn profile_reduction(&mut self, key: &Option<String>, reductions: usize) {
-        let Some(profile) = self.profile.as_mut() else {
+    fn profile_reduction(&mut self, head: ProfileHead, reductions: usize) {
+        let Some(head) = head else {
             return;
         };
-        let Some(key) = key.as_ref() else {
+        #[cfg(feature = "eval-phase-profile")]
+        let started = Instant::now();
+        let key = self.profile_head_key(head);
+        let Some(profile) = self.profile.as_mut() else {
             return;
         };
         profile.successful_steps += 1;
         profile.reductions += reductions;
-        *profile.head_reductions.entry(key.clone()).or_default() += reductions;
+        *profile.head_reductions.entry(key).or_default() += reductions;
+        #[cfg(feature = "eval-phase-profile")]
+        {
+            profile.profile_reduction_nanos = profile
+                .profile_reduction_nanos
+                .saturating_add(started.elapsed().as_nanos());
+        }
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_eval_step_head_time(&mut self, head: ProfileHead, nanos: u128) {
+        let Some(head) = head else {
+            return;
+        };
+        let started = Instant::now();
+        let key = self.profile_head_key(head);
+        let Some(profile) = self.profile.as_mut() else {
+            return;
+        };
+        *profile.stack_eval_step_head_nanos.entry(key).or_default() += nanos;
+        profile.profile_stack_head_time_nanos = profile
+            .profile_stack_head_time_nanos
+            .saturating_add(started.elapsed().as_nanos());
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_arg_read_head_time(&mut self, head: ProfileHead, nanos: u128) {
+        let Some(head) = head else {
+            return;
+        };
+        let started = Instant::now();
+        let key = self.profile_head_key(head);
+        let Some(profile) = self.profile.as_mut() else {
+            return;
+        };
+        *profile.stack_arg_read_head_nanos.entry(key).or_default() += nanos;
+        profile.profile_stack_head_time_nanos = profile
+            .profile_stack_head_time_nanos
+            .saturating_add(started.elapsed().as_nanos());
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_app_alloc_site_time(&mut self, site: &'static str, nanos: u128) {
+        let started = Instant::now();
+        let Some(profile) = self.profile.as_mut() else {
+            return;
+        };
+        *profile
+            .stack_app_alloc_site_nanos
+            .entry(site.to_owned())
+            .or_default() += nanos;
+        profile.profile_stack_head_time_nanos = profile
+            .profile_stack_head_time_nanos
+            .saturating_add(started.elapsed().as_nanos());
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_apply_rewrite_head_time(&mut self, head: ProfileHead, nanos: u128) {
+        let Some(head) = head else {
+            return;
+        };
+        let started = Instant::now();
+        let key = self.profile_head_key(head);
+        let Some(profile) = self.profile.as_mut() else {
+            return;
+        };
+        *profile
+            .stack_apply_rewrite_head_nanos
+            .entry(key)
+            .or_default() += nanos;
+        profile.profile_stack_head_time_nanos = profile
+            .profile_stack_head_time_nanos
+            .saturating_add(started.elapsed().as_nanos());
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_apply_app_head_time(&mut self, head: ProfileHead, nanos: u128) {
+        let Some(head) = head else {
+            return;
+        };
+        let started = Instant::now();
+        let key = self.profile_head_key(head);
+        let Some(profile) = self.profile.as_mut() else {
+            return;
+        };
+        *profile.stack_apply_app_head_nanos.entry(key).or_default() += nanos;
+        profile.profile_stack_head_time_nanos = profile
+            .profile_stack_head_time_nanos
+            .saturating_add(started.elapsed().as_nanos());
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_force_frame_head_time(&mut self, head: ProfileHead, nanos: u128) {
+        let Some(head) = head else {
+            return;
+        };
+        let started = Instant::now();
+        let key = self.profile_head_key(head);
+        let Some(profile) = self.profile.as_mut() else {
+            return;
+        };
+        *profile.stack_force_frame_head_nanos.entry(key).or_default() += nanos;
+        profile.profile_stack_head_time_nanos = profile
+            .profile_stack_head_time_nanos
+            .saturating_add(started.elapsed().as_nanos());
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_inner_descent_head_time(&mut self, head: ProfileHead, nanos: u128) {
+        let Some(head) = head else {
+            return;
+        };
+        let started = Instant::now();
+        let key = self.profile_head_key(head);
+        let Some(profile) = self.profile.as_mut() else {
+            return;
+        };
+        *profile
+            .stack_inner_descent_head_nanos
+            .entry(key)
+            .or_default() += nanos;
+        profile.profile_stack_head_time_nanos = profile
+            .profile_stack_head_time_nanos
+            .saturating_add(started.elapsed().as_nanos());
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_arg_read_time(&mut self, nanos: u128) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.stack_arg_read_nanos = profile.stack_arg_read_nanos.saturating_add(nanos);
+        }
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_app_alloc_time(&mut self, nanos: u128) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.stack_app_alloc_nanos = profile.stack_app_alloc_nanos.saturating_add(nanos);
+        }
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_apply_rewrite_time(&mut self, nanos: u128) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.stack_apply_rewrite_nanos =
+                profile.stack_apply_rewrite_nanos.saturating_add(nanos);
+        }
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_apply_app_time(&mut self, nanos: u128) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.stack_apply_app_nanos = profile.stack_apply_app_nanos.saturating_add(nanos);
+        }
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_force_frame_time(&mut self, nanos: u128) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.stack_force_frame_nanos = profile.stack_force_frame_nanos.saturating_add(nanos);
+        }
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_inner_descent_time(&mut self, nanos: u128) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.stack_inner_descent_nanos =
+                profile.stack_inner_descent_nanos.saturating_add(nanos);
+        }
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_app_alloc_bookkeeping_time(&mut self, nanos: u128) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.profile_app_alloc_bookkeeping_nanos = profile
+                .profile_app_alloc_bookkeeping_nanos
+                .saturating_add(nanos);
+        }
     }
 
     #[cold]
@@ -1840,13 +3982,6 @@ impl Program {
     }
 
     #[cold]
-    fn profile_app_allocation(&mut self) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.app_allocations += 1;
-        }
-    }
-
-    #[cold]
     fn profile_arg_materialization(&mut self, nodes: usize) {
         if let Some(profile) = self.profile.as_mut() {
             profile.arg_materializations += 1;
@@ -1867,6 +4002,115 @@ impl Program {
         if let Some(profile) = self.profile.as_mut() {
             profile.app_rewrites += 1;
             profile.app_rewrite_extra_args += extra_args;
+        }
+    }
+
+    #[cold]
+    fn profile_stack_rewrite(&mut self, used: usize, wrote_indirection: bool) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.stack_rewrites += 1;
+            profile.stack_rewrite_apps += used;
+            if wrote_indirection {
+                profile.stack_rewrite_indirections += 1;
+            }
+        }
+    }
+
+    #[cold]
+    fn profile_stack_app_update(&mut self, used: usize) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.stack_app_updates += 1;
+            profile.stack_app_update_apps += used;
+            if used == 0 {
+                profile.stack_app_update_allocations += 1;
+            }
+        }
+    }
+
+    #[cold]
+    fn profile_stack_rethread(&mut self, apps: usize) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.stack_rethreads += 1;
+            profile.stack_rethread_apps += apps;
+        }
+    }
+
+    #[cold]
+    fn profile_stack_descent_push(&mut self) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.stack_descent_pushes += 1;
+        }
+    }
+
+    #[cold]
+    fn profile_stack_arg_reads(&mut self, reads: usize) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.stack_arg_reads += reads;
+        }
+    }
+
+    #[cold]
+    fn profile_stack_arg_batch(&mut self) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.stack_arg_batches += 1;
+        }
+    }
+
+    #[cold]
+    fn profile_persistent_force(&mut self) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.persistent_forces += 1;
+        }
+    }
+
+    #[cold]
+    fn profile_persistent_fallback(&mut self) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.persistent_fallbacks += 1;
+        }
+    }
+
+    #[cold]
+    fn profile_stack_fallback_head(&mut self, head: NodeId) {
+        if self.profile.is_some() {
+            let key = self.profile_head_key(head);
+            if let Some(profile) = self.profile.as_mut() {
+                *profile.stack_fallback_heads.entry(key).or_insert(0) += 1;
+            }
+        }
+    }
+
+    #[cold]
+    fn profile_fallback_eval_loop_step(&mut self) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.fallback_eval_loop_steps += 1;
+        }
+    }
+
+    #[cold]
+    fn profile_strict_redex_snapshot(&mut self, apps: usize) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.strict_redex_snapshots += 1;
+            profile.strict_redex_snapshot_apps += apps;
+        }
+    }
+
+    #[cold]
+    fn profile_remaining_app_scan(&mut self, apps: usize) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.remaining_app_scans += 1;
+            profile.remaining_app_scan_apps += apps;
+        }
+    }
+
+    #[cold]
+    fn profile_eval_frame_push(&mut self, kind: &'static str) {
+        if let Some(profile) = self.profile.as_mut() {
+            profile.eval_frame_pushes += 1;
+            *profile
+                .eval_frame_push_kinds
+                .entry(kind.to_owned())
+                .or_default() += 1;
         }
     }
 
@@ -1912,6 +4156,52 @@ impl Program {
     }
 
     #[cold]
+    fn profile_strict_primitive_dispatch(
+        &mut self,
+        args_len: usize,
+        action: StrictPrimitiveAction,
+    ) {
+        macro_rules! probe {
+            ($min_args:expr, $key:literal, $pattern:pat) => {
+                if args_len >= $min_args {
+                    self.profile_primitive_dispatch_probe($key);
+                    if matches!(action, $pattern) {
+                        self.profile_primitive_dispatch_hit($key);
+                        return;
+                    }
+                }
+            };
+        }
+
+        probe!(2, "strict_int_binop", StrictPrimitiveAction::IntBin(_));
+        probe!(1, "strict_int_unop", StrictPrimitiveAction::IntUn(_));
+        probe!(2, "strict_int64_binop", StrictPrimitiveAction::Int64Bin(_));
+        probe!(1, "strict_int64_unop", StrictPrimitiveAction::Int64Un(_));
+        probe!(
+            2,
+            "strict_float64_binop",
+            StrictPrimitiveAction::Float64Bin(_)
+        );
+        probe!(
+            1,
+            "strict_float64_unop",
+            StrictPrimitiveAction::Float64Un(_)
+        );
+        probe!(
+            2,
+            "strict_float32_binop",
+            StrictPrimitiveAction::Float32Bin(_)
+        );
+        probe!(
+            1,
+            "strict_float32_unop",
+            StrictPrimitiveAction::Float32Un(_)
+        );
+        probe!(2, "strict_bytes_binop", StrictPrimitiveAction::BytesBin(_));
+        probe!(1, "strict_conversion", StrictPrimitiveAction::Conversion(_));
+    }
+
+    #[cold]
     fn profile_node_allocation(&mut self, node: &Node) {
         if let Some(profile) = self.profile.as_mut() {
             *profile
@@ -1923,7 +4213,7 @@ impl Program {
 
     fn eval_loop_result(
         &mut self,
-        profile_head: &Option<String>,
+        profile_head: ProfileHead,
         node: NodeId,
         reductions: usize,
     ) -> EvalLoopStep {
@@ -1939,7 +4229,7 @@ impl Program {
         spine: &mut EvalSpine,
     ) -> Result<NodeId, EvalError> {
         spine.clear();
-        while let Node::App(fun, arg) = self.nodes[node.0] {
+        while let Some((fun, arg)) = self.cell(node).app_fields() {
             spine.push_desc(arg, node);
             node = self.resolve_profiled(fun)?;
         }
@@ -1957,20 +4247,20 @@ impl Program {
         debug_assert!(used <= len);
         if used == 0 && len == 0 {
             if node != root {
-                self.nodes[root.0] = Node::Indir(Some(node));
+                self.set_cell_at(root.index(), Cell::indir(Some(node)));
             }
             return node;
         }
         if used > 0 {
             let redex = spine.app(used - 1);
             if node != redex {
-                self.nodes[redex.0] = Node::Indir(Some(node));
+                self.set_app_cell_at(redex.index(), Cell::indir(Some(node)));
             }
         }
         for head_idx in used..len {
             let app = spine.app(head_idx);
             let arg = spine.arg(head_idx);
-            self.nodes[app.0] = Node::App(node, arg);
+            self.set_app_cell_at(app.index(), Cell::app(node, arg));
             node = app;
         }
         node
@@ -1990,19 +4280,19 @@ impl Program {
             self.app(fun, arg)
         } else {
             let redex = spine.app(used - 1);
-            self.nodes[redex.0] = Node::App(fun, arg);
+            self.set_app_cell_at(redex.index(), Cell::app(fun, arg));
             redex
         };
         if used == 0 && len == 0 {
             if node != root {
-                self.nodes[root.0] = Node::Indir(Some(node));
+                self.set_cell_at(root.index(), Cell::indir(Some(node)));
             }
             return node;
         }
         for head_idx in used..len {
             let app = spine.app(head_idx);
             let arg = spine.arg(head_idx);
-            self.nodes[app.0] = Node::App(node, arg);
+            self.set_app_cell_at(app.index(), Cell::app(node, arg));
             node = app;
         }
         node
@@ -2010,7 +4300,7 @@ impl Program {
 
     fn eval_loop_app_result(
         &mut self,
-        profile_head: &Option<String>,
+        profile_head: ProfileHead,
         root: NodeId,
         spine: &EvalSpine,
         used: usize,
@@ -2026,47 +4316,51 @@ impl Program {
     }
 
     fn strict_redex_from_eval_spine(
+        &mut self,
         root: NodeId,
         used: usize,
         spine: &EvalSpine,
-        scratch_args: &mut Vec<NodeId>,
         scratch_apps: &mut Vec<NodeId>,
     ) -> StrictRedex {
         if spine.len() == used {
-            StrictRedex::Root(root)
-        } else {
-            spine.write_spine_head_order(scratch_args, scratch_apps);
-            StrictRedex::Spine {
-                root,
-                used,
-                args: scratch_args.clone(),
-                apps: scratch_apps.clone(),
-            }
+            return StrictRedex::Root(root);
+        }
+        if self.profile.is_some() {
+            self.profile_strict_redex_snapshot(spine.len());
+        }
+        spine.write_apps_head_order(scratch_apps);
+        StrictRedex::Spine {
+            root,
+            used,
+            apps: scratch_apps.clone(),
         }
     }
 
     fn strict_redex_from_persistent_spine(
+        &mut self,
         root: NodeId,
         used: usize,
         spine: &PersistentSpine,
     ) -> StrictRedex {
         if spine.len() == used {
-            StrictRedex::Root(root)
-        } else {
-            StrictRedex::Spine {
-                root,
-                used,
-                args: spine.args.iter().copied().collect(),
-                apps: spine.apps.iter().copied().collect(),
-            }
+            return StrictRedex::Root(root);
+        }
+        if self.profile.is_some() {
+            self.profile_strict_redex_snapshot(spine.len());
+        }
+        StrictRedex::Spine {
+            root,
+            used,
+            apps: spine.apps.iter().copied().collect(),
         }
     }
 
     #[cold]
     fn profile_head_key(&self, head: NodeId) -> String {
-        match &self.nodes[head.0] {
+        match self.node_for_debug(head) {
             Node::App(_, _) => "App".to_owned(),
             Node::Indir(_) => "Indir".to_owned(),
+            Node::Free(_) => "Free".to_owned(),
             Node::Prim(name) => format!("Prim:{name}"),
             Node::Int(_) => "Int".to_owned(),
             Node::Int64(_) => "Int64".to_owned(),
@@ -2080,6 +4374,7 @@ impl Program {
             Node::MVar(_) => "MVar".to_owned(),
             Node::BigInt(_) => "BigInt".to_owned(),
             Node::Bytes(_) => "Bytes".to_owned(),
+            Node::BytesView(_) => "BytesView".to_owned(),
             Node::MutableBytes(_) => "MutableBytes".to_owned(),
             Node::Array(_) => "Array".to_owned(),
             Node::Ffi(name) => format!("Ffi:{name}"),
@@ -2100,6 +4395,9 @@ impl Program {
         frame_stack: &mut EvalFrameStack,
         strict_markers: bool,
     ) -> Result<Option<EvalLoopStep>, EvalError> {
+        if self.profile.is_some() {
+            self.profile_fallback_eval_loop_step();
+        }
         let head = self.fill_eval_spine(root, spine)?;
         let args_len = spine.len();
         let profile_head = if self.profile.is_some() {
@@ -2116,7 +4414,7 @@ impl Program {
         macro_rules! app_step {
             ($used:expr, $fun:expr, $arg:expr) => {
                 return Ok(Some(self.eval_loop_app_result(
-                    &profile_head,
+                    profile_head,
                     root,
                     spine,
                     $used,
@@ -2132,22 +4430,15 @@ impl Program {
                     self.profile_spine_rewrite(spine.len() - $used);
                 }
                 let node = self.apply_eval_spine_rewrite(root, spine, $used, $node);
-                return Ok(Some(self.eval_loop_result(
-                    &profile_head,
-                    node,
-                    $reductions,
-                )));
+                return Ok(Some(self.eval_loop_result(profile_head, node, $reductions)));
             }};
         }
         macro_rules! strict_marker_step {
             ($used:expr, $variant:ident, $frame:ident, $kind:expr, $next:expr) => {{
-                let redex = Self::strict_redex_from_eval_spine(
-                    root,
-                    $used,
-                    spine,
-                    scratch_args,
-                    scratch_apps,
-                );
+                let redex = self.strict_redex_from_eval_spine(root, $used, spine, scratch_apps);
+                if self.profile.is_some() {
+                    self.profile_eval_frame_push(stringify!($variant));
+                }
                 frame_stack.push(EvalFrame::$variant($frame {
                     redex,
                     profile_head,
@@ -2161,13 +4452,10 @@ impl Program {
         }
         macro_rules! strict_int64_shift_marker_step {
             ($used:expr, $op:expr, $x:expr, $next:expr) => {{
-                let redex = Self::strict_redex_from_eval_spine(
-                    root,
-                    $used,
-                    spine,
-                    scratch_args,
-                    scratch_apps,
-                );
+                let redex = self.strict_redex_from_eval_spine(root, $used, spine, scratch_apps);
+                if self.profile.is_some() {
+                    self.profile_eval_frame_push("Int64Shift");
+                }
                 frame_stack.push(EvalFrame::Int64Shift(Int64ShiftFrame {
                     redex,
                     profile_head,
@@ -2181,9 +4469,33 @@ impl Program {
             }};
         }
 
-        let head_node = self.nodes[head.0].clone();
-        match head_node {
-            Node::Ffi(name) => {
+        let head_dispatch = match self.cell(head).prim() {
+            Some(Prim::Known(known)) => EvalHead::Known(known),
+            Some(Prim::Runtime(runtime)) => {
+                let name = runtime.name();
+                let action = runtime.strict_action(args_len);
+                let needs_fallback_name =
+                    !strict_markers || matches!(action, StrictPrimitiveAction::None);
+                EvalHead::Other {
+                    action,
+                    fallback_name: needs_fallback_name.then_some(name),
+                }
+            }
+            None => match self.cold_node(head) {
+                Some(Node::Ffi(name)) => EvalHead::Ffi(name.to_string()),
+                Some(Node::JsCall(call)) => EvalHead::JsCall {
+                    tags: call.tags.clone(),
+                    body: call.body.clone(),
+                },
+                Some(Node::JsWrap { tags }) => EvalHead::JsWrap {
+                    tags: tags.to_string(),
+                },
+                _ => EvalHead::Whnf,
+            },
+        };
+
+        let (known, strict_action, fallback_name) = match head_dispatch {
+            EvalHead::Ffi(name) => {
                 if self.profile.is_some() {
                     self.profile_arg_materialization(args_len);
                 }
@@ -2193,19 +4505,18 @@ impl Program {
                 };
                 rewrite_step!(used, node, 1);
             }
-            Node::JsCall(call) => {
+            EvalHead::JsCall { tags, body } => {
                 if self.profile.is_some() {
                     self.profile_arg_materialization(args_len);
                 }
                 spine.write_args_head_order(scratch_args);
-                let Some((used, node)) =
-                    self.js_call(&call.tags, &call.body, scratch_args.as_slice())?
+                let Some((used, node)) = self.js_call(&tags, &body, scratch_args.as_slice())?
                 else {
                     return Ok(None);
                 };
                 rewrite_step!(used, node, 1);
             }
-            Node::JsWrap { tags } => {
+            EvalHead::JsWrap { tags } => {
                 if self.profile.is_some() {
                     self.profile_arg_materialization(args_len);
                 }
@@ -2215,724 +4526,660 @@ impl Program {
                 };
                 rewrite_step!(used, node, 1);
             }
-            Node::Prim(prim) => {
-                let known = prim.known();
-                use KnownPrim::*;
+            EvalHead::Known(known) => (Some(known), StrictPrimitiveAction::None, None),
+            EvalHead::Other {
+                action,
+                fallback_name,
+            } => (None, action, fallback_name),
+            EvalHead::Whnf => return Ok(None),
+        };
+        use KnownPrim::*;
 
-                if known == Some(U) && args_len >= 2 {
-                    if let Some(node) = self.selector_pair_field(arg!(0), arg!(1))? {
-                        self.profile_shortcut("selector_pair_field", 1);
-                        rewrite_step!(2, node, 1);
-                    }
-                }
-
-                if known == Some(IoThen) && args_len >= 3 && budget >= 2 {
-                    if let Some(reductions) =
-                        self.ignored_io_action_reductions(arg!(0), budget - 1)?
-                    {
-                        self.profile_shortcut("io_then_ignored_action", 1);
-                        let world = self
-                            .run_ignored_io_action(arg!(0), arg!(2))?
-                            .expect("preflighted ignored IO action should execute");
-                        let node = self.app(arg!(1), world);
-                        rewrite_step!(3, node, reductions + 1);
-                    }
-                    let k = self.prim("K");
-                    let then = self.app(k, arg!(1));
-                    let action = self.app(arg!(0), arg!(2));
-                    let node = self.app(action, then);
-                    rewrite_step!(3, node, 2);
-                }
-
-                if known == Some(IoBind) && args_len >= 3 {
-                    if let Some(result) = self.io_return_action_result(arg!(0))? {
-                        self.profile_shortcut("io_bind_return_action", 1);
-                        let next = self.app(arg!(1), result);
-                        let node = self.app(next, arg!(2));
-                        rewrite_step!(3, node, 2);
-                    }
-                }
-
-                if strict_markers {
-                    match known {
-                        Some(IoStrict) if args_len >= 2 => {
-                            strict_marker_step!(
-                                2,
-                                Whnf,
-                                WhnfFrame,
-                                WhnfFrameKind::IoStrict {
-                                    action: arg!(0),
-                                    value: arg!(1),
-                                },
-                                arg!(1)
-                            );
-                        }
-                        Some(Seq) if args_len >= 2 => {
-                            strict_marker_step!(
-                                2,
-                                Whnf,
-                                WhnfFrame,
-                                WhnfFrameKind::Seq { result: arg!(1) },
-                                arg!(0)
-                            );
-                        }
-                        Some(IsInt) if args_len >= 1 => {
-                            strict_marker_step!(1, Whnf, WhnfFrame, WhnfFrameKind::IsInt, arg!(0));
-                        }
-                        _ => {}
-                    }
-                }
-
-                if strict_markers && known.is_none() {
-                    macro_rules! dispatch_probe {
-                        ($key:literal, $expr:expr) => {{
-                            self.profile_primitive_dispatch_probe($key);
-                            let result = $expr;
-                            if result.is_some() {
-                                self.profile_primitive_dispatch_hit($key);
-                            }
-                            result
-                        }};
-                    }
-
-                    if args_len >= 2 {
-                        if let Some(op) =
-                            dispatch_probe!("strict_int_binop", IntBinOp::from_prim(prim.name()))
-                        {
-                            strict_marker_step!(
-                                2,
-                                Int,
-                                IntFrame,
-                                IntFrameKind::BinSecond { op, x: arg!(0) },
-                                arg!(1)
-                            );
-                        }
-                    }
-
-                    if args_len >= 1 {
-                        if let Some(op) =
-                            dispatch_probe!("strict_int_unop", IntUnOp::from_prim(prim.name()))
-                        {
-                            strict_marker_step!(1, Int, IntFrame, IntFrameKind::Un { op }, arg!(0));
-                        }
-                    }
-
-                    if args_len >= 2 {
-                        if let Some(op) = dispatch_probe!(
-                            "strict_int64_binop",
-                            Int64BinOp::from_prim(prim.name())
-                        ) {
-                            if op.rhs_is_shift() {
-                                strict_int64_shift_marker_step!(2, op, arg!(0), arg!(1));
-                            } else if op.driver_marker_safe() {
-                                strict_marker_step!(
-                                    2,
-                                    Int64,
-                                    Int64Frame,
-                                    Int64FrameKind::BinSecond { op, x: arg!(0) },
-                                    arg!(1)
-                                );
-                            }
-                        }
-                    }
-
-                    if args_len >= 1 {
-                        if let Some(op) =
-                            dispatch_probe!("strict_int64_unop", Int64UnOp::from_prim(prim.name()))
-                        {
-                            strict_marker_step!(
-                                1,
-                                Int64,
-                                Int64Frame,
-                                Int64FrameKind::Un { op },
-                                arg!(0)
-                            );
-                        }
-                    }
-
-                    if args_len >= 2 {
-                        if let Some(op) = dispatch_probe!(
-                            "strict_float64_binop",
-                            Float64BinOp::from_prim(prim.name())
-                        ) {
-                            strict_marker_step!(
-                                2,
-                                Float64,
-                                Float64Frame,
-                                Float64FrameKind::BinSecond { op, x: arg!(0) },
-                                arg!(1)
-                            );
-                        }
-                    }
-
-                    if args_len >= 1 {
-                        if let Some(op) = dispatch_probe!(
-                            "strict_float64_unop",
-                            Float64UnOp::from_prim(prim.name())
-                        ) {
-                            strict_marker_step!(
-                                1,
-                                Float64,
-                                Float64Frame,
-                                Float64FrameKind::Un { op },
-                                arg!(0)
-                            );
-                        }
-                    }
-
-                    if args_len >= 2 {
-                        if let Some(op) = dispatch_probe!(
-                            "strict_float32_binop",
-                            Float32BinOp::from_prim(prim.name())
-                        ) {
-                            strict_marker_step!(
-                                2,
-                                Float32,
-                                Float32Frame,
-                                Float32FrameKind::BinSecond { op, x: arg!(0) },
-                                arg!(1)
-                            );
-                        }
-                    }
-
-                    if args_len >= 1 {
-                        if let Some(op) = dispatch_probe!(
-                            "strict_float32_unop",
-                            Float32UnOp::from_prim(prim.name())
-                        ) {
-                            strict_marker_step!(
-                                1,
-                                Float32,
-                                Float32Frame,
-                                Float32FrameKind::Un { op },
-                                arg!(0)
-                            );
-                        }
-                    }
-
-                    if args_len >= 2 {
-                        if let Some(op) = dispatch_probe!(
-                            "strict_bytes_binop",
-                            BytesBinOp::from_prim(prim.name())
-                        ) {
-                            strict_marker_step!(
-                                2,
-                                Bytes,
-                                BytesFrame,
-                                BytesFrameKind::BinSecond { op, x: arg!(0) },
-                                arg!(1)
-                            );
-                        }
-                    }
-
-                    if args_len >= 1 {
-                        if let Some(kind) = dispatch_probe!(
-                            "strict_conversion",
-                            ConversionFrameKind::from_prim(prim.name())
-                        ) {
-                            strict_marker_step!(1, Conversion, ConversionFrame, kind, arg!(0));
-                        }
-                    }
-                }
-
-                let rewrite = match known {
-                    Some(I | Ord | Chr) if args_len >= 1 => Some((1, arg!(0))),
-                    Some(K) if args_len >= 2 => Some((2, arg!(0))),
-                    Some(A) if args_len >= 2 => Some((2, arg!(1))),
-                    Some(U) if args_len >= 2 => {
-                        app_step!(2, arg!(1), arg!(0));
-                    }
-                    Some(IoPerformIo) if args_len >= 1 => {
-                        let world = self.world();
-                        let k = self.prim("K");
-                        let action = self.app(arg!(0), world);
-                        let n = self.app(action, k);
-                        Some((1, n))
-                    }
-                    Some(IoAtomic) if args_len >= 2 => {
-                        let k = self.prim("K");
-                        let action = self.app(arg!(0), arg!(1));
-                        let result = self.app(action, k);
-                        let pair = self.prim("P");
-                        let result_pair = self.app(pair, result);
-                        let n = self.app(result_pair, arg!(1));
-                        Some((2, n))
-                    }
-                    Some(IoBind) if args_len >= 3 => {
-                        let action = self.app(arg!(0), arg!(2));
-                        let n = self.app(action, arg!(1));
-                        Some((3, n))
-                    }
-                    Some(IoThen) if args_len >= 2 => {
-                        let bind = self.prim("IO.>>=");
-                        let bind_action = self.app(bind, arg!(0));
-                        let k = self.prim("K");
-                        let then = self.app(k, arg!(1));
-                        let n = self.app(bind_action, then);
-                        Some((2, n))
-                    }
-                    Some(IoReturn) if args_len >= 3 => {
-                        let kx = self.app(arg!(2), arg!(0));
-                        let n = self.app(kx, arg!(1));
-                        Some((3, n))
-                    }
-                    Some(IoLazyBind) if args_len >= 3 => {
-                        let world_result = self.app(arg!(0), arg!(2));
-                        let fst = self.fst();
-                        let snd = self.snd();
-                        let result = self.app(fst, world_result);
-                        let world = self.app(snd, world_result);
-                        let next = self.app(arg!(1), result);
-                        let n = self.app(next, world);
-                        Some((3, n))
-                    }
-                    Some(IoStrict) if args_len >= 2 => {
-                        let n = self.app(arg!(0), arg!(1));
-                        Some((2, n))
-                    }
-                    Some(IoGc) if args_len >= 2 => {
-                        let unit = self.prim("I");
-                        Some((2, self.pair(unit, arg!(1))))
-                    }
-                    Some(IoStats) if args_len >= 1 => {
-                        let alloc = self.int(i64::try_from(self.nodes.len()).unwrap_or(i64::MAX));
-                        let reductions =
-                            self.int(i64::try_from(self.reductions).unwrap_or(i64::MAX));
-                        let stats = self.pair(alloc, reductions);
-                        Some((1, self.pair(stats, arg!(0))))
-                    }
-                    Some(IoPp) if args_len >= 2 => {
-                        #[cfg(not(target_arch = "wasm32"))]
-                        {
-                            let rendered = self.render(arg!(0));
-                            eprintln!("{rendered}");
-                        }
-                        let unit = self.prim("I");
-                        Some((2, self.pair(unit, arg!(1))))
-                    }
-                    Some(IoPrint) if args_len >= 3 => {
-                        let handle = self.eval_io_handle(arg!(0))?;
-                        let value = self.reduce_node_whnf(arg!(1), FORCE_REDUCTION_LIMIT)?;
-                        let rendered = self.render(value);
-                        self.write_io_handle(handle, &format!("{rendered}\n"))?;
-                        let unit = self.prim("I");
-                        Some((3, self.pair(unit, arg!(2))))
-                    }
-                    Some(IoSerialize) if args_len >= 3 => {
-                        let handle = self.eval_io_handle(arg!(0))?;
-                        let value = self.reduce_node_whnf(arg!(1), FORCE_REDUCTION_LIMIT)?;
-                        let serialized = self.serialize_program(value)?;
-                        self.write_io_handle_bytes(handle, &serialized)?;
-                        let unit = self.prim("I");
-                        Some((3, self.pair(unit, arg!(2))))
-                    }
-                    Some(IoGetArgRef) if args_len >= 1 => {
-                        let arg_array = self.arg_ref_array();
-                        Some((1, self.pair(arg_array, arg!(0))))
-                    }
-                    Some(IoThid) if args_len >= 1 => {
-                        let thread = self.push_node(Node::ThreadId(1));
-                        Some((1, self.pair(thread, arg!(0))))
-                    }
-                    Some(IoYield) if args_len >= 1 => {
-                        let unit = self.prim("I");
-                        Some((1, self.pair(unit, arg!(0))))
-                    }
-                    Some(IoGetMaskingState) if args_len >= 1 => {
-                        let state = self.int(self.masking_state);
-                        Some((1, self.pair(state, arg!(0))))
-                    }
-                    Some(IoSetMaskingState) if args_len >= 2 => {
-                        self.masking_state = self.eval_int(arg!(0))?;
-                        let unit = self.prim("I");
-                        Some((2, self.pair(unit, arg!(1))))
-                    }
-                    Some(Dynsym) if args_len >= 1 => {
-                        let name = self.eval_ffi_name(arg!(0))?;
-                        Some((1, self.push_node(Node::Ffi(name))))
-                    }
-                    Some(IoThreadStatus) if args_len >= 2 => {
-                        self.eval_thread_id(arg!(0))?;
-                        let status = self.int(0);
-                        Some((2, self.pair(status, arg!(1))))
-                    }
-                    Some(IoNewMVar) if args_len >= 1 => {
-                        let mvar = self.push_node(Node::MVar(None));
-                        Some((1, self.pair(mvar, arg!(0))))
-                    }
-                    Some(IoTakeMVar) if args_len >= 2 => {
-                        let mvar = self.eval_mvar_id(arg!(0))?;
-                        let value = self.take_mvar(mvar)?.ok_or(EvalError::InvalidMVar)?;
-                        Some((2, self.pair(value, arg!(1))))
-                    }
-                    Some(IoReadMVar) if args_len >= 2 => {
-                        let mvar = self.eval_mvar_id(arg!(0))?;
-                        let value = self.read_mvar(mvar)?.ok_or(EvalError::InvalidMVar)?;
-                        Some((2, self.pair(value, arg!(1))))
-                    }
-                    Some(IoPutMVar) if args_len >= 3 => {
-                        let mvar = self.eval_mvar_id(arg!(0))?;
-                        self.put_mvar(mvar, arg!(1))?;
-                        let unit = self.prim("I");
-                        Some((3, self.pair(unit, arg!(2))))
-                    }
-                    Some(IoTryTakeMVar) if args_len >= 2 => {
-                        let mvar = self.eval_mvar_id(arg!(0))?;
-                        let value = match self.take_mvar(mvar)? {
-                            Some(value) => self.just(value),
-                            None => self.nothing(),
-                        };
-                        Some((2, self.pair(value, arg!(1))))
-                    }
-                    Some(IoTryReadMVar) if args_len >= 2 => {
-                        let mvar = self.eval_mvar_id(arg!(0))?;
-                        let value = match self.read_mvar(mvar)? {
-                            Some(value) => self.just(value),
-                            None => self.nothing(),
-                        };
-                        Some((2, self.pair(value, arg!(1))))
-                    }
-                    Some(IoTryPutMVar) if args_len >= 3 => {
-                        let mvar = self.eval_mvar_id(arg!(0))?;
-                        let value = if self.try_put_mvar(mvar, arg!(1))? {
-                            self.prim("A")
-                        } else {
-                            self.prim("K")
-                        };
-                        Some((3, self.pair(value, arg!(2))))
-                    }
-                    Some(Catch) if args_len >= 3 => {
-                        let action = self.app(arg!(0), arg!(2));
-                        Some((3, self.catch_result(action, arg!(1), arg!(2))?))
-                    }
-                    Some(CatchR) if args_len >= 3 => {
-                        Some((3, self.catch_result(arg!(0), arg!(1), arg!(2))?))
-                    }
-                    Some(Raise) if args_len >= 1 => return Err(EvalError::Raised(arg!(0))),
-                    Some(Rnf) if args_len >= 2 => {
-                        let noerr = self.eval_int(arg!(0))? != 0;
-                        self.rnf(noerr, arg!(1))?;
-                        Some((2, self.prim("I")))
-                    }
-                    Some(Seq) if args_len >= 2 => Some((2, arg!(1))),
-                    Some(IsInt) if args_len >= 1 => {
-                        let root = self.resolve(arg!(0))?;
-                        let n = match self.nodes[root.0] {
-                            Node::Int(n) => n,
-                            _ => -1,
-                        };
-                        Some((1, self.int(n)))
-                    }
-                    Some(Thnum) if args_len >= 1 => {
-                        let thread = self.eval_thread_id(arg!(0))?;
-                        Some((1, self.int(thread)))
-                    }
-                    Some(S) if args_len >= 3 => {
-                        let x = arg!(2);
-                        let left = self.app(arg!(0), x);
-                        let right = self.app(arg!(1), x);
-                        app_step!(3, left, right);
-                    }
-                    Some(SPrime) if args_len >= 4 => {
-                        let yw = self.app(arg!(1), arg!(3));
-                        let zw = self.app(arg!(2), arg!(3));
-                        let left = self.app(arg!(0), yw);
-                        app_step!(4, left, zw);
-                    }
-                    Some(B) if args_len >= 3 => {
-                        let yz = self.app(arg!(1), arg!(2));
-                        app_step!(3, arg!(0), yz);
-                    }
-                    Some(BPrime) if args_len >= 4 => {
-                        let zw = self.app(arg!(2), arg!(3));
-                        let xy = self.app(arg!(0), arg!(1));
-                        app_step!(4, xy, zw);
-                    }
-                    Some(BPrime) if args_len >= 2 => {
-                        let xy = self.app(arg!(0), arg!(1));
-                        let b = self.prim("B");
-                        app_step!(2, b, xy);
-                    }
-                    Some(Z) if args_len >= 3 => {
-                        app_step!(3, arg!(0), arg!(1));
-                    }
-                    Some(Z) if args_len >= 2 => {
-                        let xy = self.app(arg!(0), arg!(1));
-                        let k = self.prim("K");
-                        app_step!(2, k, xy);
-                    }
-                    Some(J) if args_len >= 3 => {
-                        app_step!(3, arg!(2), arg!(0));
-                    }
-                    Some(L) if args_len >= 3 => {
-                        app_step!(3, arg!(1), arg!(0));
-                    }
-                    Some(KK) if args_len >= 3 => Some((3, arg!(1))),
-                    Some(KA) if args_len >= 3 => Some((3, arg!(2))),
-                    Some(C) if args_len >= 3 => {
-                        let xz = self.app(arg!(0), arg!(2));
-                        app_step!(3, xz, arg!(1));
-                    }
-                    Some(CPrime) if args_len >= 4 => {
-                        let yw = self.app(arg!(1), arg!(3));
-                        let xyw = self.app(arg!(0), yw);
-                        app_step!(4, xyw, arg!(2));
-                    }
-                    Some(P) if args_len >= 3 => {
-                        let zx = self.app(arg!(2), arg!(0));
-                        app_step!(3, zx, arg!(1));
-                    }
-                    Some(R) if args_len >= 3 => {
-                        let yz = self.app(arg!(1), arg!(2));
-                        app_step!(3, yz, arg!(0));
-                    }
-                    Some(R) if args_len >= 2 => {
-                        let c = self.prim("C");
-                        let cy = self.app(c, arg!(1));
-                        app_step!(2, cy, arg!(0));
-                    }
-                    Some(O) if args_len >= 4 => {
-                        let wx = self.app(arg!(3), arg!(0));
-                        app_step!(4, wx, arg!(1));
-                    }
-                    Some(K2) if args_len >= 3 => Some((3, arg!(0))),
-                    Some(K2) if args_len >= 2 => {
-                        let k = self.prim("K");
-                        app_step!(2, k, arg!(0));
-                    }
-                    Some(K3) if args_len >= 4 => Some((4, arg!(0))),
-                    Some(K3) if args_len >= 2 => {
-                        let k2 = self.prim("K2");
-                        app_step!(2, k2, arg!(0));
-                    }
-                    Some(K4) if args_len >= 5 => Some((5, arg!(0))),
-                    Some(K4) if args_len >= 2 => {
-                        let k3 = self.prim("K3");
-                        app_step!(2, k3, arg!(0));
-                    }
-                    Some(CPrimeB) if args_len >= 4 => {
-                        let yw = self.app(arg!(1), arg!(3));
-                        let xz = self.app(arg!(0), arg!(2));
-                        app_step!(4, xz, yw);
-                    }
-                    Some(CPrimeB) if args_len >= 3 => {
-                        let xz = self.app(arg!(0), arg!(2));
-                        let b = self.prim("B");
-                        let bxz = self.app(b, xz);
-                        app_step!(3, bxz, arg!(1));
-                    }
-                    Some(Y) if args_len >= 1 => {
-                        app_step!(1, arg!(0), spine.app(0));
-                    }
-                    Some(Tag(tag)) if args_len >= 2 => {
-                        let tag = self.int(i64::from(tag));
-                        let ytag = self.app(arg!(1), tag);
-                        app_step!(2, ytag, arg!(0));
-                    }
-                    Some(Tuple(fields)) if args_len > usize::from(fields) => {
-                        let fields = usize::from(fields);
-                        if budget >= 2 {
-                            let selector = arg!(fields);
-                            let available_extra = args_len - fields - 1;
-                            if let Some(extra_used) = self.tuple_first_field_selector_extra(
-                                selector,
-                                fields,
-                                available_extra,
-                            )? {
-                                self.profile_shortcut("tuple_first_field_selector", 1);
-                                rewrite_step!(fields + 1 + extra_used, arg!(0), 2);
-                            }
-                        }
-                        let mut n = arg!(fields);
-                        for idx in 0..fields - 1 {
-                            n = self.app(n, arg!(idx));
-                        }
-                        app_step!(fields + 1, n, arg!(fields - 1));
-                    }
-                    _ if args_len >= 2 => {
-                        let name = prim.name();
-                        let materialized_args = args_len.min(FALLBACK_PRIM_ARG_PREFIX);
-                        if self.profile.is_some() {
-                            self.profile_arg_materialization(materialized_args);
-                        }
-                        spine.write_args_head_order_prefix(scratch_args, FALLBACK_PRIM_ARG_PREFIX);
-                        let args = scratch_args.as_slice();
-                        macro_rules! dispatch_helper {
-                            ($key:literal, $expr:expr) => {{
-                                self.profile_primitive_dispatch_probe($key);
-                                let result = $expr?;
-                                if result.is_some() {
-                                    self.profile_primitive_dispatch_hit($key);
-                                }
-                                result
-                            }};
-                        }
-                        dispatch_helper!("fallback_array_op", self.array_op(name, args))
-                            .or(dispatch_helper!(
-                                "fallback_foreign_ptr_op",
-                                self.foreign_ptr_op(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_stable_ptr_op",
-                                self.stable_ptr_op(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_weak_ptr_op",
-                                self.weak_ptr_op(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_bytes_op",
-                                self.bytes_op(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_float64_binop",
-                                self.float64_binop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_float32_binop",
-                                self.float32_binop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_int64_binop",
-                                self.int64_binop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_int_binop",
-                                self.int_binop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_array_unop",
-                                self.array_unop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_bytes_unop",
-                                self.bytes_unop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_float64_unop",
-                                self.float64_unop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_float32_unop",
-                                self.float32_unop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_pointer_conversion",
-                                self.pointer_conversion(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_float_conversion",
-                                self.float_conversion(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_int64_unop",
-                                self.int64_unop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_int_conversion",
-                                self.int_conversion(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_int_unop",
-                                self.int_unop(name, args)
-                            ))
-                    }
-                    _ if args_len >= 1 => {
-                        let name = prim.name();
-                        let materialized_args = args_len.min(FALLBACK_PRIM_ARG_PREFIX);
-                        if self.profile.is_some() {
-                            self.profile_arg_materialization(materialized_args);
-                        }
-                        spine.write_args_head_order_prefix(scratch_args, FALLBACK_PRIM_ARG_PREFIX);
-                        let args = scratch_args.as_slice();
-                        macro_rules! dispatch_helper {
-                            ($key:literal, $expr:expr) => {{
-                                self.profile_primitive_dispatch_probe($key);
-                                let result = $expr?;
-                                if result.is_some() {
-                                    self.profile_primitive_dispatch_hit($key);
-                                }
-                                result
-                            }};
-                        }
-                        dispatch_helper!("fallback_array_unop", self.array_unop(name, args))
-                            .or(dispatch_helper!(
-                                "fallback_foreign_ptr_unop",
-                                self.foreign_ptr_unop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_stable_ptr_unop",
-                                self.stable_ptr_unop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_weak_ptr_unop",
-                                self.weak_ptr_unop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_bytes_unop",
-                                self.bytes_unop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_float64_unop",
-                                self.float64_unop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_float32_unop",
-                                self.float32_unop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_pointer_conversion",
-                                self.pointer_conversion(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_float_conversion",
-                                self.float_conversion(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_int64_unop",
-                                self.int64_unop(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_int_conversion",
-                                self.int_conversion(name, args)
-                            ))
-                            .or(dispatch_helper!(
-                                "fallback_int_unop",
-                                self.int_unop(name, args)
-                            ))
-                    }
-                    _ => None,
-                };
-
-                let Some((mut used, mut node)) = rewrite else {
-                    let name = prim.name();
-                    if args_len != 0 && !is_supported_runtime_prim_name(name) {
-                        return Err(EvalError::UnknownPrim(name.to_owned()));
-                    }
-                    return Ok(None);
-                };
-                let mut reductions = 1;
-                if matches!(known, Some(I | Ord | Chr)) {
-                    let mut alias_shortcuts = 0;
-                    while reductions < budget
-                        && used < args_len
-                        && self.is_identity_alias_node(node)?
-                    {
-                        node = arg!(used);
-                        used += 1;
-                        reductions += 1;
-                        alias_shortcuts += 1;
-                    }
-                    self.profile_shortcut("identity_alias_chain", alias_shortcuts);
-                }
-                if profile_head.is_some() {
-                    self.profile_spine_rewrite(args_len - used);
-                }
-                let node = self.apply_eval_spine_rewrite(root, spine, used, node);
-                Ok(Some(self.eval_loop_result(&profile_head, node, reductions)))
+        if known == Some(U) && args_len >= 2 {
+            if let Some(node) = self.selector_pair_field(arg!(0), arg!(1))? {
+                self.profile_shortcut("selector_pair_field", 1);
+                rewrite_step!(2, node, 1);
             }
-            _ => Ok(None),
         }
+
+        if known == Some(IoThen) && args_len >= 3 && budget >= 2 {
+            if let Some(reductions) = self.ignored_io_action_reductions(arg!(0), budget - 1)? {
+                self.profile_shortcut("io_then_ignored_action", 1);
+                let world = self
+                    .run_ignored_io_action(arg!(0), arg!(2))?
+                    .expect("preflighted ignored IO action should execute");
+                let node = self.app(arg!(1), world);
+                rewrite_step!(3, node, reductions + 1);
+            }
+            let k = self.prim("K");
+            let then = self.app(k, arg!(1));
+            let action = self.app(arg!(0), arg!(2));
+            let node = self.app(action, then);
+            rewrite_step!(3, node, 2);
+        }
+
+        if known == Some(IoBind) && args_len >= 3 {
+            if let Some(result) = self.io_return_action_result(arg!(0))? {
+                self.profile_shortcut("io_bind_return_action", 1);
+                let next = self.app(arg!(1), result);
+                let node = self.app(next, arg!(2));
+                rewrite_step!(3, node, 2);
+            }
+        }
+
+        if strict_markers {
+            match known {
+                Some(IoStrict) if args_len >= 2 => {
+                    strict_marker_step!(
+                        2,
+                        Whnf,
+                        WhnfFrame,
+                        WhnfFrameKind::IoStrict {
+                            action: arg!(0),
+                            value: arg!(1),
+                        },
+                        arg!(1)
+                    );
+                }
+                Some(Seq) if args_len >= 2 => {
+                    strict_marker_step!(
+                        2,
+                        Whnf,
+                        WhnfFrame,
+                        WhnfFrameKind::Seq { result: arg!(1) },
+                        arg!(0)
+                    );
+                }
+                Some(IsInt) if args_len >= 1 => {
+                    strict_marker_step!(1, Whnf, WhnfFrame, WhnfFrameKind::IsInt, arg!(0));
+                }
+                _ => {}
+            }
+        }
+
+        if strict_markers && known.is_none() {
+            if self.profile.is_some() {
+                self.profile_strict_primitive_dispatch(args_len, strict_action);
+            }
+            match strict_action {
+                StrictPrimitiveAction::IntBin(op) => {
+                    let x = arg!(0);
+                    strict_marker_step!(
+                        2,
+                        Int,
+                        IntFrame,
+                        IntFrameKind::BinSecond { op, x },
+                        arg!(1)
+                    );
+                }
+                StrictPrimitiveAction::IntUn(op) => {
+                    strict_marker_step!(1, Int, IntFrame, IntFrameKind::Un { op }, arg!(0));
+                }
+                StrictPrimitiveAction::Int64Bin(op) => {
+                    if op.rhs_is_shift() {
+                        strict_int64_shift_marker_step!(2, op, arg!(0), arg!(1));
+                    } else if op.driver_marker_safe() {
+                        strict_marker_step!(
+                            2,
+                            Int64,
+                            Int64Frame,
+                            Int64FrameKind::BinSecond { op, x: arg!(0) },
+                            arg!(1)
+                        );
+                    }
+                }
+                StrictPrimitiveAction::Int64Un(op) => {
+                    strict_marker_step!(1, Int64, Int64Frame, Int64FrameKind::Un { op }, arg!(0));
+                }
+                StrictPrimitiveAction::Float64Bin(op) => {
+                    strict_marker_step!(
+                        2,
+                        Float64,
+                        Float64Frame,
+                        Float64FrameKind::BinSecond { op, x: arg!(0) },
+                        arg!(1)
+                    );
+                }
+                StrictPrimitiveAction::Float64Un(op) => {
+                    strict_marker_step!(
+                        1,
+                        Float64,
+                        Float64Frame,
+                        Float64FrameKind::Un { op },
+                        arg!(0)
+                    );
+                }
+                StrictPrimitiveAction::Float32Bin(op) => {
+                    strict_marker_step!(
+                        2,
+                        Float32,
+                        Float32Frame,
+                        Float32FrameKind::BinSecond { op, x: arg!(0) },
+                        arg!(1)
+                    );
+                }
+                StrictPrimitiveAction::Float32Un(op) => {
+                    strict_marker_step!(
+                        1,
+                        Float32,
+                        Float32Frame,
+                        Float32FrameKind::Un { op },
+                        arg!(0)
+                    );
+                }
+                StrictPrimitiveAction::BytesBin(op) => {
+                    strict_marker_step!(
+                        2,
+                        Bytes,
+                        BytesFrame,
+                        BytesFrameKind::BinSecond { op, x: arg!(0) },
+                        arg!(1)
+                    );
+                }
+                StrictPrimitiveAction::Conversion(kind) => {
+                    strict_marker_step!(1, Conversion, ConversionFrame, kind, arg!(0));
+                }
+                StrictPrimitiveAction::None => {}
+            }
+        }
+
+        let rewrite = match known {
+            Some(I | Ord | Chr) if args_len >= 1 => Some((1, arg!(0))),
+            Some(K) if args_len >= 2 => Some((2, arg!(0))),
+            Some(A) if args_len >= 2 => Some((2, arg!(1))),
+            Some(U) if args_len >= 2 => {
+                app_step!(2, arg!(1), arg!(0));
+            }
+            Some(IoPerformIo) if args_len >= 1 => {
+                let world = self.world();
+                let k = self.prim("K");
+                let action = self.app(arg!(0), world);
+                let n = self.app(action, k);
+                Some((1, n))
+            }
+            Some(IoAtomic) if args_len >= 2 => {
+                let k = self.prim("K");
+                let action = self.app(arg!(0), arg!(1));
+                let result = self.app(action, k);
+                let pair = self.prim("P");
+                let result_pair = self.app(pair, result);
+                let n = self.app(result_pair, arg!(1));
+                Some((2, n))
+            }
+            Some(IoBind) if args_len >= 3 => {
+                let action = self.app(arg!(0), arg!(2));
+                let n = self.app(action, arg!(1));
+                Some((3, n))
+            }
+            Some(IoThen) if args_len >= 2 => {
+                let bind = self.prim("IO.>>=");
+                let bind_action = self.app(bind, arg!(0));
+                let k = self.prim("K");
+                let then = self.app(k, arg!(1));
+                let n = self.app(bind_action, then);
+                Some((2, n))
+            }
+            Some(IoReturn) if args_len >= 3 => {
+                let kx = self.app(arg!(2), arg!(0));
+                let n = self.app(kx, arg!(1));
+                Some((3, n))
+            }
+            Some(IoLazyBind) if args_len >= 3 => {
+                let world_result = self.app(arg!(0), arg!(2));
+                let fst = self.fst();
+                let snd = self.snd();
+                let result = self.app(fst, world_result);
+                let world = self.app(snd, world_result);
+                let next = self.app(arg!(1), result);
+                let n = self.app(next, world);
+                Some((3, n))
+            }
+            Some(IoStrict) if args_len >= 2 => {
+                let n = self.app(arg!(0), arg!(1));
+                Some((2, n))
+            }
+            Some(IoGc) if args_len >= 2 => {
+                let unit = self.prim("I");
+                Some((2, self.pair(unit, arg!(1))))
+            }
+            Some(IoStats) if args_len >= 1 => {
+                let alloc = self.int(i64::try_from(self.nodes.len()).unwrap_or(i64::MAX));
+                let reductions = self.int(i64::try_from(self.reductions).unwrap_or(i64::MAX));
+                let stats = self.pair(alloc, reductions);
+                Some((1, self.pair(stats, arg!(0))))
+            }
+            Some(IoPp) if args_len >= 2 => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let rendered = self.render(arg!(0));
+                    eprintln!("{rendered}");
+                }
+                let unit = self.prim("I");
+                Some((2, self.pair(unit, arg!(1))))
+            }
+            Some(IoPrint) if args_len >= 3 => {
+                let handle = self.eval_io_handle(arg!(0))?;
+                let value = self.reduce_node_whnf(arg!(1), FORCE_REDUCTION_LIMIT)?;
+                let rendered = self.render(value);
+                self.write_io_handle(handle, &format!("{rendered}\n"))?;
+                let unit = self.prim("I");
+                Some((3, self.pair(unit, arg!(2))))
+            }
+            Some(IoSerialize) if args_len >= 3 => {
+                let handle = self.eval_io_handle(arg!(0))?;
+                let value = self.reduce_node_whnf(arg!(1), FORCE_REDUCTION_LIMIT)?;
+                let serialized = self.serialize_program(value)?;
+                self.write_io_handle_bytes(handle, &serialized)?;
+                let unit = self.prim("I");
+                Some((3, self.pair(unit, arg!(2))))
+            }
+            Some(IoGetArgRef) if args_len >= 1 => {
+                let arg_array = self.arg_ref_array();
+                Some((1, self.pair(arg_array, arg!(0))))
+            }
+            Some(IoThid) if args_len >= 1 => {
+                let thread = self.push_node(Node::ThreadId(1));
+                Some((1, self.pair(thread, arg!(0))))
+            }
+            Some(IoYield) if args_len >= 1 => {
+                let unit = self.prim("I");
+                Some((1, self.pair(unit, arg!(0))))
+            }
+            Some(IoGetMaskingState) if args_len >= 1 => {
+                let state = self.int(self.masking_state);
+                Some((1, self.pair(state, arg!(0))))
+            }
+            Some(IoSetMaskingState) if args_len >= 2 => {
+                self.masking_state = self.eval_int(arg!(0))?;
+                let unit = self.prim("I");
+                Some((2, self.pair(unit, arg!(1))))
+            }
+            Some(Dynsym) if args_len >= 1 => {
+                let name = self.eval_ffi_name(arg!(0))?;
+                Some((1, self.push_node(Node::ffi(name))))
+            }
+            Some(IoThreadStatus) if args_len >= 2 => {
+                self.eval_thread_id(arg!(0))?;
+                let status = self.int(0);
+                Some((2, self.pair(status, arg!(1))))
+            }
+            Some(IoNewMVar) if args_len >= 1 => {
+                let mvar = self.push_node(Node::MVar(None));
+                Some((1, self.pair(mvar, arg!(0))))
+            }
+            Some(IoTakeMVar) if args_len >= 2 => {
+                let mvar = self.eval_mvar_id(arg!(0))?;
+                let value = self.take_mvar(mvar)?.ok_or(EvalError::InvalidMVar)?;
+                Some((2, self.pair(value, arg!(1))))
+            }
+            Some(IoReadMVar) if args_len >= 2 => {
+                let mvar = self.eval_mvar_id(arg!(0))?;
+                let value = self.read_mvar(mvar)?.ok_or(EvalError::InvalidMVar)?;
+                Some((2, self.pair(value, arg!(1))))
+            }
+            Some(IoPutMVar) if args_len >= 3 => {
+                let mvar = self.eval_mvar_id(arg!(0))?;
+                self.put_mvar(mvar, arg!(1))?;
+                let unit = self.prim("I");
+                Some((3, self.pair(unit, arg!(2))))
+            }
+            Some(IoTryTakeMVar) if args_len >= 2 => {
+                let mvar = self.eval_mvar_id(arg!(0))?;
+                let value = match self.take_mvar(mvar)? {
+                    Some(value) => self.just(value),
+                    None => self.nothing(),
+                };
+                Some((2, self.pair(value, arg!(1))))
+            }
+            Some(IoTryReadMVar) if args_len >= 2 => {
+                let mvar = self.eval_mvar_id(arg!(0))?;
+                let value = match self.read_mvar(mvar)? {
+                    Some(value) => self.just(value),
+                    None => self.nothing(),
+                };
+                Some((2, self.pair(value, arg!(1))))
+            }
+            Some(IoTryPutMVar) if args_len >= 3 => {
+                let mvar = self.eval_mvar_id(arg!(0))?;
+                let value = if self.try_put_mvar(mvar, arg!(1))? {
+                    self.prim("A")
+                } else {
+                    self.prim("K")
+                };
+                Some((3, self.pair(value, arg!(2))))
+            }
+            Some(Catch) if args_len >= 3 => {
+                let action = self.app(arg!(0), arg!(2));
+                Some((3, self.catch_result(action, arg!(1), arg!(2))?))
+            }
+            Some(CatchR) if args_len >= 3 => {
+                Some((3, self.catch_result(arg!(0), arg!(1), arg!(2))?))
+            }
+            Some(Raise) if args_len >= 1 => return Err(EvalError::Raised(arg!(0))),
+            Some(Rnf) if args_len >= 2 => {
+                let noerr = self.eval_int(arg!(0))? != 0;
+                self.rnf(noerr, arg!(1))?;
+                Some((2, self.prim("I")))
+            }
+            Some(Seq) if args_len >= 2 => Some((2, arg!(1))),
+            Some(IsInt) if args_len >= 1 => {
+                let root = self.resolve(arg!(0))?;
+                let n = self.cell(root).int_value().unwrap_or(-1);
+                Some((1, self.int(n)))
+            }
+            Some(Thnum) if args_len >= 1 => {
+                let thread = self.eval_thread_id(arg!(0))?;
+                Some((1, self.int(thread)))
+            }
+            Some(S) if args_len >= 3 => {
+                let x = arg!(2);
+                let left = self.app(arg!(0), x);
+                let right = self.app(arg!(1), x);
+                app_step!(3, left, right);
+            }
+            Some(SPrime) if args_len >= 4 => {
+                let yw = self.app(arg!(1), arg!(3));
+                let zw = self.app(arg!(2), arg!(3));
+                let left = self.app(arg!(0), yw);
+                app_step!(4, left, zw);
+            }
+            Some(B) if args_len >= 3 => {
+                let yz = self.app(arg!(1), arg!(2));
+                app_step!(3, arg!(0), yz);
+            }
+            Some(BPrime) if args_len >= 4 => {
+                let zw = self.app(arg!(2), arg!(3));
+                let xy = self.app(arg!(0), arg!(1));
+                app_step!(4, xy, zw);
+            }
+            Some(BPrime) if args_len >= 2 => {
+                let xy = self.app(arg!(0), arg!(1));
+                let b = self.prim("B");
+                app_step!(2, b, xy);
+            }
+            Some(Z) if args_len >= 3 => {
+                app_step!(3, arg!(0), arg!(1));
+            }
+            Some(Z) if args_len >= 2 => {
+                let xy = self.app(arg!(0), arg!(1));
+                let k = self.prim("K");
+                app_step!(2, k, xy);
+            }
+            Some(J) if args_len >= 3 => {
+                app_step!(3, arg!(2), arg!(0));
+            }
+            Some(L) if args_len >= 3 => {
+                app_step!(3, arg!(1), arg!(0));
+            }
+            Some(KK) if args_len >= 3 => Some((3, arg!(1))),
+            Some(KA) if args_len >= 3 => Some((3, arg!(2))),
+            Some(C) if args_len >= 3 => {
+                let xz = self.app(arg!(0), arg!(2));
+                app_step!(3, xz, arg!(1));
+            }
+            Some(CPrime) if args_len >= 4 => {
+                let yw = self.app(arg!(1), arg!(3));
+                let xyw = self.app(arg!(0), yw);
+                app_step!(4, xyw, arg!(2));
+            }
+            Some(P) if args_len >= 3 => {
+                let zx = self.app(arg!(2), arg!(0));
+                app_step!(3, zx, arg!(1));
+            }
+            Some(R) if args_len >= 3 => {
+                let yz = self.app(arg!(1), arg!(2));
+                app_step!(3, yz, arg!(0));
+            }
+            Some(R) if args_len >= 2 => {
+                let c = self.prim("C");
+                let cy = self.app(c, arg!(1));
+                app_step!(2, cy, arg!(0));
+            }
+            Some(O) if args_len >= 4 => {
+                let wx = self.app(arg!(3), arg!(0));
+                app_step!(4, wx, arg!(1));
+            }
+            Some(K2) if args_len >= 3 => Some((3, arg!(0))),
+            Some(K2) if args_len >= 2 => {
+                let k = self.prim("K");
+                app_step!(2, k, arg!(0));
+            }
+            Some(K3) if args_len >= 4 => Some((4, arg!(0))),
+            Some(K3) if args_len >= 2 => {
+                let k2 = self.prim("K2");
+                app_step!(2, k2, arg!(0));
+            }
+            Some(K4) if args_len >= 5 => Some((5, arg!(0))),
+            Some(K4) if args_len >= 2 => {
+                let k3 = self.prim("K3");
+                app_step!(2, k3, arg!(0));
+            }
+            Some(CPrimeB) if args_len >= 4 => {
+                let yw = self.app(arg!(1), arg!(3));
+                let xz = self.app(arg!(0), arg!(2));
+                app_step!(4, xz, yw);
+            }
+            Some(CPrimeB) if args_len >= 3 => {
+                let xz = self.app(arg!(0), arg!(2));
+                let b = self.prim("B");
+                let bxz = self.app(b, xz);
+                app_step!(3, bxz, arg!(1));
+            }
+            Some(Y) if args_len >= 1 => {
+                app_step!(1, arg!(0), spine.app(0));
+            }
+            Some(Tag(tag)) if args_len >= 2 => {
+                let tag = self.int(i64::from(tag));
+                let ytag = self.app(arg!(1), tag);
+                app_step!(2, ytag, arg!(0));
+            }
+            Some(Tuple(fields)) if args_len > usize::from(fields) => {
+                let fields = usize::from(fields);
+                if budget >= 2 {
+                    let selector = arg!(fields);
+                    let available_extra = args_len - fields - 1;
+                    if let Some(extra_used) =
+                        self.tuple_first_field_selector_extra(selector, fields, available_extra)?
+                    {
+                        self.profile_shortcut("tuple_first_field_selector", 1);
+                        rewrite_step!(fields + 1 + extra_used, arg!(0), 2);
+                    }
+                }
+                let mut n = arg!(fields);
+                for idx in 0..fields - 1 {
+                    n = self.app(n, arg!(idx));
+                }
+                app_step!(fields + 1, n, arg!(fields - 1));
+            }
+            _ if args_len >= 2 && fallback_name.is_some() => {
+                let name = fallback_name.expect("fallback name checked above");
+                let materialized_args = args_len.min(FALLBACK_PRIM_ARG_PREFIX);
+                if self.profile.is_some() {
+                    self.profile_arg_materialization(materialized_args);
+                }
+                spine.write_args_head_order_prefix(scratch_args, FALLBACK_PRIM_ARG_PREFIX);
+                self.fallback_runtime_prim_rewrite(name, scratch_args.as_slice(), args_len)?
+            }
+            _ if args_len >= 1 && fallback_name.is_some() => {
+                let name = fallback_name.expect("fallback name checked above");
+                let materialized_args = args_len.min(FALLBACK_PRIM_ARG_PREFIX);
+                if self.profile.is_some() {
+                    self.profile_arg_materialization(materialized_args);
+                }
+                spine.write_args_head_order_prefix(scratch_args, FALLBACK_PRIM_ARG_PREFIX);
+                self.fallback_runtime_prim_rewrite(name, scratch_args.as_slice(), args_len)?
+            }
+            _ => None,
+        };
+
+        let Some((mut used, mut node)) = rewrite else {
+            if let Some(name) = fallback_name {
+                if args_len != 0 && !is_supported_runtime_prim_name(name) {
+                    return Err(EvalError::UnknownPrim(name.to_owned()));
+                }
+            }
+            return Ok(None);
+        };
+        let mut reductions = 1;
+        if matches!(known, Some(I | Ord | Chr)) {
+            let mut alias_shortcuts = 0;
+            while reductions < budget && used < args_len && self.is_identity_alias_node(node)? {
+                node = arg!(used);
+                used += 1;
+                reductions += 1;
+                alias_shortcuts += 1;
+            }
+            self.profile_shortcut("identity_alias_chain", alias_shortcuts);
+        }
+        if profile_head.is_some() {
+            self.profile_spine_rewrite(args_len - used);
+        }
+        let node = self.apply_eval_spine_rewrite(root, spine, used, node);
+        Ok(Some(self.eval_loop_result(profile_head, node, reductions)))
+    }
+
+    fn fallback_runtime_prim_rewrite(
+        &mut self,
+        name: &str,
+        args: &[NodeId],
+        args_len: usize,
+    ) -> Result<Option<(usize, NodeId)>, EvalError> {
+        macro_rules! dispatch_helper {
+            ($key:literal, $expr:expr) => {{
+                self.profile_primitive_dispatch_probe($key);
+                let result = $expr?;
+                if result.is_some() {
+                    self.profile_primitive_dispatch_hit($key);
+                }
+                result
+            }};
+        }
+
+        if args_len >= 2 {
+            return Ok(
+                dispatch_helper!("fallback_array_op", self.array_op(name, args))
+                    .or(dispatch_helper!(
+                        "fallback_foreign_ptr_op",
+                        self.foreign_ptr_op(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_stable_ptr_op",
+                        self.stable_ptr_op(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_weak_ptr_op",
+                        self.weak_ptr_op(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_bytes_op",
+                        self.bytes_op(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_float64_binop",
+                        self.float64_binop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_float32_binop",
+                        self.float32_binop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_int64_binop",
+                        self.int64_binop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_int_binop",
+                        self.int_binop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_array_unop",
+                        self.array_unop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_bytes_unop",
+                        self.bytes_unop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_float64_unop",
+                        self.float64_unop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_float32_unop",
+                        self.float32_unop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_pointer_conversion",
+                        self.pointer_conversion(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_float_conversion",
+                        self.float_conversion(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_int64_unop",
+                        self.int64_unop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_int_conversion",
+                        self.int_conversion(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_int_unop",
+                        self.int_unop(name, args)
+                    )),
+            );
+        }
+
+        if args_len >= 1 {
+            return Ok(
+                dispatch_helper!("fallback_array_unop", self.array_unop(name, args))
+                    .or(dispatch_helper!(
+                        "fallback_foreign_ptr_unop",
+                        self.foreign_ptr_unop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_stable_ptr_unop",
+                        self.stable_ptr_unop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_weak_ptr_unop",
+                        self.weak_ptr_unop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_bytes_unop",
+                        self.bytes_unop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_float64_unop",
+                        self.float64_unop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_float32_unop",
+                        self.float32_unop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_pointer_conversion",
+                        self.pointer_conversion(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_float_conversion",
+                        self.float_conversion(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_int64_unop",
+                        self.int64_unop(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_int_conversion",
+                        self.int_conversion(name, args)
+                    ))
+                    .or(dispatch_helper!(
+                        "fallback_int_unop",
+                        self.int_unop(name, args)
+                    )),
+            );
+        }
+
+        Ok(None)
     }
 
     fn fill_persistent_spine(
@@ -2941,8 +5188,8 @@ impl Program {
         spine: &mut PersistentSpine,
         profile_resolve: bool,
     ) -> Result<NodeId, EvalError> {
-        while let Node::App(fun, arg) = self.nodes[node.0] {
-            spine.push_front(arg, node);
+        while let Some((fun, _)) = self.cell(node).app_fields() {
+            spine.push_front(node);
             node = self.resolve_for_whnf(fun, profile_resolve)?;
         }
         Ok(node)
@@ -2965,7 +5212,7 @@ impl Program {
 
         macro_rules! arg {
             ($idx:expr) => {
-                spine.arg($idx)
+                spine.arg(&self.nodes, $idx)?
             };
         }
         macro_rules! app_site {
@@ -2976,7 +5223,7 @@ impl Program {
         macro_rules! finish_reduction {
             ($node:expr, $reductions:expr) => {{
                 if profile_head.is_some() {
-                    self.profile_reduction(&profile_head, $reductions);
+                    self.profile_reduction(profile_head, $reductions);
                 }
                 return Ok(PersistentStep::Reduced {
                     node: $node,
@@ -2990,12 +5237,17 @@ impl Program {
                 if $used > 0 {
                     let redex = spine.app($used - 1);
                     if node != redex {
-                        self.nodes[redex.0] = Node::Indir(Some(node));
+                        self.set_app_cell_at(redex.index(), Cell::indir(Some(node)));
+                    }
+                    if $used < spine.len() {
+                        if self.profile.is_some() {
+                            self.profile_remaining_app_scan(spine.len() - $used);
+                        }
                     }
                     if $used < spine.len() && !spine.remaining_apps_contain($used, node) {
                         let app = spine.app($used);
-                        let arg = spine.arg($used);
-                        self.nodes[app.0] = Node::App(node, arg);
+                        let arg = spine.arg(&self.nodes, $used)?;
+                        self.set_app_cell_at(app.index(), Cell::app(node, arg));
                     }
                 }
                 spine.consume($used);
@@ -3008,7 +5260,7 @@ impl Program {
                 let arg = $arg;
                 let node = if $used > 0 {
                     let redex = spine.app($used - 1);
-                    self.nodes[redex.0] = Node::App(fun, arg);
+                    self.set_app_cell_at(redex.index(), Cell::app(fun, arg));
                     redex
                 } else {
                     app_site!("persistent_app_step_result", fun, arg)
@@ -3024,38 +5276,65 @@ impl Program {
         }
         macro_rules! force_step {
             ($used:expr, $variant:ident, $frame:ident, $kind:expr, $next:expr) => {{
-                let redex =
-                    Self::strict_redex_from_persistent_spine(spine.outer_root(head), $used, spine);
+                let redex_root = spine.outer_root(head);
+                let kind = $kind;
+                let next = $next;
+                let redex = self.strict_redex_from_persistent_spine(redex_root, $used, spine);
+                if self.profile.is_some() {
+                    self.profile_persistent_force();
+                    self.profile_eval_frame_push(stringify!($variant));
+                }
                 frame_stack.push(EvalFrame::$variant($frame {
                     redex,
                     profile_head,
-                    kind: $kind,
+                    kind,
                 }));
-                return Ok(PersistentStep::Force { node: $next });
+                return Ok(PersistentStep::Force { node: next });
             }};
         }
         macro_rules! force_int64_shift_step {
             ($used:expr, $op:expr, $x:expr, $next:expr) => {{
-                let redex =
-                    Self::strict_redex_from_persistent_spine(spine.outer_root(head), $used, spine);
+                let redex_root = spine.outer_root(head);
+                let x = $x;
+                let next = $next;
+                let redex = self.strict_redex_from_persistent_spine(redex_root, $used, spine);
+                if self.profile.is_some() {
+                    self.profile_persistent_force();
+                    self.profile_eval_frame_push("Int64Shift");
+                }
                 frame_stack.push(EvalFrame::Int64Shift(Int64ShiftFrame {
                     redex,
                     profile_head,
                     op: $op,
-                    x: $x,
+                    x,
                 }));
-                return Ok(PersistentStep::Force { node: $next });
+                return Ok(PersistentStep::Force { node: next });
             }};
         }
 
-        let head_node = self.nodes[head.0].clone();
-        let prim = match head_node {
-            Node::Ffi(name) if args_len > 0 => {
+        let head_dispatch = match self.cell(head).prim() {
+            Some(Prim::Known(known)) => PersistentHead::Known(known),
+            Some(Prim::Runtime(runtime)) => PersistentHead::Other(runtime.strict_action(args_len)),
+            None if args_len > 0 => match self.cold_node(head) {
+                Some(Node::Ffi(name)) => PersistentHead::Ffi(name.to_string()),
+                Some(Node::JsCall(call)) => PersistentHead::JsCall {
+                    tags: call.tags.clone(),
+                    body: call.body.clone(),
+                },
+                Some(Node::JsWrap { tags }) => PersistentHead::JsWrap {
+                    tags: tags.to_string(),
+                },
+                _ => PersistentHead::Whnf,
+            },
+            None => PersistentHead::Whnf,
+        };
+
+        let known = match head_dispatch {
+            PersistentHead::Ffi(name) => {
                 if self.profile.is_some() {
                     self.profile_arg_materialization(args_len);
                 }
-                scratch_args.clear();
-                scratch_args.extend(spine.args.iter().copied());
+                spine.write_args_head_order(&self.nodes, scratch_args)?;
                 let Some((used, node)) = self.ffi_call(&name, scratch_args.as_slice())? else {
                     return Ok(PersistentStep::Whnf {
                         node: spine.outer_root(head),
@@ -3063,14 +5342,12 @@ impl Program {
                 };
                 rewrite_step!(used, node, 1);
             }
-            Node::JsCall(call) if args_len > 0 => {
+            PersistentHead::JsCall { tags, body } => {
                 if self.profile.is_some() {
                     self.profile_arg_materialization(args_len);
                 }
-                scratch_args.clear();
-                scratch_args.extend(spine.args.iter().copied());
-                let Some((used, node)) =
-                    self.js_call(&call.tags, &call.body, scratch_args.as_slice())?
+                spine.write_args_head_order(&self.nodes, scratch_args)?;
+                let Some((used, node)) = self.js_call(&tags, &body, scratch_args.as_slice())?
                 else {
                     return Ok(PersistentStep::Whnf {
                         node: spine.outer_root(head),
@@ -3078,12 +5355,11 @@ impl Program {
                 };
                 rewrite_step!(used, node, 1);
             }
-            Node::JsWrap { tags } if args_len > 0 => {
+            PersistentHead::JsWrap { tags } => {
                 if self.profile.is_some() {
                     self.profile_arg_materialization(args_len);
                 }
-                scratch_args.clear();
-                scratch_args.extend(spine.args.iter().copied());
+                spine.write_args_head_order(&self.nodes, scratch_args)?;
                 let Some((used, node)) = self.js_wrap(&tags, scratch_args.as_slice())? else {
                     return Ok(PersistentStep::Whnf {
                         node: spine.outer_root(head),
@@ -3091,18 +5367,103 @@ impl Program {
                 };
                 rewrite_step!(used, node, 1);
             }
-            Node::Prim(prim) => prim,
-            _ => {
+            PersistentHead::Known(known) => known,
+            PersistentHead::Other(action) => {
+                if self.profile.is_some() {
+                    self.profile_strict_primitive_dispatch(args_len, action);
+                }
+                match action {
+                    StrictPrimitiveAction::IntBin(op) => {
+                        let x = arg!(0);
+                        force_step!(2, Int, IntFrame, IntFrameKind::BinSecond { op, x }, arg!(1));
+                    }
+                    StrictPrimitiveAction::IntUn(op) => {
+                        force_step!(1, Int, IntFrame, IntFrameKind::Un { op }, arg!(0));
+                    }
+                    StrictPrimitiveAction::Int64Bin(op) => {
+                        if op.rhs_is_shift() {
+                            force_int64_shift_step!(2, op, arg!(0), arg!(1));
+                        } else if op.driver_marker_safe() {
+                            force_step!(
+                                2,
+                                Int64,
+                                Int64Frame,
+                                Int64FrameKind::BinSecond { op, x: arg!(0) },
+                                arg!(1)
+                            );
+                        }
+                    }
+                    StrictPrimitiveAction::Int64Un(op) => {
+                        force_step!(1, Int64, Int64Frame, Int64FrameKind::Un { op }, arg!(0));
+                    }
+                    StrictPrimitiveAction::Float64Bin(op) => {
+                        force_step!(
+                            2,
+                            Float64,
+                            Float64Frame,
+                            Float64FrameKind::BinSecond { op, x: arg!(0) },
+                            arg!(1)
+                        );
+                    }
+                    StrictPrimitiveAction::Float64Un(op) => {
+                        force_step!(
+                            1,
+                            Float64,
+                            Float64Frame,
+                            Float64FrameKind::Un { op },
+                            arg!(0)
+                        );
+                    }
+                    StrictPrimitiveAction::Float32Bin(op) => {
+                        force_step!(
+                            2,
+                            Float32,
+                            Float32Frame,
+                            Float32FrameKind::BinSecond { op, x: arg!(0) },
+                            arg!(1)
+                        );
+                    }
+                    StrictPrimitiveAction::Float32Un(op) => {
+                        force_step!(
+                            1,
+                            Float32,
+                            Float32Frame,
+                            Float32FrameKind::Un { op },
+                            arg!(0)
+                        );
+                    }
+                    StrictPrimitiveAction::BytesBin(op) => {
+                        force_step!(
+                            2,
+                            Bytes,
+                            BytesFrame,
+                            BytesFrameKind::BinSecond { op, x: arg!(0) },
+                            arg!(1)
+                        );
+                    }
+                    StrictPrimitiveAction::Conversion(kind) => {
+                        force_step!(1, Conversion, ConversionFrame, kind, arg!(0));
+                    }
+                    StrictPrimitiveAction::None => {
+                        return Ok(PersistentStep::Fallback {
+                            root: spine.outer_root(head),
+                        });
+                    }
+                }
+                return Ok(PersistentStep::Fallback {
+                    root: spine.outer_root(head),
+                });
+            }
+            PersistentHead::Whnf => {
                 return Ok(PersistentStep::Whnf {
                     node: spine.outer_root(head),
                 });
             }
         };
-        let known = prim.known();
         use KnownPrim::*;
 
         match known {
-            Some(IoStrict) if args_len >= 2 => {
+            IoStrict if args_len >= 2 => {
                 force_step!(
                     2,
                     Whnf,
@@ -3114,7 +5475,7 @@ impl Program {
                     arg!(1)
                 );
             }
-            Some(Seq) if args_len >= 2 => {
+            Seq if args_len >= 2 => {
                 force_step!(
                     2,
                     Whnf,
@@ -3123,177 +5484,51 @@ impl Program {
                     arg!(0)
                 );
             }
-            Some(IsInt) if args_len >= 1 => {
+            IsInt if args_len >= 1 => {
                 force_step!(1, Whnf, WhnfFrame, WhnfFrameKind::IsInt, arg!(0));
             }
             _ => {}
         }
 
-        if known.is_none() {
-            let name = prim.name();
-            macro_rules! dispatch_probe {
-                ($key:literal, $expr:expr) => {{
-                    self.profile_primitive_dispatch_probe($key);
-                    let result = $expr;
-                    if result.is_some() {
-                        self.profile_primitive_dispatch_hit($key);
-                    }
-                    result
-                }};
-            }
-
-            if args_len >= 2 {
-                if let Some(op) = dispatch_probe!("strict_int_binop", IntBinOp::from_prim(name)) {
-                    force_step!(
-                        2,
-                        Int,
-                        IntFrame,
-                        IntFrameKind::BinSecond { op, x: arg!(0) },
-                        arg!(1)
-                    );
-                }
-            }
-
-            if args_len >= 1 {
-                if let Some(op) = dispatch_probe!("strict_int_unop", IntUnOp::from_prim(name)) {
-                    force_step!(1, Int, IntFrame, IntFrameKind::Un { op }, arg!(0));
-                }
-            }
-
-            if args_len >= 2 {
-                if let Some(op) = dispatch_probe!("strict_int64_binop", Int64BinOp::from_prim(name))
-                {
-                    if op.rhs_is_shift() {
-                        force_int64_shift_step!(2, op, arg!(0), arg!(1));
-                    } else if op.driver_marker_safe() {
-                        force_step!(
-                            2,
-                            Int64,
-                            Int64Frame,
-                            Int64FrameKind::BinSecond { op, x: arg!(0) },
-                            arg!(1)
-                        );
-                    }
-                }
-            }
-
-            if args_len >= 1 {
-                if let Some(op) = dispatch_probe!("strict_int64_unop", Int64UnOp::from_prim(name)) {
-                    force_step!(1, Int64, Int64Frame, Int64FrameKind::Un { op }, arg!(0));
-                }
-            }
-
-            if args_len >= 2 {
-                if let Some(op) =
-                    dispatch_probe!("strict_float64_binop", Float64BinOp::from_prim(name))
-                {
-                    force_step!(
-                        2,
-                        Float64,
-                        Float64Frame,
-                        Float64FrameKind::BinSecond { op, x: arg!(0) },
-                        arg!(1)
-                    );
-                }
-            }
-
-            if args_len >= 1 {
-                if let Some(op) =
-                    dispatch_probe!("strict_float64_unop", Float64UnOp::from_prim(name))
-                {
-                    force_step!(
-                        1,
-                        Float64,
-                        Float64Frame,
-                        Float64FrameKind::Un { op },
-                        arg!(0)
-                    );
-                }
-            }
-
-            if args_len >= 2 {
-                if let Some(op) =
-                    dispatch_probe!("strict_float32_binop", Float32BinOp::from_prim(name))
-                {
-                    force_step!(
-                        2,
-                        Float32,
-                        Float32Frame,
-                        Float32FrameKind::BinSecond { op, x: arg!(0) },
-                        arg!(1)
-                    );
-                }
-            }
-
-            if args_len >= 1 {
-                if let Some(op) =
-                    dispatch_probe!("strict_float32_unop", Float32UnOp::from_prim(name))
-                {
-                    force_step!(
-                        1,
-                        Float32,
-                        Float32Frame,
-                        Float32FrameKind::Un { op },
-                        arg!(0)
-                    );
-                }
-            }
-
-            if args_len >= 2 {
-                if let Some(op) = dispatch_probe!("strict_bytes_binop", BytesBinOp::from_prim(name))
-                {
-                    force_step!(
-                        2,
-                        Bytes,
-                        BytesFrame,
-                        BytesFrameKind::BinSecond { op, x: arg!(0) },
-                        arg!(1)
-                    );
-                }
-            }
-
-            if args_len >= 1 {
-                if let Some(kind) =
-                    dispatch_probe!("strict_conversion", ConversionFrameKind::from_prim(name))
-                {
-                    force_step!(1, Conversion, ConversionFrame, kind, arg!(0));
-                }
-            }
-        }
-
-        let Some(known) = known else {
-            return Ok(PersistentStep::Fallback {
-                root: spine.outer_root(head),
-            });
-        };
-
         match known {
             IoPerformIo if args_len >= 1 => {
                 let world = self.world();
                 let k = self.prim("K");
-                let action = app_site!("IO.performIO.action", arg!(0), world);
+                let io = arg!(0);
+                let action = app_site!("IO.performIO.action", io, world);
                 app_step!(1, action, k);
             }
             IoBind if args_len >= 3 => {
-                let action = app_site!("IO.bind.action", arg!(0), arg!(2));
-                app_step!(3, action, arg!(1));
+                let io = arg!(0);
+                let k = arg!(1);
+                let world = arg!(2);
+                let action = app_site!("IO.bind.action", io, world);
+                app_step!(3, action, k);
             }
             IoThen if args_len >= 3 && budget >= 2 => {
                 let k = self.prim("K");
-                let then = app_site!("IO.then.k", k, arg!(1));
-                let action = app_site!("IO.then.action", arg!(0), arg!(2));
+                let io = arg!(0);
+                let y = arg!(1);
+                let world = arg!(2);
+                let then = app_site!("IO.then.k", k, y);
+                let action = app_site!("IO.then.action", io, world);
                 app_step_reductions!(3, action, then, 2);
             }
             IoThen if args_len >= 2 => {
                 let bind = self.prim("IO.>>=");
-                let bind_action = app_site!("IO.then.bind_action", bind, arg!(0));
+                let io = arg!(0);
+                let y = arg!(1);
+                let bind_action = app_site!("IO.then.bind_action", bind, io);
                 let k = self.prim("K");
-                let then = app_site!("IO.then.k", k, arg!(1));
+                let then = app_site!("IO.then.k", k, y);
                 app_step!(2, bind_action, then);
             }
             IoReturn if args_len >= 3 => {
-                let kx = app_site!("IO.return.kx", arg!(2), arg!(0));
-                app_step!(3, kx, arg!(1));
+                let x = arg!(0);
+                let world = arg!(1);
+                let k = arg!(2);
+                let kx = app_site!("IO.return.kx", k, x);
+                app_step!(3, kx, world);
             }
             I | Ord | Chr if args_len >= 1 => {
                 let mut used = 1;
@@ -3420,9 +5655,11 @@ impl Program {
                 let fields = usize::from(fields);
                 let mut n = arg!(fields);
                 for idx in 0..fields - 1 {
-                    n = app_site!("Tuple.prefix", n, arg!(idx));
+                    let arg = arg!(idx);
+                    n = app_site!("Tuple.prefix", n, arg);
                 }
-                app_step!(fields + 1, n, arg!(fields - 1));
+                let last = arg!(fields - 1);
+                app_step!(fields + 1, n, last);
             }
             I | Ord | Chr | K | A | U | S | SPrime | B | BPrime | Z | J | L | KK | KA | C
             | CPrime | P | R | O | K2 | K3 | K4 | CPrimeB | Y | Tag(_) | Tuple(_) | IoPerformIo
@@ -3432,6 +5669,895 @@ impl Program {
             _ => Ok(PersistentStep::Fallback {
                 root: spine.outer_root(head),
             }),
+        }
+    }
+
+    fn stack_eval_step(
+        &mut self,
+        mut head: NodeId,
+        stack: &mut EvalStack,
+        scratch_args: &mut Vec<NodeId>,
+        budget: usize,
+        profile_resolve: bool,
+    ) -> Result<StackStep, EvalError> {
+        let mut carried_reductions = 0;
+        'eval: loop {
+            let profiling = self.profile.is_some();
+            if stack.app_len() == 0 {
+                if let Some((next, reductions)) = self.finish_ready_stack_frame(stack, head)? {
+                    carried_reductions += reductions;
+                    if carried_reductions >= budget {
+                        return Ok(StackStep::Reduced {
+                            node: next,
+                            reductions: carried_reductions,
+                        });
+                    }
+                    #[cfg(feature = "eval-phase-profile")]
+                    let started = profiling.then(Instant::now);
+                    head = self.descend_stack_from(next, stack, profile_resolve, profiling)?;
+                    #[cfg(feature = "eval-phase-profile")]
+                    if let Some(started) = started {
+                        self.profile_stack_inner_descent_time(started.elapsed().as_nanos());
+                    }
+                    continue 'eval;
+                }
+            }
+
+            let args_len = stack.app_len();
+            let profile_head = if profiling {
+                self.profile_step(head, args_len, false)
+            } else {
+                None
+            };
+            #[cfg(feature = "eval-phase-profile")]
+            let stack_eval_step_head_started = profiling.then(Instant::now);
+
+            macro_rules! arg {
+                ($idx:expr) => {{
+                    if profiling {
+                        self.profile_stack_arg_reads(1);
+                    }
+                    #[cfg(feature = "eval-phase-profile")]
+                    let started = profiling.then(Instant::now);
+                    let arg = stack.arg(&self.nodes, $idx);
+                    #[cfg(feature = "eval-phase-profile")]
+                    if let Some(started) = started {
+                        let nanos = started.elapsed().as_nanos();
+                        self.profile_stack_arg_read_time(nanos);
+                        self.profile_stack_arg_read_head_time(profile_head, nanos);
+                    }
+                    arg
+                }};
+            }
+            macro_rules! take_args {
+                ($reads:expr, $method:ident) => {{
+                    if profiling {
+                        self.profile_stack_arg_batch();
+                        self.profile_stack_arg_reads($reads);
+                    }
+                    #[cfg(feature = "eval-phase-profile")]
+                    let started = profiling.then(Instant::now);
+                    let args = stack.$method(&self.nodes);
+                    #[cfg(feature = "eval-phase-profile")]
+                    if let Some(started) = started {
+                        let nanos = started.elapsed().as_nanos();
+                        self.profile_stack_arg_read_time(nanos);
+                        self.profile_stack_arg_read_head_time(profile_head, nanos);
+                    }
+                    args
+                }};
+            }
+            macro_rules! app_site {
+                ($key:literal, $fun:expr, $arg:expr) => {
+                    self.app_with_site($key, $fun, $arg)
+                };
+            }
+            macro_rules! record_stack_head_time {
+                () => {{
+                    #[cfg(feature = "eval-phase-profile")]
+                    {
+                        if let Some(started) = stack_eval_step_head_started {
+                            self.profile_stack_eval_step_head_time(
+                                profile_head,
+                                started.elapsed().as_nanos(),
+                            );
+                        }
+                    }
+                }};
+            }
+            macro_rules! finish_reduction {
+                ($node:expr, $reductions:expr) => {{
+                    record_stack_head_time!();
+                    let reductions = carried_reductions + $reductions;
+                    if profile_head.is_some() {
+                        self.profile_reduction(profile_head, $reductions);
+                    }
+                    return Ok(StackStep::Reduced {
+                        node: $node,
+                        reductions,
+                    });
+                }};
+            }
+            macro_rules! rewrite_step {
+                ($used:expr, $node:expr, $reductions:expr) => {{
+                    #[cfg(feature = "eval-phase-profile")]
+                    let started = profiling.then(Instant::now);
+                    let node = self.apply_stack_rewrite(stack, $used, $node);
+                    #[cfg(feature = "eval-phase-profile")]
+                    if let Some(started) = started {
+                        self.profile_stack_apply_rewrite_head_time(
+                            profile_head,
+                            started.elapsed().as_nanos(),
+                        );
+                    }
+                    finish_reduction!(node, $reductions);
+                }};
+            }
+            macro_rules! rewrite_continue_reductions {
+                ($used:expr, $node:expr, $reductions:expr) => {{
+                    #[cfg(feature = "eval-phase-profile")]
+                    let started = profiling.then(Instant::now);
+                    let node = self.apply_stack_rewrite(stack, $used, $node);
+                    #[cfg(feature = "eval-phase-profile")]
+                    if let Some(started) = started {
+                        self.profile_stack_apply_rewrite_head_time(
+                            profile_head,
+                            started.elapsed().as_nanos(),
+                        );
+                    }
+                    record_stack_head_time!();
+                    if profile_head.is_some() {
+                        self.profile_reduction(profile_head, $reductions);
+                    }
+                    carried_reductions += $reductions;
+                    if carried_reductions >= budget {
+                        return Ok(StackStep::Reduced {
+                            node,
+                            reductions: carried_reductions,
+                        });
+                    }
+                    continue_with!(node);
+                }};
+            }
+            macro_rules! continue_with {
+                ($node:expr) => {{
+                    #[cfg(feature = "eval-phase-profile")]
+                    let started = profiling.then(Instant::now);
+                    head = self.descend_stack_from($node, stack, profile_resolve, profiling)?;
+                    #[cfg(feature = "eval-phase-profile")]
+                    if let Some(started) = started {
+                        let nanos = started.elapsed().as_nanos();
+                        self.profile_stack_inner_descent_time(nanos);
+                        self.profile_stack_inner_descent_head_time(profile_head, nanos);
+                    }
+                    continue 'eval;
+                }};
+            }
+            macro_rules! goind_taken {
+                ($redex:expr, $used:expr, $node:expr, $reductions:expr) => {{
+                    #[cfg(feature = "eval-phase-profile")]
+                    let started = profiling.then(Instant::now);
+                    let redex = $redex;
+                    let node = $node;
+                    let wrote_indirection = node != redex;
+                    if wrote_indirection {
+                        self.set_app_cell_at(redex.index(), Cell::indir(Some(node)));
+                    }
+                    if profiling {
+                        self.profile_stack_rewrite($used, wrote_indirection);
+                    }
+                    #[cfg(feature = "eval-phase-profile")]
+                    if let Some(started) = started {
+                        let nanos = started.elapsed().as_nanos();
+                        self.profile_stack_apply_rewrite_time(nanos);
+                        self.profile_stack_apply_rewrite_head_time(profile_head, nanos);
+                    }
+                    record_stack_head_time!();
+                    if profile_head.is_some() {
+                        self.profile_reduction(profile_head, $reductions);
+                    }
+                    carried_reductions += $reductions;
+                    if carried_reductions >= budget {
+                        return Ok(StackStep::Reduced {
+                            node,
+                            reductions: carried_reductions,
+                        });
+                    }
+                    continue_with!(node);
+                }};
+            }
+            macro_rules! app_step_reductions {
+                ($used:expr, $fun:expr, $arg:expr, $reductions:expr) => {{
+                    let fun = $fun;
+                    let arg = $arg;
+                    #[cfg(feature = "eval-phase-profile")]
+                    let update_started = profiling.then(Instant::now);
+                    let node = self.apply_stack_app(stack, $used, fun, arg);
+                    #[cfg(feature = "eval-phase-profile")]
+                    if let Some(started) = update_started {
+                        self.profile_stack_apply_app_head_time(
+                            profile_head,
+                            started.elapsed().as_nanos(),
+                        );
+                    }
+                    record_stack_head_time!();
+                    if profile_head.is_some() {
+                        self.profile_reduction(profile_head, $reductions);
+                    }
+                    carried_reductions += $reductions;
+                    if carried_reductions >= budget {
+                        return Ok(StackStep::Reduced {
+                            node,
+                            reductions: carried_reductions,
+                        });
+                    }
+                    if profiling {
+                        self.profile_stack_descent_push();
+                    }
+                    stack.push_app(node);
+                    #[cfg(feature = "eval-phase-profile")]
+                    let started = profiling.then(Instant::now);
+                    head = self.descend_stack_from(fun, stack, profile_resolve, profiling)?;
+                    #[cfg(feature = "eval-phase-profile")]
+                    if let Some(started) = started {
+                        let nanos = started.elapsed().as_nanos();
+                        self.profile_stack_inner_descent_time(nanos);
+                        self.profile_stack_inner_descent_head_time(profile_head, nanos);
+                    }
+                    continue 'eval;
+                }};
+            }
+            macro_rules! app_taken_reductions {
+                ($redex:expr, $used:expr, $fun:expr, $arg:expr, $reductions:expr) => {{
+                    let redex = $redex;
+                    let fun = $fun;
+                    let arg = $arg;
+                    #[cfg(feature = "eval-phase-profile")]
+                    let started = profiling.then(Instant::now);
+                    if profiling {
+                        self.profile_stack_app_update($used);
+                    }
+                    self.set_app_cell_at(redex.index(), Cell::app(fun, arg));
+                    #[cfg(feature = "eval-phase-profile")]
+                    if let Some(started) = started {
+                        let nanos = started.elapsed().as_nanos();
+                        self.profile_stack_apply_app_time(nanos);
+                        self.profile_stack_apply_app_head_time(profile_head, nanos);
+                    }
+                    record_stack_head_time!();
+                    if profile_head.is_some() {
+                        self.profile_reduction(profile_head, $reductions);
+                    }
+                    carried_reductions += $reductions;
+                    if carried_reductions >= budget {
+                        return Ok(StackStep::Reduced {
+                            node: redex,
+                            reductions: carried_reductions,
+                        });
+                    }
+                    if profiling {
+                        self.profile_stack_descent_push();
+                    }
+                    stack.push_app(redex);
+                    #[cfg(feature = "eval-phase-profile")]
+                    let started = profiling.then(Instant::now);
+                    head = self.descend_stack_from(fun, stack, profile_resolve, profiling)?;
+                    #[cfg(feature = "eval-phase-profile")]
+                    if let Some(started) = started {
+                        let nanos = started.elapsed().as_nanos();
+                        self.profile_stack_inner_descent_time(nanos);
+                        self.profile_stack_inner_descent_head_time(profile_head, nanos);
+                    }
+                    continue 'eval;
+                }};
+            }
+            macro_rules! app_step {
+                ($used:expr, $fun:expr, $arg:expr) => {{
+                    app_step_reductions!($used, $fun, $arg, 1);
+                }};
+            }
+            macro_rules! app_taken {
+                ($redex:expr, $used:expr, $fun:expr, $arg:expr) => {{
+                    app_taken_reductions!($redex, $used, $fun, $arg, 1);
+                }};
+            }
+            macro_rules! force_step {
+                ($used:expr, $push:ident, $kind:expr, $next:expr, $profile_kind:literal) => {{
+                    let app_end = stack.apps.len();
+                    let kind = $kind;
+                    let next = $next;
+                    if profiling {
+                        self.profile_persistent_force();
+                        self.profile_eval_frame_push($profile_kind);
+                    }
+                    record_stack_head_time!();
+                    #[cfg(feature = "eval-phase-profile")]
+                    let started = profiling.then(Instant::now);
+                    stack.$push(app_end, $used, profile_head, kind);
+                    #[cfg(feature = "eval-phase-profile")]
+                    if let Some(started) = started {
+                        let nanos = started.elapsed().as_nanos();
+                        self.profile_stack_force_frame_time(nanos);
+                        self.profile_stack_force_frame_head_time(profile_head, nanos);
+                    }
+                    continue_with!(next);
+                }};
+            }
+
+            let head_dispatch = match self.cell(head).prim() {
+                Some(Prim::Known(known)) => EvalHead::Known(known),
+                Some(Prim::Runtime(runtime)) => {
+                    let action = runtime.strict_action(args_len);
+                    EvalHead::Other {
+                        action,
+                        fallback_name: matches!(action, StrictPrimitiveAction::None)
+                            .then_some(runtime.name()),
+                    }
+                }
+                None if args_len > 0 => match self.cold_node(head) {
+                    Some(Node::Ffi(name)) => EvalHead::Ffi(name.to_string()),
+                    Some(Node::JsCall(call)) => EvalHead::JsCall {
+                        tags: call.tags.clone(),
+                        body: call.body.clone(),
+                    },
+                    Some(Node::JsWrap { tags }) => EvalHead::JsWrap {
+                        tags: tags.to_string(),
+                    },
+                    _ => EvalHead::Whnf,
+                },
+                None => EvalHead::Whnf,
+            };
+
+            let known = match head_dispatch {
+                EvalHead::Ffi(name) => {
+                    if self.profile.is_some() {
+                        self.profile_arg_materialization(args_len);
+                    }
+                    stack.write_args_head_order(&self.nodes, scratch_args)?;
+                    let Some((used, node)) = self.ffi_call(&name, scratch_args.as_slice())? else {
+                        record_stack_head_time!();
+                        return Ok(StackStep::Whnf {
+                            node: stack.outer_root(head),
+                            head,
+                            reductions: carried_reductions,
+                        });
+                    };
+                    rewrite_step!(used, node, 1);
+                }
+                EvalHead::JsCall { tags, body } => {
+                    if self.profile.is_some() {
+                        self.profile_arg_materialization(args_len);
+                    }
+                    stack.write_args_head_order(&self.nodes, scratch_args)?;
+                    let Some((used, node)) = self.js_call(&tags, &body, scratch_args.as_slice())?
+                    else {
+                        record_stack_head_time!();
+                        return Ok(StackStep::Whnf {
+                            node: stack.outer_root(head),
+                            head,
+                            reductions: carried_reductions,
+                        });
+                    };
+                    rewrite_step!(used, node, 1);
+                }
+                EvalHead::JsWrap { tags } => {
+                    if self.profile.is_some() {
+                        self.profile_arg_materialization(args_len);
+                    }
+                    stack.write_args_head_order(&self.nodes, scratch_args)?;
+                    let Some((used, node)) = self.js_wrap(&tags, scratch_args.as_slice())? else {
+                        record_stack_head_time!();
+                        return Ok(StackStep::Whnf {
+                            node: stack.outer_root(head),
+                            head,
+                            reductions: carried_reductions,
+                        });
+                    };
+                    rewrite_step!(used, node, 1);
+                }
+                EvalHead::Known(known) => known,
+                EvalHead::Other {
+                    action,
+                    fallback_name,
+                } => {
+                    if profiling {
+                        self.profile_strict_primitive_dispatch(args_len, action);
+                    }
+                    match action {
+                        StrictPrimitiveAction::IntBin(op) => {
+                            let (redex, x, y) = take_args!(2, take_args2);
+                            let y_immediate = self.cell(y).int_value();
+                            if let Some(y_value) = y_immediate {
+                                if let Some(x_value) = self.cell(x).int_value() {
+                                    let result = op
+                                        .apply(x_value, y_value)
+                                        .map_err(|err| self.arithmetic_eval_error(err))?;
+                                    let node = self.apply_stack_redex_value(
+                                        redex,
+                                        2,
+                                        Self::int_result_value_node(result),
+                                    );
+                                    finish_reduction!(node, 1);
+                                }
+                                if profiling {
+                                    self.profile_persistent_force();
+                                    self.profile_eval_frame_push("Int");
+                                }
+                                record_stack_head_time!();
+                                #[cfg(feature = "eval-phase-profile")]
+                                let started = profiling.then(Instant::now);
+                                stack.push_int_frame(
+                                    redex,
+                                    profile_head,
+                                    IntFrameKind::BinFirst { op, y: y_value },
+                                );
+                                #[cfg(feature = "eval-phase-profile")]
+                                if let Some(started) = started {
+                                    let nanos = started.elapsed().as_nanos();
+                                    self.profile_stack_force_frame_time(nanos);
+                                    self.profile_stack_force_frame_head_time(profile_head, nanos);
+                                }
+                                continue_with!(x);
+                            }
+                            if profiling {
+                                self.profile_persistent_force();
+                                self.profile_eval_frame_push("Int");
+                            }
+                            record_stack_head_time!();
+                            #[cfg(feature = "eval-phase-profile")]
+                            let started = profiling.then(Instant::now);
+                            stack.push_int_frame(
+                                redex,
+                                profile_head,
+                                IntFrameKind::BinSecond { op, x },
+                            );
+                            #[cfg(feature = "eval-phase-profile")]
+                            if let Some(started) = started {
+                                let nanos = started.elapsed().as_nanos();
+                                self.profile_stack_force_frame_time(nanos);
+                                self.profile_stack_force_frame_head_time(profile_head, nanos);
+                            }
+                            continue_with!(y);
+                        }
+                        StrictPrimitiveAction::IntUn(op) => {
+                            let (redex, x) = take_args!(1, take_args1);
+                            if profiling {
+                                self.profile_persistent_force();
+                                self.profile_eval_frame_push("Int");
+                            }
+                            record_stack_head_time!();
+                            #[cfg(feature = "eval-phase-profile")]
+                            let started = profiling.then(Instant::now);
+                            stack.push_int_frame(redex, profile_head, IntFrameKind::Un { op });
+                            #[cfg(feature = "eval-phase-profile")]
+                            if let Some(started) = started {
+                                let nanos = started.elapsed().as_nanos();
+                                self.profile_stack_force_frame_time(nanos);
+                                self.profile_stack_force_frame_head_time(profile_head, nanos);
+                            }
+                            continue_with!(x);
+                        }
+                        StrictPrimitiveAction::Int64Bin(op) => {
+                            if op.rhs_is_shift() {
+                                let app_end = stack.apps.len();
+                                let x = arg!(0);
+                                let next = arg!(1);
+                                if profiling {
+                                    self.profile_persistent_force();
+                                    self.profile_eval_frame_push("Int64Shift");
+                                }
+                                record_stack_head_time!();
+                                #[cfg(feature = "eval-phase-profile")]
+                                let started = profiling.then(Instant::now);
+                                stack.push_int64_shift_frame(app_end, 2, profile_head, op, x);
+                                #[cfg(feature = "eval-phase-profile")]
+                                if let Some(started) = started {
+                                    let nanos = started.elapsed().as_nanos();
+                                    self.profile_stack_force_frame_time(nanos);
+                                    self.profile_stack_force_frame_head_time(profile_head, nanos);
+                                }
+                                continue_with!(next);
+                            } else if op.driver_marker_safe() {
+                                force_step!(
+                                    2,
+                                    push_int64_frame,
+                                    Int64FrameKind::BinSecond { op, x: arg!(0) },
+                                    arg!(1),
+                                    "Int64"
+                                );
+                            }
+                        }
+                        StrictPrimitiveAction::Int64Un(op) => {
+                            force_step!(
+                                1,
+                                push_int64_frame,
+                                Int64FrameKind::Un { op },
+                                arg!(0),
+                                "Int64"
+                            );
+                        }
+                        StrictPrimitiveAction::Float64Bin(op) => {
+                            force_step!(
+                                2,
+                                push_float64_frame,
+                                Float64FrameKind::BinSecond { op, x: arg!(0) },
+                                arg!(1),
+                                "Float64"
+                            );
+                        }
+                        StrictPrimitiveAction::Float64Un(op) => {
+                            force_step!(
+                                1,
+                                push_float64_frame,
+                                Float64FrameKind::Un { op },
+                                arg!(0),
+                                "Float64"
+                            );
+                        }
+                        StrictPrimitiveAction::Float32Bin(op) => {
+                            force_step!(
+                                2,
+                                push_float32_frame,
+                                Float32FrameKind::BinSecond { op, x: arg!(0) },
+                                arg!(1),
+                                "Float32"
+                            );
+                        }
+                        StrictPrimitiveAction::Float32Un(op) => {
+                            force_step!(
+                                1,
+                                push_float32_frame,
+                                Float32FrameKind::Un { op },
+                                arg!(0),
+                                "Float32"
+                            );
+                        }
+                        StrictPrimitiveAction::BytesBin(op) => {
+                            force_step!(
+                                2,
+                                push_bytes_frame,
+                                BytesFrameKind::BinSecond { op, x: arg!(0) },
+                                arg!(1),
+                                "Bytes"
+                            );
+                        }
+                        StrictPrimitiveAction::Conversion(kind) => {
+                            force_step!(1, push_conversion_frame, kind, arg!(0), "Conversion");
+                        }
+                        StrictPrimitiveAction::None => {}
+                    }
+                    if let Some(name) = fallback_name {
+                        let materialized_args = args_len.min(FALLBACK_PRIM_ARG_PREFIX);
+                        if self.profile.is_some() {
+                            self.profile_arg_materialization(materialized_args);
+                        }
+                        stack.write_args_head_order_prefix(
+                            &self.nodes,
+                            scratch_args,
+                            FALLBACK_PRIM_ARG_PREFIX,
+                        )?;
+                        if let Some((used, node)) = self.fallback_runtime_prim_rewrite(
+                            name,
+                            scratch_args.as_slice(),
+                            args_len,
+                        )? {
+                            rewrite_step!(used, node, 1);
+                        }
+                        if args_len != 0 && !is_supported_runtime_prim_name(name) {
+                            return Err(EvalError::UnknownPrim(name.to_owned()));
+                        }
+                    }
+                    record_stack_head_time!();
+                    return Ok(StackStep::Whnf {
+                        node: stack.outer_root(head),
+                        head,
+                        reductions: carried_reductions,
+                    });
+                }
+                EvalHead::Whnf => {
+                    record_stack_head_time!();
+                    return Ok(StackStep::Whnf {
+                        node: stack.outer_root(head),
+                        head,
+                        reductions: carried_reductions,
+                    });
+                }
+            };
+            use KnownPrim::*;
+
+            match known {
+                IoStrict if args_len >= 2 => {
+                    let (redex, action, value) = take_args!(2, take_args2);
+                    if profiling {
+                        self.profile_persistent_force();
+                        self.profile_eval_frame_push("Whnf");
+                    }
+                    record_stack_head_time!();
+                    #[cfg(feature = "eval-phase-profile")]
+                    let started = profiling.then(Instant::now);
+                    stack.push_whnf_frame(
+                        redex,
+                        2,
+                        profile_head,
+                        WhnfFrameKind::IoStrict { action, value },
+                    );
+                    #[cfg(feature = "eval-phase-profile")]
+                    if let Some(started) = started {
+                        let nanos = started.elapsed().as_nanos();
+                        self.profile_stack_force_frame_time(nanos);
+                        self.profile_stack_force_frame_head_time(profile_head, nanos);
+                    }
+                    continue_with!(value);
+                }
+                Seq if args_len >= 2 => {
+                    let (redex, x, result) = take_args!(2, take_args2);
+                    if profiling {
+                        self.profile_persistent_force();
+                        self.profile_eval_frame_push("Whnf");
+                    }
+                    record_stack_head_time!();
+                    #[cfg(feature = "eval-phase-profile")]
+                    let started = profiling.then(Instant::now);
+                    stack.push_whnf_frame(redex, 2, profile_head, WhnfFrameKind::Seq { result });
+                    #[cfg(feature = "eval-phase-profile")]
+                    if let Some(started) = started {
+                        let nanos = started.elapsed().as_nanos();
+                        self.profile_stack_force_frame_time(nanos);
+                        self.profile_stack_force_frame_head_time(profile_head, nanos);
+                    }
+                    continue_with!(x);
+                }
+                IsInt if args_len >= 1 => {
+                    let (redex, x) = take_args!(1, take_args1);
+                    if profiling {
+                        self.profile_persistent_force();
+                        self.profile_eval_frame_push("Whnf");
+                    }
+                    record_stack_head_time!();
+                    #[cfg(feature = "eval-phase-profile")]
+                    let started = profiling.then(Instant::now);
+                    stack.push_whnf_frame(redex, 1, profile_head, WhnfFrameKind::IsInt);
+                    #[cfg(feature = "eval-phase-profile")]
+                    if let Some(started) = started {
+                        let nanos = started.elapsed().as_nanos();
+                        self.profile_stack_force_frame_time(nanos);
+                        self.profile_stack_force_frame_head_time(profile_head, nanos);
+                    }
+                    continue_with!(x);
+                }
+                _ => {}
+            }
+
+            match known {
+                IoPerformIo if args_len >= 1 => {
+                    let (redex, io) = take_args!(1, take_args1);
+                    let world = self.world();
+                    let k = self.prim("K");
+                    let action = app_site!("IO.performIO.action", io, world);
+                    app_taken!(redex, 1, action, k);
+                }
+                IoBind if args_len >= 3 => {
+                    let (redex, io, k, world) = take_args!(3, take_args3);
+                    let action = app_site!("IO.bind.action", io, world);
+                    app_taken!(redex, 3, action, k);
+                }
+                IoThen if args_len >= 3 && budget >= 2 => {
+                    let (redex, io, y, world) = take_args!(3, take_args3);
+                    let k = self.prim("K");
+                    let then = app_site!("IO.then.k", k, y);
+                    let action = app_site!("IO.then.action", io, world);
+                    app_taken_reductions!(redex, 3, action, then, 2);
+                }
+                IoThen if args_len >= 2 => {
+                    let (redex, io, y) = take_args!(2, take_args2);
+                    let bind = self.prim("IO.>>=");
+                    let bind_action = app_site!("IO.then.bind_action", bind, io);
+                    let k = self.prim("K");
+                    let then = app_site!("IO.then.k", k, y);
+                    app_taken!(redex, 2, bind_action, then);
+                }
+                IoReturn if args_len >= 3 => {
+                    let (redex, x, world, k) = take_args!(3, take_args3);
+                    let kx = app_site!("IO.return.kx", k, x);
+                    app_taken!(redex, 3, kx, world);
+                }
+                I | Ord | Chr if args_len >= 1 => {
+                    let mut used = 1;
+                    let mut reductions = 1;
+                    let mut node = arg!(0);
+                    let mut alias_shortcuts = 0;
+                    while reductions < budget
+                        && used < args_len
+                        && self.is_identity_alias_node(node)?
+                    {
+                        node = arg!(used);
+                        used += 1;
+                        reductions += 1;
+                        alias_shortcuts += 1;
+                    }
+                    self.profile_shortcut("identity_alias_chain", alias_shortcuts);
+                    rewrite_continue_reductions!(used, node, reductions);
+                }
+                K if args_len >= 2 => {
+                    let (redex, x, _) = take_args!(2, take_args2);
+                    goind_taken!(redex, 2, x, 1);
+                }
+                A if args_len >= 2 => {
+                    let (redex, _, y) = take_args!(2, take_args2);
+                    goind_taken!(redex, 2, y, 1);
+                }
+                U if args_len >= 2 => {
+                    let (redex, x, y) = take_args!(2, take_args2);
+                    app_taken!(redex, 2, y, x);
+                }
+                S if args_len >= 3 => {
+                    let (redex, x, y, z) = take_args!(3, take_args3);
+                    let left = app_site!("S.left", x, z);
+                    let right = app_site!("S.right", y, z);
+                    app_taken!(redex, 3, left, right);
+                }
+                SPrime if args_len >= 4 => {
+                    let (redex, x, y, z, w) = take_args!(4, take_args4);
+                    let yw = app_site!("S'.yw", y, w);
+                    let zw = app_site!("S'.zw", z, w);
+                    let left = app_site!("S'.left", x, yw);
+                    app_taken!(redex, 4, left, zw);
+                }
+                B if args_len >= 3 => {
+                    let (redex, x, y, z) = take_args!(3, take_args3);
+                    let yz = app_site!("B.yz", y, z);
+                    app_taken!(redex, 3, x, yz);
+                }
+                BPrime if args_len >= 4 => {
+                    let (redex, x, y, z, w) = take_args!(4, take_args4);
+                    let zw = app_site!("B'.zw", z, w);
+                    let xy = app_site!("B'.xy", x, y);
+                    app_taken!(redex, 4, xy, zw);
+                }
+                BPrime if args_len >= 2 => {
+                    let (redex, x, y) = take_args!(2, take_args2);
+                    let xy = app_site!("B'.xy_under", x, y);
+                    let b = self.prim("B");
+                    app_taken!(redex, 2, b, xy);
+                }
+                Z if args_len >= 3 => {
+                    let (redex, x, y, _) = take_args!(3, take_args3);
+                    app_taken!(redex, 3, x, y);
+                }
+                Z if args_len >= 2 => {
+                    let (redex, x, y) = take_args!(2, take_args2);
+                    let xy = app_site!("Z.xy_under", x, y);
+                    let k = self.prim("K");
+                    app_taken!(redex, 2, k, xy);
+                }
+                J if args_len >= 3 => {
+                    let (redex, x, _, z) = take_args!(3, take_args3);
+                    app_taken!(redex, 3, z, x);
+                }
+                L if args_len >= 3 => {
+                    let (redex, x, y, _) = take_args!(3, take_args3);
+                    app_taken!(redex, 3, y, x);
+                }
+                KK if args_len >= 3 => {
+                    let (redex, _, y, _) = take_args!(3, take_args3);
+                    goind_taken!(redex, 3, y, 1);
+                }
+                KA if args_len >= 3 => {
+                    let (redex, _, _, z) = take_args!(3, take_args3);
+                    goind_taken!(redex, 3, z, 1);
+                }
+                C if args_len >= 3 => {
+                    let (redex, x, y, z) = take_args!(3, take_args3);
+                    let xz = app_site!("C.xz", x, z);
+                    app_taken!(redex, 3, xz, y);
+                }
+                CPrime if args_len >= 4 => {
+                    let (redex, x, y, z, w) = take_args!(4, take_args4);
+                    let yw = app_site!("C'.yw", y, w);
+                    let xyw = app_site!("C'.xyw", x, yw);
+                    app_taken!(redex, 4, xyw, z);
+                }
+                P if args_len >= 3 => {
+                    let (redex, x, y, z) = take_args!(3, take_args3);
+                    let zx = app_site!("P.zx", z, x);
+                    app_taken!(redex, 3, zx, y);
+                }
+                R if args_len >= 3 => {
+                    let (redex, x, y, z) = take_args!(3, take_args3);
+                    let yz = app_site!("R.yz", y, z);
+                    app_taken!(redex, 3, yz, x);
+                }
+                R if args_len >= 2 => {
+                    let (redex, x, y) = take_args!(2, take_args2);
+                    let c = self.prim("C");
+                    let cy = app_site!("R.cy_under", c, y);
+                    app_taken!(redex, 2, cy, x);
+                }
+                O if args_len >= 4 => {
+                    let (redex, x, y, _, w) = take_args!(4, take_args4);
+                    let wx = app_site!("O.wx", w, x);
+                    app_taken!(redex, 4, wx, y);
+                }
+                K2 if args_len >= 3 => {
+                    let (redex, x, _, _) = take_args!(3, take_args3);
+                    goind_taken!(redex, 3, x, 1);
+                }
+                K2 if args_len >= 2 => {
+                    let (redex, x, _) = take_args!(2, take_args2);
+                    let k = self.prim("K");
+                    app_taken!(redex, 2, k, x);
+                }
+                K3 if args_len >= 4 => {
+                    let (redex, x, _, _, _) = take_args!(4, take_args4);
+                    goind_taken!(redex, 4, x, 1);
+                }
+                K3 if args_len >= 2 => {
+                    let (redex, x, _) = take_args!(2, take_args2);
+                    let k2 = self.prim("K2");
+                    app_taken!(redex, 2, k2, x);
+                }
+                K4 if args_len >= 5 => {
+                    let (redex, x, _, _, _, _) = take_args!(5, take_args5);
+                    goind_taken!(redex, 5, x, 1);
+                }
+                K4 if args_len >= 2 => {
+                    let (redex, x, _) = take_args!(2, take_args2);
+                    let k3 = self.prim("K3");
+                    app_taken!(redex, 2, k3, x);
+                }
+                CPrimeB if args_len >= 4 => {
+                    let (redex, x, y, z, w) = take_args!(4, take_args4);
+                    let yw = app_site!("C'B.yw", y, w);
+                    let xz = app_site!("C'B.xz", x, z);
+                    app_taken!(redex, 4, xz, yw);
+                }
+                CPrimeB if args_len >= 3 => {
+                    let (redex, x, y, z) = take_args!(3, take_args3);
+                    let xz = app_site!("C'B.xz_under", x, z);
+                    let b = self.prim("B");
+                    let bxz = app_site!("C'B.bxz_under", b, xz);
+                    app_taken!(redex, 3, bxz, y);
+                }
+                Y if args_len >= 1 => {
+                    let (redex, x) = take_args!(1, take_args1);
+                    app_taken!(redex, 1, x, redex);
+                }
+                Tag(tag) if args_len >= 2 => {
+                    let (redex, x, y) = take_args!(2, take_args2);
+                    let tag = self.int(i64::from(tag));
+                    let ytag = app_site!("Tag.ytag", y, tag);
+                    app_taken!(redex, 2, ytag, x);
+                }
+                Tuple(fields) if args_len > usize::from(fields) => {
+                    let fields = usize::from(fields);
+                    let mut n = arg!(fields);
+                    for idx in 0..fields - 1 {
+                        let arg = arg!(idx);
+                        n = app_site!("Tuple.prefix", n, arg);
+                    }
+                    let last = arg!(fields - 1);
+                    app_step!(fields + 1, n, last);
+                }
+                I | Ord | Chr | K | A | U | S | SPrime | B | BPrime | Z | J | L | KK | KA | C
+                | CPrime | P | R | O | K2 | K3 | K4 | CPrimeB | Y | Tag(_) | Tuple(_)
+                | IoPerformIo | IoBind | IoThen | IoReturn => {
+                    record_stack_head_time!();
+                    return Ok(StackStep::Whnf {
+                        node: stack.outer_root(head),
+                        head,
+                        reductions: carried_reductions,
+                    });
+                }
+                _ => {
+                    self.profile_stack_fallback_head(head);
+                    record_stack_head_time!();
+                    return Ok(StackStep::Fallback {
+                        root: stack.outer_root(head),
+                        head,
+                        reductions: carried_reductions,
+                    });
+                }
+            }
         }
     }
 
@@ -3457,9 +6583,9 @@ impl Program {
         let head = spine.head;
         let args = spine.args();
         use KnownPrim::*;
-        match self.nodes[head.0].clone() {
-            Node::Prim(name) if name == IoReturn && args.len() == 1 => Ok(Some(1)),
-            Node::Prim(name) if name == IoThen && args.len() == 2 && budget >= 2 => {
+        match self.cell(head).prim() {
+            Some(Prim::Known(IoReturn)) if args.len() == 1 => Ok(Some(1)),
+            Some(Prim::Known(IoThen)) if args.len() == 2 && budget >= 2 => {
                 let Some(right_reductions) =
                     self.io_action_reductions(args[1], budget - 1, depth - 1)?
                 else {
@@ -3476,9 +6602,8 @@ impl Program {
                 };
                 Ok(Some(left_reductions + right_reductions + 1))
             }
-            Node::Prim(name)
-                if name == IoLazyBind
-                    && args.len() == 2
+            Some(Prim::Known(IoLazyBind))
+                if args.len() == 2
                     && budget >= 2
                     && self.direct_ffi_continuation_accepts_result(args[1])? =>
             {
@@ -3493,17 +6618,16 @@ impl Program {
                 }
                 Ok(Some(action_reductions + 2))
             }
-            Node::Prim(name)
-                if matches!(
-                    name.known(),
-                    Some(IoGetArgRef | IoGetMaskingState | IoYield)
-                ) && args.is_empty() =>
-            {
+            Some(Prim::Known(IoGetArgRef | IoGetMaskingState | IoYield)) if args.is_empty() => {
                 Ok(Some(1))
             }
-            Node::Prim(name) if name == IoSetMaskingState && args.len() == 1 => Ok(Some(1)),
-            Node::Ffi(name) => {
-                let arity = ffi_arity(&name).ok_or_else(|| EvalError::UnknownFfi(name.clone()))?;
+            Some(Prim::Known(IoSetMaskingState)) if args.len() == 1 => Ok(Some(1)),
+            _ if matches!(self.cold_node(head), Some(Node::Ffi(_))) => {
+                let Some(Node::Ffi(name)) = self.cold_node(head).cloned() else {
+                    unreachable!();
+                };
+                let arity =
+                    ffi_arity(&name).ok_or_else(|| EvalError::UnknownFfi(name.to_string()))?;
                 Ok((args.len() == arity).then_some(1))
             }
             _ => Ok(None),
@@ -3522,12 +6646,12 @@ impl Program {
 
     fn io_return_action_result(&mut self, action: NodeId) -> Result<Option<NodeId>, EvalError> {
         let action = self.resolve_profiled(action)?;
-        let Node::App(fun, result) = self.nodes[action.0] else {
+        let Some((fun, result)) = self.cell(action).app_fields() else {
             return Ok(None);
         };
         let fun = self.resolve_profiled(fun)?;
-        Ok(match &self.nodes[fun.0] {
-            Node::Prim(name) if name == KnownPrim::IoReturn => Some(result),
+        Ok(match self.cell(fun).prim() {
+            Some(Prim::Known(KnownPrim::IoReturn)) => Some(result),
             _ => None,
         })
     }
@@ -3546,18 +6670,16 @@ impl Program {
         let head = spine.head;
         let args = spine.args();
         use KnownPrim::*;
-        match self.nodes[head.0].clone() {
-            Node::Prim(name) if name == IoReturn && args.len() == 1 => Ok(Some((args[0], world))),
-            Node::Prim(name) if name == IoThen && args.len() == 2 => {
+        match self.cell(head).prim() {
+            Some(Prim::Known(IoReturn)) if args.len() == 1 => Ok(Some((args[0], world))),
+            Some(Prim::Known(IoThen)) if args.len() == 2 => {
                 let Some((_, world)) = self.run_io_action(args[0], world, depth - 1)? else {
                     return Ok(None);
                 };
                 self.run_io_action(args[1], world, depth - 1)
             }
-            Node::Prim(name)
-                if name == IoLazyBind
-                    && args.len() == 2
-                    && self.direct_ffi_continuation_accepts_result(args[1])? =>
+            Some(Prim::Known(IoLazyBind))
+                if args.len() == 2 && self.direct_ffi_continuation_accepts_result(args[1])? =>
             {
                 let Some((result, world)) = self.run_io_action(args[0], world, depth - 1)? else {
                     return Ok(None);
@@ -3565,25 +6687,29 @@ impl Program {
                 let next = self.app(args[1], result);
                 self.run_io_action(next, world, depth - 1)
             }
-            Node::Prim(name) if name == IoGetArgRef && args.is_empty() => {
+            Some(Prim::Known(IoGetArgRef)) if args.is_empty() => {
                 let result = self.arg_ref_array();
                 Ok(Some((result, world)))
             }
-            Node::Prim(name) if name == IoGetMaskingState && args.is_empty() => {
+            Some(Prim::Known(IoGetMaskingState)) if args.is_empty() => {
                 let result = self.int(self.masking_state);
                 Ok(Some((result, world)))
             }
-            Node::Prim(name) if name == IoSetMaskingState && args.len() == 1 => {
+            Some(Prim::Known(IoSetMaskingState)) if args.len() == 1 => {
                 self.masking_state = self.eval_int(args[0])?;
                 let result = self.prim("I");
                 Ok(Some((result, world)))
             }
-            Node::Prim(name) if name == IoYield && args.is_empty() => {
+            Some(Prim::Known(IoYield)) if args.is_empty() => {
                 let result = self.prim("I");
                 Ok(Some((result, world)))
             }
-            Node::Ffi(name) => {
-                let arity = ffi_arity(&name).ok_or_else(|| EvalError::UnknownFfi(name.clone()))?;
+            _ if matches!(self.cold_node(head), Some(Node::Ffi(_))) => {
+                let Some(Node::Ffi(name)) = self.cold_node(head).cloned() else {
+                    unreachable!();
+                };
+                let arity =
+                    ffi_arity(&name).ok_or_else(|| EvalError::UnknownFfi(name.to_string()))?;
                 if args.len() != arity {
                     return Ok(None);
                 }
@@ -3601,27 +6727,27 @@ impl Program {
 
     fn direct_ffi_continuation_accepts_result(&mut self, cont: NodeId) -> Result<bool, EvalError> {
         let cont = self.resolve_profiled(cont)?;
-        let Node::Ffi(name) = self.nodes[cont.0].clone() else {
+        let Some(Node::Ffi(name)) = self.cold_node(cont) else {
             return Ok(false);
         };
         let Some(arity) = ffi_arity(&name) else {
-            return Err(EvalError::UnknownFfi(name));
+            return Err(EvalError::UnknownFfi(name.to_string()));
         };
         Ok(arity == 1)
     }
 
     fn pair_fields(&mut self, pair: NodeId) -> Result<Option<(NodeId, NodeId)>, EvalError> {
         let pair = self.resolve_profiled(pair)?;
-        let Node::App(result_pair, world) = self.nodes[pair.0] else {
+        let Some((result_pair, world)) = self.cell(pair).app_fields() else {
             return Ok(None);
         };
         let result_pair = self.resolve_profiled(result_pair)?;
-        let Node::App(pair_constructor, result) = self.nodes[result_pair.0] else {
+        let Some((pair_constructor, result)) = self.cell(result_pair).app_fields() else {
             return Ok(None);
         };
         let pair_constructor = self.resolve_profiled(pair_constructor)?;
-        Ok(match &self.nodes[pair_constructor.0] {
-            Node::Prim(name) if name == KnownPrim::P => Some((result, world)),
+        Ok(match self.cell(pair_constructor).prim() {
+            Some(Prim::Known(KnownPrim::P)) => Some((result, world)),
             _ => None,
         })
     }
@@ -3633,9 +6759,9 @@ impl Program {
     ) -> Result<Option<NodeId>, EvalError> {
         let selector = self.resolve_profiled(selector)?;
         use KnownPrim::*;
-        let field = match &self.nodes[selector.0] {
-            Node::Prim(name) if name == K => 0,
-            Node::Prim(name) if name == A => 1,
+        let field = match self.cell(selector).prim() {
+            Some(Prim::Known(K)) => 0,
+            Some(Prim::Known(A)) => 1,
             _ => return Ok(None),
         };
         let pair = self.reduce_node_whnf(pair, FORCE_REDUCTION_LIMIT)?;
@@ -3653,10 +6779,10 @@ impl Program {
     ) -> Result<Option<usize>, EvalError> {
         let selector = self.resolve_profiled(selector)?;
         use KnownPrim::*;
-        let arity = match &self.nodes[selector.0] {
-            Node::Prim(name) if name == K2 => 3,
-            Node::Prim(name) if name == K3 => 4,
-            Node::Prim(name) if name == K4 => 5,
+        let arity = match self.cell(selector).prim() {
+            Some(Prim::Known(K2)) => 3,
+            Some(Prim::Known(K3)) => 4,
+            Some(Prim::Known(K4)) => 5,
             _ => return Ok(None),
         };
         if arity < fields {
@@ -3672,7 +6798,7 @@ impl Program {
         let mut inline_apps = [const { MaybeUninit::uninit() }; INLINE_SPINE];
         let mut inline_len = 0;
         let mut heap: Option<(Vec<NodeId>, Vec<NodeId>)> = None;
-        while let Node::App(fun, arg) = self.nodes[node.0] {
+        while let Some((fun, arg)) = self.cell(node).app_fields() {
             if let Some((args, apps)) = &mut heap {
                 args.push(arg);
                 apps.push(node);
@@ -3718,51 +6844,94 @@ impl Program {
         &mut self,
         node: &mut NodeId,
         used: usize,
-        args: &[NodeId],
         apps: &[NodeId],
-    ) -> bool {
+    ) -> Result<bool, EvalError> {
         let mut in_place = false;
         // Match the C reducer's update point: the consumed redex root is shared
         // even when the current evaluation has extra arguments on the spine.
-        if used > 0 && used < args.len() {
-            self.nodes[apps[used - 1].0] = Node::Indir(Some(*node));
+        if used > 0 && used < apps.len() {
+            self.set_app_cell_at(apps[used - 1].index(), Cell::indir(Some(*node)));
             in_place = true;
         }
-        for (arg, app) in args[used..].iter().zip(&apps[used..]) {
-            self.nodes[app.0] = Node::App(*node, *arg);
+        for app in &apps[used..] {
+            let Some((_, arg)) = self.cell(*app).app_fields() else {
+                return Err(EvalError::DanglingIndirection(*app));
+            };
+            self.set_app_cell_at(app.index(), Cell::app(*node, arg));
             *node = *app;
             in_place = true;
         }
-        in_place
+        Ok(in_place)
     }
 
     fn is_identity_alias_node(&mut self, id: NodeId) -> Result<bool, EvalError> {
         let id = self.resolve_profiled(id)?;
         Ok(matches!(
-            &self.nodes[id.0],
-            Node::Prim(name)
-                if matches!(name.known(), Some(KnownPrim::I | KnownPrim::Ord | KnownPrim::Chr))
+            self.cell(id).prim(),
+            Some(Prim::Known(KnownPrim::I | KnownPrim::Ord | KnownPrim::Chr))
         ))
     }
 
     #[inline]
     fn app(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
-        if self.profile.is_some() {
-            self.profile_app_allocation();
+        #[cfg(feature = "eval-phase-profile")]
+        let profile_started = self.profile.is_some().then(Instant::now);
+        if let Some(profile) = self.profile.as_mut() {
+            profile.app_allocations += 1;
+            *profile
+                .node_allocations
+                .entry(node_allocation_key(&Node::App(fun, arg)).to_owned())
+                .or_default() += 1;
+            *profile
+                .app_allocation_sites
+                .entry("<generic app()>".to_owned())
+                .or_default() += 1;
         }
-        self.push_node(Node::App(fun, arg))
+        #[cfg(feature = "eval-phase-profile")]
+        if let Some(started) = profile_started {
+            self.profile_app_alloc_bookkeeping_time(started.elapsed().as_nanos());
+        }
+        #[cfg(feature = "eval-phase-profile")]
+        let started = self.profile.is_some().then(Instant::now);
+        let node = self.push_app_node(fun, arg);
+        #[cfg(feature = "eval-phase-profile")]
+        if let Some(started) = started {
+            let nanos = started.elapsed().as_nanos();
+            self.profile_stack_app_alloc_time(nanos);
+            self.profile_stack_app_alloc_site_time("<generic app()>", nanos);
+        }
+        node
     }
 
     #[inline]
     fn app_with_site(&mut self, key: &'static str, fun: NodeId, arg: NodeId) -> NodeId {
+        #[cfg(feature = "eval-phase-profile")]
+        let profile_started = self.profile.is_some().then(Instant::now);
         if let Some(profile) = self.profile.as_mut() {
             profile.app_allocations += 1;
+            *profile
+                .node_allocations
+                .entry(node_allocation_key(&Node::App(fun, arg)).to_owned())
+                .or_default() += 1;
             *profile
                 .app_allocation_sites
                 .entry(key.to_owned())
                 .or_default() += 1;
         }
-        self.push_node(Node::App(fun, arg))
+        #[cfg(feature = "eval-phase-profile")]
+        if let Some(started) = profile_started {
+            self.profile_app_alloc_bookkeeping_time(started.elapsed().as_nanos());
+        }
+        #[cfg(feature = "eval-phase-profile")]
+        let started = self.profile.is_some().then(Instant::now);
+        let node = self.push_app_node(fun, arg);
+        #[cfg(feature = "eval-phase-profile")]
+        if let Some(started) = started {
+            let nanos = started.elapsed().as_nanos();
+            self.profile_stack_app_alloc_time(nanos);
+            self.profile_stack_app_alloc_site_time(key, nanos);
+        }
+        node
     }
 
     fn prim(&mut self, name: &str) -> NodeId {
@@ -3847,15 +7016,25 @@ impl Program {
     }
 
     fn fst(&mut self) -> NodeId {
+        if let Some(fst) = self.compound_cache.fst {
+            return fst;
+        }
         let u = self.prim("U");
         let k = self.prim("K");
-        self.app(u, k)
+        let fst = self.app(u, k);
+        self.compound_cache.fst = Some(fst);
+        fst
     }
 
     fn snd(&mut self) -> NodeId {
+        if let Some(snd) = self.compound_cache.snd {
+            return snd;
+        }
         let u = self.prim("U");
         let a = self.prim("A");
-        self.app(u, a)
+        let snd = self.app(u, a);
+        self.compound_cache.snd = Some(snd);
+        snd
     }
 
     fn pair(&mut self, result: NodeId, world: NodeId) -> NodeId {
@@ -3865,14 +7044,28 @@ impl Program {
     }
 
     fn unit_pair(&mut self, world: NodeId) -> NodeId {
-        let unit = self.prim("I");
-        self.pair(unit, world)
+        let pair_unit = if let Some(pair_unit) = self.compound_cache.pair_unit {
+            pair_unit
+        } else {
+            let pair = self.prim("P");
+            let unit = self.prim("I");
+            let pair_unit = self.app(pair, unit);
+            self.compound_cache.pair_unit = Some(pair_unit);
+            pair_unit
+        };
+        self.app(pair_unit, world)
     }
 
     fn just(&mut self, value: NodeId) -> NodeId {
-        let z = self.prim("Z");
-        let u = self.prim("U");
-        let just = self.app(z, u);
+        let just = if let Some(just) = self.compound_cache.just {
+            just
+        } else {
+            let z = self.prim("Z");
+            let u = self.prim("U");
+            let just = self.app(z, u);
+            self.compound_cache.just = Some(just);
+            just
+        };
         self.app(just, value)
     }
 
@@ -3886,11 +7079,25 @@ impl Program {
         handler: NodeId,
         world: NodeId,
     ) -> Result<NodeId, EvalError> {
+        let old_mask = self.masking_state;
         match self.reduce_node_whnf(action, FORCE_REDUCTION_LIMIT) {
             Ok(result) => Ok(result),
             Err(EvalError::Raised(exn)) => {
+                self.masking_state = MASK_INTERRUPTIBLE;
                 let handled = self.app(handler, exn);
-                Ok(self.app(handled, world))
+                let bind = self.prim("IO.>>=");
+                let handled_bind = self.app(bind, handled);
+                let b_prime = self.prim("B'");
+                let then = self.prim("IO.>>");
+                let restore = self.prim("IO.setmaskingstate");
+                let old_mask = self.int(old_mask);
+                let restore = self.app(restore, old_mask);
+                let restore_then = self.app(b_prime, then);
+                let restore_then = self.app(restore_then, restore);
+                let ret = self.prim("IO.return");
+                let continuation = self.app(restore_then, ret);
+                let caught = self.app(handled_bind, continuation);
+                Ok(self.app(caught, world))
             }
             Err(err) => Err(err),
         }
@@ -3918,11 +7125,32 @@ impl Program {
         self.prim(name)
     }
 
+    fn bool_value_node(value: bool) -> Node {
+        Node::Prim(Prim::Known(if value { KnownPrim::A } else { KnownPrim::K }))
+    }
+
+    fn ordering_value_node(ord: Ordering) -> Node {
+        let known = match ord {
+            Ordering::Less => KnownPrim::K2,
+            Ordering::Equal => KnownPrim::KK,
+            Ordering::Greater => KnownPrim::KA,
+        };
+        Node::Prim(Prim::Known(known))
+    }
+
     fn int_result_node(&mut self, result: IntResult) -> NodeId {
         match result {
             IntResult::Int(n) => self.int(n),
             IntResult::Bool(b) => self.prim(if b { "A" } else { "K" }),
             IntResult::Ordering(ord) => self.ordering(ord),
+        }
+    }
+
+    fn int_result_value_node(result: IntResult) -> Node {
+        match result {
+            IntResult::Int(n) => Node::Int(n),
+            IntResult::Bool(b) => Self::bool_value_node(b),
+            IntResult::Ordering(ord) => Self::ordering_value_node(ord),
         }
     }
 
@@ -3940,6 +7168,9 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: IntFrameKind::BinFirst { op, y: value },
                 };
+                if self.profile.is_some() {
+                    self.profile_eval_frame_push("Int");
+                }
                 stack.push(EvalFrame::Int(next_frame));
                 return Ok((next, 0));
             }
@@ -3955,27 +7186,10 @@ impl Program {
         };
 
         if frame.profile_head.is_some() {
-            self.profile_reduction(&frame.profile_head, 1);
+            self.profile_reduction(frame.profile_head, 1);
         }
-        let mut node = self.int_result_node(result);
-        match frame.redex {
-            StrictRedex::Root(root) => {
-                if node != root {
-                    self.nodes[root.0] = Node::Indir(Some(node));
-                }
-            }
-            StrictRedex::Spine {
-                root,
-                used,
-                args,
-                apps,
-            } => {
-                let in_place = self.apply_reduction_spine(&mut node, used, &args, &apps);
-                if !in_place && node != root {
-                    self.nodes[root.0] = Node::Indir(Some(node));
-                }
-            }
-        }
+        let result_node = self.int_result_node(result);
+        let node = self.apply_strict_redex(frame.redex, result_node)?;
         Ok((node, 1))
     }
 
@@ -3984,6 +7198,14 @@ impl Program {
             Int64Result::Int64(n) => self.push_node(Node::Int64(n)),
             Int64Result::Bool(b) => self.prim(if b { "A" } else { "K" }),
             Int64Result::Ordering(ord) => self.ordering(ord),
+        }
+    }
+
+    fn int64_result_value_node(result: Int64Result) -> Node {
+        match result {
+            Int64Result::Int64(n) => Node::Int64(n),
+            Int64Result::Bool(b) => Self::bool_value_node(b),
+            Int64Result::Ordering(ord) => Self::ordering_value_node(ord),
         }
     }
 
@@ -4008,6 +7230,9 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: Int64FrameKind::BinFirst { op, y: value },
                 };
+                if self.profile.is_some() {
+                    self.profile_eval_frame_push("Int64");
+                }
                 stack.push(EvalFrame::Int64(next_frame));
                 return Ok((next, 0));
             }
@@ -4032,32 +7257,504 @@ impl Program {
         };
 
         if frame.profile_head.is_some() {
-            self.profile_reduction(&frame.profile_head, 1);
+            self.profile_reduction(frame.profile_head, 1);
         }
-        let node = self.apply_strict_redex(frame.redex, node);
+        let node = self.apply_strict_redex(frame.redex, node)?;
         Ok((node, 1))
     }
 
-    fn apply_strict_redex(&mut self, redex: StrictRedex, mut node: NodeId) -> NodeId {
+    fn apply_strict_redex(
+        &mut self,
+        redex: StrictRedex,
+        mut node: NodeId,
+    ) -> Result<NodeId, EvalError> {
         match redex {
             StrictRedex::Root(root) => {
                 if node != root {
-                    self.nodes[root.0] = Node::Indir(Some(node));
+                    self.set_cell_at(root.index(), Cell::indir(Some(node)));
                 }
             }
-            StrictRedex::Spine {
-                root,
-                used,
-                args,
-                apps,
-            } => {
-                let in_place = self.apply_reduction_spine(&mut node, used, &args, &apps);
+            StrictRedex::Spine { root, used, apps } => {
+                let in_place = self.apply_reduction_spine(&mut node, used, &apps)?;
                 if !in_place && node != root {
-                    self.nodes[root.0] = Node::Indir(Some(node));
+                    self.set_cell_at(root.index(), Cell::indir(Some(node)));
                 }
             }
         }
+        Ok(node)
+    }
+
+    fn stack_entry_app(&self, stack: &EvalStack, index: usize) -> Result<NodeId, EvalError> {
+        stack
+            .apps
+            .get(index)
+            .copied()
+            .ok_or_else(|| EvalError::DanglingIndirection(NodeId::from_index(index)))
+    }
+
+    fn apply_stack_rewrite(&mut self, stack: &mut EvalStack, used: usize, node: NodeId) -> NodeId {
+        if used == 0 {
+            return node;
+        }
+        let app_end = stack.apps.len();
+        self.apply_stack_frame_rewrite(stack, app_end, used, node)
+    }
+
+    fn apply_stack_frame_rewrite(
+        &mut self,
+        stack: &mut EvalStack,
+        app_end: usize,
+        used: usize,
+        node: NodeId,
+    ) -> NodeId {
+        #[cfg(feature = "eval-phase-profile")]
+        let started = self.profile.is_some().then(Instant::now);
+        debug_assert!(used > 0);
+        debug_assert!(used <= app_end);
+        let redex_index = app_end - used;
+        let redex = stack.app_unchecked(redex_index);
+        let wrote_indirection = node != redex;
+        if wrote_indirection {
+            self.set_app_cell_at(redex.index(), Cell::indir(Some(node)));
+        }
+        if self.profile.is_some() {
+            self.profile_stack_rewrite(used, wrote_indirection);
+        }
+        stack.apps.truncate(redex_index);
+        #[cfg(feature = "eval-phase-profile")]
+        if let Some(started) = started {
+            self.profile_stack_apply_rewrite_time(started.elapsed().as_nanos());
+        }
         node
+    }
+
+    fn apply_stack_frame_value(
+        &mut self,
+        stack: &mut EvalStack,
+        app_end: usize,
+        used: usize,
+        value: Node,
+    ) -> NodeId {
+        #[cfg(feature = "eval-phase-profile")]
+        let started = self.profile.is_some().then(Instant::now);
+        debug_assert!(used > 0);
+        debug_assert!(used <= app_end);
+        let redex_index = app_end - used;
+        let redex = stack.app_unchecked(redex_index);
+        self.set_app_node_at(redex.index(), value);
+        if self.profile.is_some() {
+            self.profile_stack_rewrite(used, false);
+        }
+        stack.apps.truncate(redex_index);
+        #[cfg(feature = "eval-phase-profile")]
+        if let Some(started) = started {
+            self.profile_stack_apply_rewrite_time(started.elapsed().as_nanos());
+        }
+        redex
+    }
+
+    fn apply_stack_redex_value(&mut self, redex: NodeId, used: usize, value: Node) -> NodeId {
+        #[cfg(feature = "eval-phase-profile")]
+        let started = self.profile.is_some().then(Instant::now);
+        self.set_app_node_at(redex.index(), value);
+        if self.profile.is_some() {
+            self.profile_stack_rewrite(used, false);
+        }
+        #[cfg(feature = "eval-phase-profile")]
+        if let Some(started) = started {
+            self.profile_stack_apply_rewrite_time(started.elapsed().as_nanos());
+        }
+        redex
+    }
+
+    fn apply_stack_app(
+        &mut self,
+        stack: &mut EvalStack,
+        used: usize,
+        fun: NodeId,
+        arg: NodeId,
+    ) -> NodeId {
+        #[cfg(feature = "eval-phase-profile")]
+        let started = self.profile.is_some().then(Instant::now);
+        if self.profile.is_some() {
+            self.profile_stack_app_update(used);
+        }
+        let node = if used == 0 {
+            self.app(fun, arg)
+        } else {
+            let app_end = stack.apps.len();
+            debug_assert!(used <= app_end);
+            let redex_index = app_end - used;
+            let redex = stack.app_unchecked(redex_index);
+            self.set_app_cell_at(redex.index(), Cell::app(fun, arg));
+            stack.apps.truncate(redex_index);
+            redex
+        };
+        #[cfg(feature = "eval-phase-profile")]
+        if let Some(started) = started {
+            self.profile_stack_apply_app_time(started.elapsed().as_nanos());
+        }
+        node
+    }
+
+    fn rethread_stack_app_segment(
+        &mut self,
+        stack: &mut EvalStack,
+        mut node: NodeId,
+    ) -> Result<NodeId, EvalError> {
+        let base = stack.app_base();
+        if self.profile.is_some() {
+            self.profile_stack_rethread(stack.apps.len().saturating_sub(base));
+        }
+        for index in (base..stack.apps.len()).rev() {
+            let app = self.stack_entry_app(stack, index)?;
+            let Some((_, arg)) = self.cell(app).app_fields() else {
+                return Err(EvalError::DanglingIndirection(app));
+            };
+            self.set_app_cell_at(app.index(), Cell::app(node, arg));
+            node = app;
+        }
+        stack.apps.truncate(base);
+        Ok(node)
+    }
+
+    fn descend_stack_from(
+        &mut self,
+        mut current: NodeId,
+        stack: &mut EvalStack,
+        profile_resolve: bool,
+        profiling: bool,
+    ) -> Result<NodeId, EvalError> {
+        current = self.resolve_for_whnf(current, profile_resolve)?;
+        while let Some(fun) = self.app_fun(current) {
+            if profiling {
+                self.profile_stack_descent_push();
+            }
+            stack.push_app(current);
+            current = self.resolve_for_whnf(fun, profile_resolve)?;
+        }
+        Ok(current)
+    }
+
+    fn finish_stack_whnf_frame(
+        &mut self,
+        frame: StackWhnfFrame,
+        _stack: &mut EvalStack,
+        value: NodeId,
+    ) -> Result<(NodeId, usize), EvalError> {
+        let node = match frame.kind {
+            WhnfFrameKind::Seq { result } => {
+                if frame.profile_head.is_some() {
+                    self.profile_reduction(frame.profile_head, 1);
+                }
+                #[cfg(feature = "eval-phase-profile")]
+                let started = self.profile.is_some().then(Instant::now);
+                let wrote_indirection = result != frame.redex;
+                if wrote_indirection {
+                    self.set_app_cell_at(frame.redex.index(), Cell::indir(Some(result)));
+                }
+                if self.profile.is_some() {
+                    self.profile_stack_rewrite(frame.used, wrote_indirection);
+                }
+                #[cfg(feature = "eval-phase-profile")]
+                if let Some(started) = started {
+                    self.profile_stack_apply_rewrite_time(started.elapsed().as_nanos());
+                }
+                return Ok((result, 1));
+            }
+            WhnfFrameKind::IoStrict { action, value } => {
+                if frame.profile_head.is_some() {
+                    self.profile_reduction(frame.profile_head, 1);
+                }
+                #[cfg(feature = "eval-phase-profile")]
+                let started = self.profile.is_some().then(Instant::now);
+                if self.profile.is_some() {
+                    self.profile_stack_app_update(frame.used);
+                }
+                self.set_app_cell_at(frame.redex.index(), Cell::app(action, value));
+                #[cfg(feature = "eval-phase-profile")]
+                if let Some(started) = started {
+                    self.profile_stack_apply_app_time(started.elapsed().as_nanos());
+                }
+                return Ok((frame.redex, 1));
+            }
+            WhnfFrameKind::IsInt => {
+                let value = self.resolve(value)?;
+                let n = self.cell(value).int_value().unwrap_or(-1);
+                self.apply_stack_redex_value(frame.redex, frame.used, Node::Int(n))
+            }
+        };
+
+        if frame.profile_head.is_some() {
+            self.profile_reduction(frame.profile_head, 1);
+        }
+        Ok((node, 1))
+    }
+
+    fn finish_ready_stack_frame(
+        &mut self,
+        stack: &mut EvalStack,
+        current: NodeId,
+    ) -> Result<Option<(NodeId, usize)>, EvalError> {
+        if !stack.top_is_frame() {
+            return Ok(None);
+        }
+
+        enum ReadyFrame {
+            Int(i64),
+            Int64Shift(i64),
+            Int64(i64),
+            Float64(f64),
+            Float32(f32),
+            Bytes,
+            Conversion(ConversionValue),
+        }
+
+        let current_cell = self.cell(current);
+        let ready = match stack.peek_frame() {
+            Some(StackFrame::Int(_)) => current_cell.int_value().map(ReadyFrame::Int),
+            Some(StackFrame::Int64Shift(_)) => current_cell.int_value().map(ReadyFrame::Int64Shift),
+            Some(StackFrame::Int64(_)) => current_cell.int64_value().map(ReadyFrame::Int64),
+            Some(StackFrame::Float64(_)) => current_cell.float64_value().map(ReadyFrame::Float64),
+            Some(StackFrame::Float32(_)) => current_cell.float32_value().map(ReadyFrame::Float32),
+            Some(StackFrame::Bytes(_))
+                if matches!(
+                    self.cold_node(current),
+                    Some(Node::Bytes(_) | Node::MutableBytes(_))
+                ) =>
+            {
+                Some(ReadyFrame::Bytes)
+            }
+            Some(StackFrame::Conversion(frame)) => frame
+                .kind
+                .ready_cell_value(current_cell)
+                .map(ReadyFrame::Conversion),
+            _ => None,
+        };
+        let Some(ready) = ready else {
+            return Ok(None);
+        };
+
+        let frame = stack.pop_frame().expect("ready stack frame must exist");
+        let result = match (frame, ready) {
+            (StackFrame::Int(frame), ReadyFrame::Int(value)) => {
+                let used = match &frame.kind {
+                    IntFrameKind::Un { .. } => 1,
+                    IntFrameKind::BinSecond { .. } | IntFrameKind::BinFirst { .. } => 2,
+                };
+                let result = match frame.kind {
+                    IntFrameKind::BinSecond { op, x } => {
+                        stack.push_int_frame(
+                            frame.redex,
+                            frame.profile_head,
+                            IntFrameKind::BinFirst { op, y: value },
+                        );
+                        if self.profile.is_some() {
+                            self.profile_eval_frame_push("Int");
+                        }
+                        return Ok(Some((x, 0)));
+                    }
+                    IntFrameKind::BinFirst { op, y } => op
+                        .apply(value, y)
+                        .map_err(|err| self.arithmetic_eval_error(err))?,
+                    IntFrameKind::Un { op } => {
+                        let n = op
+                            .apply(value)
+                            .map_err(|err| self.arithmetic_eval_error(err))?;
+                        IntResult::Int(n)
+                    }
+                };
+                if frame.profile_head.is_some() {
+                    self.profile_reduction(frame.profile_head, 1);
+                }
+                let node = self.apply_stack_redex_value(
+                    frame.redex,
+                    used,
+                    Self::int_result_value_node(result),
+                );
+                (node, 1)
+            }
+            (StackFrame::Int64(frame), ReadyFrame::Int64(value)) => {
+                let result = match frame.kind {
+                    Int64FrameKind::BinSecond { op, x } => {
+                        stack.push_int64_frame(
+                            frame.app_end,
+                            frame.used,
+                            frame.profile_head,
+                            Int64FrameKind::BinFirst { op, y: value },
+                        );
+                        if self.profile.is_some() {
+                            self.profile_eval_frame_push("Int64");
+                        }
+                        return Ok(Some((x, 0)));
+                    }
+                    Int64FrameKind::BinFirst { op, y } => op
+                        .apply(value, y)
+                        .map_err(|err| self.arithmetic_eval_error(err))?,
+                    Int64FrameKind::ShiftFirst { op, y } => op
+                        .apply(value, y)
+                        .map_err(|err| self.arithmetic_eval_error(err))?,
+                    Int64FrameKind::Un { op } => {
+                        let result = op
+                            .apply(value)
+                            .map_err(|err| self.arithmetic_eval_error(err))?;
+                        match result {
+                            Int64UnResult::Int64(n) => Int64Result::Int64(n),
+                            Int64UnResult::Int(n) => {
+                                if frame.profile_head.is_some() {
+                                    self.profile_reduction(frame.profile_head, 1);
+                                }
+                                let node = self.apply_stack_frame_value(
+                                    stack,
+                                    frame.app_end,
+                                    frame.used,
+                                    Node::Int(n),
+                                );
+                                return Ok(Some((node, 1)));
+                            }
+                        }
+                    }
+                };
+                if frame.profile_head.is_some() {
+                    self.profile_reduction(frame.profile_head, 1);
+                }
+                let node = self.apply_stack_frame_value(
+                    stack,
+                    frame.app_end,
+                    frame.used,
+                    Self::int64_result_value_node(result),
+                );
+                (node, 1)
+            }
+            (StackFrame::Int64Shift(frame), ReadyFrame::Int64Shift(value)) => {
+                stack.push_int64_frame(
+                    frame.app_end,
+                    frame.used,
+                    frame.profile_head,
+                    Int64FrameKind::ShiftFirst {
+                        op: frame.op,
+                        y: value,
+                    },
+                );
+                if self.profile.is_some() {
+                    self.profile_eval_frame_push("Int64");
+                }
+                (frame.x, 0)
+            }
+            (StackFrame::Float64(frame), ReadyFrame::Float64(value)) => {
+                let result = match frame.kind {
+                    Float64FrameKind::BinSecond { op, x } => {
+                        stack.push_float64_frame(
+                            frame.app_end,
+                            frame.used,
+                            frame.profile_head,
+                            Float64FrameKind::BinFirst { op, y: value },
+                        );
+                        if self.profile.is_some() {
+                            self.profile_eval_frame_push("Float64");
+                        }
+                        return Ok(Some((x, 0)));
+                    }
+                    Float64FrameKind::BinFirst { op, y } => op.apply(value, y),
+                    Float64FrameKind::Un { op } => Float64Result::Float(op.apply(value)),
+                };
+                if frame.profile_head.is_some() {
+                    self.profile_reduction(frame.profile_head, 1);
+                }
+                let value = match result {
+                    Float64Result::Float(n) => Node::Float64(n),
+                    Float64Result::Bool(b) => Self::bool_value_node(b),
+                };
+                let node = self.apply_stack_frame_value(stack, frame.app_end, frame.used, value);
+                (node, 1)
+            }
+            (StackFrame::Float32(frame), ReadyFrame::Float32(value)) => {
+                let result = match frame.kind {
+                    Float32FrameKind::BinSecond { op, x } => {
+                        stack.push_float32_frame(
+                            frame.app_end,
+                            frame.used,
+                            frame.profile_head,
+                            Float32FrameKind::BinFirst { op, y: value },
+                        );
+                        if self.profile.is_some() {
+                            self.profile_eval_frame_push("Float32");
+                        }
+                        return Ok(Some((x, 0)));
+                    }
+                    Float32FrameKind::BinFirst { op, y } => op.apply(value, y),
+                    Float32FrameKind::Un { op } => Float32Result::Float(op.apply(value)),
+                };
+                if frame.profile_head.is_some() {
+                    self.profile_reduction(frame.profile_head, 1);
+                }
+                let value = match result {
+                    Float32Result::Float(n) => Node::Float32(n),
+                    Float32Result::Bool(b) => Self::bool_value_node(b),
+                };
+                let node = self.apply_stack_frame_value(stack, frame.app_end, frame.used, value);
+                (node, 1)
+            }
+            (StackFrame::Bytes(frame), ReadyFrame::Bytes) => {
+                let node = match frame.kind {
+                    BytesFrameKind::BinSecond { op, x } => {
+                        stack.push_bytes_frame(
+                            frame.app_end,
+                            frame.used,
+                            frame.profile_head,
+                            BytesFrameKind::BinFirst { op, y: current },
+                        );
+                        if self.profile.is_some() {
+                            self.profile_eval_frame_push("Bytes");
+                        }
+                        return Ok(Some((x, 0)));
+                    }
+                    BytesFrameKind::BinFirst { op, y } => {
+                        self.bytes_bin_result_node(op, current, y)?
+                    }
+                };
+                if frame.profile_head.is_some() {
+                    self.profile_reduction(frame.profile_head, 1);
+                }
+                let node = self.apply_stack_frame_rewrite(stack, frame.app_end, frame.used, node);
+                (node, 1)
+            }
+            (StackFrame::Conversion(frame), ReadyFrame::Conversion(value)) => {
+                if frame.profile_head.is_some() {
+                    self.profile_reduction(frame.profile_head, 1);
+                }
+                let node = self.apply_stack_frame_value(
+                    stack,
+                    frame.app_end,
+                    frame.used,
+                    Self::conversion_result_value_node(frame.kind, value),
+                );
+                (node, 1)
+            }
+            _ => unreachable!("ready stack frame kind changed before pop"),
+        };
+        Ok(Some(result))
+    }
+
+    fn finish_whnf_stack_frame(
+        &mut self,
+        stack: &mut EvalStack,
+        current: NodeId,
+    ) -> Result<Option<(NodeId, usize)>, EvalError> {
+        let Some(frame) = stack.pop_frame() else {
+            return Ok(None);
+        };
+        let result = match frame {
+            StackFrame::Whnf(frame) => self.finish_stack_whnf_frame(frame, stack, current)?,
+            StackFrame::Int(_) => return Err(EvalError::ExpectedInt(current)),
+            StackFrame::Int64Shift(_) => return Err(EvalError::ExpectedInt(current)),
+            StackFrame::Int64(_) => return Err(EvalError::ExpectedInt64(current)),
+            StackFrame::Float64(_) => return Err(EvalError::ExpectedFloat64(current)),
+            StackFrame::Float32(_) => return Err(EvalError::ExpectedFloat32(current)),
+            StackFrame::Bytes(_) => return Err(self.expected_bytes_error(current)),
+            StackFrame::Conversion(frame) => return Err(frame.kind.expected_error(current)),
+        };
+        Ok(Some(result))
     }
 
     fn begin_whnf_force_frame(
@@ -4067,10 +7764,7 @@ impl Program {
         let spine = self.spine(root)?;
         let head = spine.head;
         let args = spine.args();
-        let Some(known) = (match &self.nodes[head.0] {
-            Node::Prim(prim) => prim.known(),
-            _ => None,
-        }) else {
+        let Some(Prim::Known(known)) = self.cell(head).prim() else {
             return Ok(None);
         };
         use KnownPrim::*;
@@ -4100,10 +7794,12 @@ impl Program {
         let redex = if args.len() == used {
             StrictRedex::Root(root)
         } else {
+            if self.profile.is_some() {
+                self.profile_strict_redex_snapshot(args.len());
+            }
             StrictRedex::Spine {
                 root,
                 used,
-                args: args.to_vec(),
                 apps: spine.apps().to_vec(),
             }
         };
@@ -4127,18 +7823,15 @@ impl Program {
             WhnfFrameKind::IoStrict { action, value } => self.app(action, value),
             WhnfFrameKind::IsInt => {
                 let value = self.resolve(value)?;
-                let n = match self.nodes[value.0] {
-                    Node::Int(n) => n,
-                    _ => -1,
-                };
+                let n = self.cell(value).int_value().unwrap_or(-1);
                 self.int(n)
             }
         };
 
         if frame.profile_head.is_some() {
-            self.profile_reduction(&frame.profile_head, 1);
+            self.profile_reduction(frame.profile_head, 1);
         }
-        let node = self.apply_strict_redex(frame.redex, node);
+        let node = self.apply_strict_redex(frame.redex, node)?;
         Ok((node, 1))
     }
 
@@ -4194,18 +7887,64 @@ impl Program {
         }
     }
 
+    fn conversion_result_value_node(kind: ConversionFrameKind, value: ConversionValue) -> Node {
+        match (kind, value) {
+            (ConversionFrameKind::IntToInt64, ConversionValue::Int(n)) => Node::Int64(n),
+            (ConversionFrameKind::Int64ToInt, ConversionValue::Int64(n)) => Node::Int(n),
+            (ConversionFrameKind::IntToFloat64 { unsigned: false }, ConversionValue::Int(n)) => {
+                Node::Float64(n as f64)
+            }
+            (ConversionFrameKind::IntToFloat64 { unsigned: true }, ConversionValue::Int(n)) => {
+                Node::Float64((n as u64) as f64)
+            }
+            (ConversionFrameKind::Int64ToFloat64, ConversionValue::Int64(n)) => {
+                Node::Float64(n as f64)
+            }
+            (ConversionFrameKind::Float64ToInt, ConversionValue::Float64(n)) => Node::Int(n as i64),
+            (ConversionFrameKind::IntToFloat32 { unsigned: false }, ConversionValue::Int(n)) => {
+                Node::Float32(n as f32)
+            }
+            (ConversionFrameKind::IntToFloat32 { unsigned: true }, ConversionValue::Int(n)) => {
+                Node::Float32((n as u64) as f32)
+            }
+            (ConversionFrameKind::Int64ToFloat32, ConversionValue::Int64(n)) => {
+                Node::Float32(n as f32)
+            }
+            (ConversionFrameKind::Float32ToInt, ConversionValue::Float32(n)) => Node::Int(n as i64),
+            (ConversionFrameKind::Float64ToFloat32, ConversionValue::Float64(n)) => {
+                Node::Float32(n as f32)
+            }
+            (ConversionFrameKind::Float32ToFloat64, ConversionValue::Float32(n)) => {
+                Node::Float64(n as f64)
+            }
+            (ConversionFrameKind::Int64BitsToFloat64, ConversionValue::Int64(n)) => {
+                Node::Float64(f64::from_bits(n as u64))
+            }
+            (ConversionFrameKind::Float64BitsToInt64, ConversionValue::Float64(n)) => {
+                Node::Int64(n.to_bits() as i64)
+            }
+            (ConversionFrameKind::IntBitsToFloat32, ConversionValue::Int(n)) => {
+                Node::Float32(f32::from_bits(n as u32))
+            }
+            (ConversionFrameKind::Float32BitsToInt, ConversionValue::Float32(n)) => {
+                Node::Int((n.to_bits() as i32) as i64)
+            }
+            _ => unreachable!("conversion frame kind and value mismatch"),
+        }
+    }
+
     fn finish_conversion_frame(
         &mut self,
         frame: ConversionFrame,
         value: ConversionValue,
-    ) -> (NodeId, usize) {
+    ) -> Result<(NodeId, usize), EvalError> {
         let node = self.conversion_result_node(frame.kind, value);
 
         if frame.profile_head.is_some() {
-            self.profile_reduction(&frame.profile_head, 1);
+            self.profile_reduction(frame.profile_head, 1);
         }
-        let node = self.apply_strict_redex(frame.redex, node);
-        (node, 1)
+        let node = self.apply_strict_redex(frame.redex, node)?;
+        Ok((node, 1))
     }
 
     fn finish_ready_eval_frame(
@@ -4223,24 +7962,25 @@ impl Program {
             Conversion(ConversionValue),
         }
 
-        let ready = match (stack.peek(), &self.nodes[current.0]) {
-            (Some(EvalFrame::Int(_)), Node::Int(value)) => Some(ReadyFrame::Int(*value)),
-            (Some(EvalFrame::Int64Shift(_)), Node::Int(value)) => {
-                Some(ReadyFrame::Int64Shift(*value))
-            }
-            (Some(EvalFrame::Int64(_)), Node::Int64(value)) => Some(ReadyFrame::Int64(*value)),
-            (Some(EvalFrame::Float64(_)), Node::Float64(value)) => {
-                Some(ReadyFrame::Float64(*value))
-            }
-            (Some(EvalFrame::Float32(_)), Node::Float32(value)) => {
-                Some(ReadyFrame::Float32(*value))
-            }
-            (Some(EvalFrame::Bytes(_)), Node::Bytes(_) | Node::MutableBytes(_)) => {
+        let current_cell = self.cell(current);
+        let ready = match stack.peek() {
+            Some(EvalFrame::Int(_)) => current_cell.int_value().map(ReadyFrame::Int),
+            Some(EvalFrame::Int64Shift(_)) => current_cell.int_value().map(ReadyFrame::Int64Shift),
+            Some(EvalFrame::Int64(_)) => current_cell.int64_value().map(ReadyFrame::Int64),
+            Some(EvalFrame::Float64(_)) => current_cell.float64_value().map(ReadyFrame::Float64),
+            Some(EvalFrame::Float32(_)) => current_cell.float32_value().map(ReadyFrame::Float32),
+            Some(EvalFrame::Bytes(_))
+                if matches!(
+                    self.cold_node(current),
+                    Some(Node::Bytes(_) | Node::MutableBytes(_))
+                ) =>
+            {
                 Some(ReadyFrame::Bytes)
             }
-            (Some(EvalFrame::Conversion(frame)), node) => {
-                frame.kind.ready_value(node).map(ReadyFrame::Conversion)
-            }
+            Some(EvalFrame::Conversion(frame)) => frame
+                .kind
+                .ready_cell_value(current_cell)
+                .map(ReadyFrame::Conversion),
             _ => None,
         };
         let Some(ready) = ready else {
@@ -4265,19 +8005,22 @@ impl Program {
                         y: value,
                     },
                 }));
+                if self.profile.is_some() {
+                    self.profile_eval_frame_push("Int64");
+                }
                 (next, 0)
             }
             (EvalFrame::Float64(frame), ReadyFrame::Float64(value)) => {
-                self.finish_float64_frame(frame, value, stack)
+                self.finish_float64_frame(frame, value, stack)?
             }
             (EvalFrame::Float32(frame), ReadyFrame::Float32(value)) => {
-                self.finish_float32_frame(frame, value, stack)
+                self.finish_float32_frame(frame, value, stack)?
             }
             (EvalFrame::Bytes(frame), ReadyFrame::Bytes) => {
                 self.finish_bytes_frame(frame, current, stack)?
             }
             (EvalFrame::Conversion(frame), ReadyFrame::Conversion(value)) => {
-                self.finish_conversion_frame(frame, value)
+                self.finish_conversion_frame(frame, value)?
             }
             _ => unreachable!("ready eval frame kind changed before pop"),
         };
@@ -4299,7 +8042,7 @@ impl Program {
             EvalFrame::Int64(_) => return Err(EvalError::ExpectedInt64(current)),
             EvalFrame::Float64(_) => return Err(EvalError::ExpectedFloat64(current)),
             EvalFrame::Float32(_) => return Err(EvalError::ExpectedFloat32(current)),
-            EvalFrame::Bytes(_) => return Err(EvalError::ExpectedBytes(current)),
+            EvalFrame::Bytes(_) => return Err(self.expected_bytes_error(current)),
             EvalFrame::Conversion(frame) => return Err(frame.kind.expected_error(current)),
         };
         Ok(Some(result))
@@ -4319,11 +8062,28 @@ impl Program {
 
     fn reduce_whnf_from(
         &mut self,
+        root: NodeId,
+        limit: usize,
+        profile_resolve: bool,
+        whnf_frames: bool,
+    ) -> Result<(NodeId, usize), EvalError> {
+        self.reduce_depth += 1;
+        let result = self.reduce_whnf_from_inner(root, limit, profile_resolve, whnf_frames);
+        self.reduce_depth -= 1;
+        result
+    }
+
+    fn reduce_whnf_from_inner(
+        &mut self,
         mut root: NodeId,
         limit: usize,
         profile_resolve: bool,
         whnf_frames: bool,
     ) -> Result<(NodeId, usize), EvalError> {
+        if !whnf_frames {
+            return self.reduce_whnf_from_stack(root, limit, profile_resolve);
+        }
+
         let mut steps = 0;
         let mut frame_stack = EvalFrameStack::default();
         let mut eval_spine = EvalSpine::default();
@@ -4339,7 +8099,8 @@ impl Program {
                 &persistent_spine,
                 &scratch_args,
                 &scratch_apps,
-            );
+                None,
+            )?;
             let mut current = self.resolve_for_whnf(root, profile_resolve)?;
             if let Some((next, reductions)) =
                 self.finish_ready_eval_frame(&mut frame_stack, current)?
@@ -4398,6 +8159,9 @@ impl Program {
                         continue;
                     }
                     PersistentStep::Fallback { root: next_root } => {
+                        if self.profile.is_some() {
+                            self.profile_persistent_fallback();
+                        }
                         root = next_root;
                         persistent_active = false;
                         persistent_spine.clear();
@@ -4408,6 +8172,9 @@ impl Program {
 
             if whnf_frames {
                 if let Some((frame, next)) = self.begin_whnf_force_frame(current)? {
+                    if self.profile.is_some() {
+                        self.profile_eval_frame_push("Whnf");
+                    }
                     frame_stack.push(EvalFrame::Whnf(frame));
                     root = next;
                     continue;
@@ -4444,6 +8211,253 @@ impl Program {
         Err(EvalError::StepLimit { limit })
     }
 
+    fn reduce_whnf_from_stack(
+        &mut self,
+        mut current: NodeId,
+        limit: usize,
+        profile_resolve: bool,
+    ) -> Result<(NodeId, usize), EvalError> {
+        let mut steps = 0;
+        let mut stack = EvalStack::default();
+        let mut fallback_frame_stack = EvalFrameStack::default();
+        let mut eval_spine = EvalSpine::default();
+        let persistent_spine = PersistentSpine::default();
+        let mut scratch_args = Vec::new();
+        let mut scratch_apps = Vec::new();
+        let profiling = self.profile.is_some();
+
+        #[cfg(feature = "eval-phase-profile")]
+        macro_rules! stack_phase_start {
+            () => {
+                profiling.then(Instant::now)
+            };
+        }
+        #[cfg(not(feature = "eval-phase-profile"))]
+        macro_rules! stack_phase_start {
+            () => {
+                ()
+            };
+        }
+        #[cfg(feature = "eval-phase-profile")]
+        macro_rules! record_stack_time {
+            ($field:ident, $started:expr) => {{
+                if let Some(started) = $started {
+                    if let Some(profile) = self.profile.as_mut() {
+                        profile.$field =
+                            profile.$field.saturating_add(started.elapsed().as_nanos());
+                    }
+                }
+            }};
+        }
+        #[cfg(not(feature = "eval-phase-profile"))]
+        macro_rules! record_stack_time {
+            ($field:ident, $started:expr) => {{
+                let _ = &$started;
+            }};
+        }
+        #[cfg(feature = "eval-phase-profile")]
+        macro_rules! profile_stack_counter {
+            ($field:ident) => {{
+                if let Some(profile) = self.profile.as_mut() {
+                    profile.$field = profile.$field.saturating_add(1);
+                }
+            }};
+        }
+        #[cfg(not(feature = "eval-phase-profile"))]
+        macro_rules! profile_stack_counter {
+            ($field:ident) => {};
+        }
+        macro_rules! profile_stack_step_result {
+            ($step:expr) => {{
+                #[cfg(feature = "eval-phase-profile")]
+                {
+                    profile_stack_counter!(stack_eval_step_calls);
+                    match &$step {
+                        StackStep::Reduced { .. } => profile_stack_counter!(stack_step_reduced),
+                        StackStep::Whnf { .. } => profile_stack_counter!(stack_step_whnf),
+                        StackStep::Fallback { .. } => profile_stack_counter!(stack_step_fallback),
+                    }
+                }
+            }};
+        }
+
+        while steps < limit {
+            profile_stack_counter!(stack_loop_iterations);
+            let gc_started = stack_phase_start!();
+            self.maybe_collect_garbage_between_steps(
+                current,
+                &fallback_frame_stack,
+                &eval_spine,
+                &persistent_spine,
+                &scratch_args,
+                &scratch_apps,
+                Some(&stack),
+            )?;
+            record_stack_time!(stack_gc_check_nanos, gc_started);
+
+            let resolve_started = stack_phase_start!();
+            current = self.resolve_for_whnf(current, profile_resolve)?;
+            record_stack_time!(stack_resolve_nanos, resolve_started);
+
+            if stack.app_len() == 0 {
+                profile_stack_counter!(stack_ready_checks);
+                let ready_started = stack_phase_start!();
+                if let Some((next, reductions)) =
+                    self.finish_ready_stack_frame(&mut stack, current)?
+                {
+                    record_stack_time!(stack_ready_frame_nanos, ready_started);
+                    profile_stack_counter!(stack_ready_successes);
+                    steps += reductions;
+                    self.reductions += reductions;
+                    if steps >= limit {
+                        return Err(EvalError::StepLimit { limit });
+                    }
+                    current = next;
+                    continue;
+                }
+                record_stack_time!(stack_ready_frame_nanos, ready_started);
+            }
+
+            let descent_started = stack_phase_start!();
+            while let Some(fun) = self.app_fun(current) {
+                if profiling {
+                    self.profile_stack_descent_push();
+                }
+                stack.push_app(current);
+                current = self.resolve_for_whnf(fun, profile_resolve)?;
+            }
+            record_stack_time!(stack_descent_nanos, descent_started);
+
+            if stack.app_len() == 0 {
+                profile_stack_counter!(stack_ready_checks);
+                let ready_started = stack_phase_start!();
+                if let Some((next, reductions)) =
+                    self.finish_ready_stack_frame(&mut stack, current)?
+                {
+                    record_stack_time!(stack_ready_frame_nanos, ready_started);
+                    profile_stack_counter!(stack_ready_successes);
+                    steps += reductions;
+                    self.reductions += reductions;
+                    if steps >= limit {
+                        return Err(EvalError::StepLimit { limit });
+                    }
+                    current = next;
+                    continue;
+                }
+                record_stack_time!(stack_ready_frame_nanos, ready_started);
+            }
+
+            let step_started = stack_phase_start!();
+            let step = self.stack_eval_step(
+                current,
+                &mut stack,
+                &mut scratch_args,
+                limit - steps,
+                profile_resolve,
+            )?;
+            record_stack_time!(stack_eval_step_nanos, step_started);
+            profile_stack_step_result!(step);
+
+            match step {
+                StackStep::Reduced { node, reductions } => {
+                    steps += reductions;
+                    self.reductions += reductions;
+                    if steps >= limit {
+                        return Err(EvalError::StepLimit { limit });
+                    }
+                    current = node;
+                }
+                StackStep::Whnf {
+                    node,
+                    head,
+                    reductions,
+                } => {
+                    steps += reductions;
+                    self.reductions += reductions;
+                    if steps >= limit {
+                        return Err(EvalError::StepLimit { limit });
+                    }
+                    let whnf_started = stack_phase_start!();
+                    let value = if stack.has_frame_below_apps() {
+                        self.rethread_stack_app_segment(&mut stack, head)?
+                    } else {
+                        node
+                    };
+                    let Some((next, reductions)) =
+                        self.finish_whnf_stack_frame(&mut stack, value)?
+                    else {
+                        record_stack_time!(stack_whnf_finish_nanos, whnf_started);
+                        return Ok((value, steps));
+                    };
+                    record_stack_time!(stack_whnf_finish_nanos, whnf_started);
+                    steps += reductions;
+                    self.reductions += reductions;
+                    if steps >= limit {
+                        return Err(EvalError::StepLimit { limit });
+                    }
+                    current = next;
+                }
+                StackStep::Fallback {
+                    root,
+                    head,
+                    reductions,
+                } => {
+                    steps += reductions;
+                    self.reductions += reductions;
+                    if steps >= limit {
+                        return Err(EvalError::StepLimit { limit });
+                    }
+                    if self.profile.is_some() {
+                        self.profile_persistent_fallback();
+                    }
+                    let root = if stack.app_len() == 0 {
+                        root
+                    } else {
+                        self.rethread_stack_app_segment(&mut stack, head)?
+                    };
+                    let Some(step) = self.eval_loop_step(
+                        root,
+                        limit - steps,
+                        &mut eval_spine,
+                        &mut scratch_args,
+                        &mut scratch_apps,
+                        &mut fallback_frame_stack,
+                        false,
+                    )?
+                    else {
+                        if stack.top_is_frame() {
+                            let Some((next, reductions)) =
+                                self.finish_whnf_stack_frame(&mut stack, root)?
+                            else {
+                                return Ok((root, steps));
+                            };
+                            steps += reductions;
+                            self.reductions += reductions;
+                            if steps >= limit {
+                                return Err(EvalError::StepLimit { limit });
+                            }
+                            current = next;
+                            continue;
+                        }
+                        return Ok((root, steps));
+                    };
+                    debug_assert!(
+                        fallback_frame_stack.peek().is_none(),
+                        "strict_markers=false fallback step should not keep frames"
+                    );
+                    steps += step.reductions;
+                    self.reductions += step.reductions;
+                    if steps >= limit {
+                        return Err(EvalError::StepLimit { limit });
+                    }
+                    current = step.node;
+                    eval_spine.clear();
+                }
+            }
+        }
+        Err(EvalError::StepLimit { limit })
+    }
+
     fn float64_result_node(&mut self, result: Float64Result) -> NodeId {
         match result {
             Float64Result::Float(n) => self.push_node(Node::Float64(n)),
@@ -4456,7 +8470,7 @@ impl Program {
         frame: Float64Frame,
         value: f64,
         stack: &mut EvalFrameStack,
-    ) -> (NodeId, usize) {
+    ) -> Result<(NodeId, usize), EvalError> {
         let node = match frame.kind {
             Float64FrameKind::BinSecond { op, x } => {
                 let next = x;
@@ -4465,18 +8479,21 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: Float64FrameKind::BinFirst { op, y: value },
                 };
+                if self.profile.is_some() {
+                    self.profile_eval_frame_push("Float64");
+                }
                 stack.push(EvalFrame::Float64(next_frame));
-                return (next, 0);
+                return Ok((next, 0));
             }
             Float64FrameKind::BinFirst { op, y } => self.float64_result_node(op.apply(value, y)),
             Float64FrameKind::Un { op } => self.push_node(Node::Float64(op.apply(value))),
         };
 
         if frame.profile_head.is_some() {
-            self.profile_reduction(&frame.profile_head, 1);
+            self.profile_reduction(frame.profile_head, 1);
         }
-        let node = self.apply_strict_redex(frame.redex, node);
-        (node, 1)
+        let node = self.apply_strict_redex(frame.redex, node)?;
+        Ok((node, 1))
     }
 
     fn float32_result_node(&mut self, result: Float32Result) -> NodeId {
@@ -4491,7 +8508,7 @@ impl Program {
         frame: Float32Frame,
         value: f32,
         stack: &mut EvalFrameStack,
-    ) -> (NodeId, usize) {
+    ) -> Result<(NodeId, usize), EvalError> {
         let node = match frame.kind {
             Float32FrameKind::BinSecond { op, x } => {
                 let next = x;
@@ -4500,18 +8517,21 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: Float32FrameKind::BinFirst { op, y: value },
                 };
+                if self.profile.is_some() {
+                    self.profile_eval_frame_push("Float32");
+                }
                 stack.push(EvalFrame::Float32(next_frame));
-                return (next, 0);
+                return Ok((next, 0));
             }
             Float32FrameKind::BinFirst { op, y } => self.float32_result_node(op.apply(value, y)),
             Float32FrameKind::Un { op } => self.push_node(Node::Float32(op.apply(value))),
         };
 
         if frame.profile_head.is_some() {
-            self.profile_reduction(&frame.profile_head, 1);
+            self.profile_reduction(frame.profile_head, 1);
         }
-        let node = self.apply_strict_redex(frame.redex, node);
-        (node, 1)
+        let node = self.apply_strict_redex(frame.redex, node)?;
+        Ok((node, 1))
     }
 
     fn bytes_bin_result_node(
@@ -4524,13 +8544,13 @@ impl Program {
             BytesBinOp::Append => {
                 let mut bytes = self.bytes(x)?.to_vec();
                 bytes.extend(self.bytes(y)?);
-                self.push_node(Node::Bytes(bytes))
+                self.push_node(Node::bytes(bytes))
             }
             BytesBinOp::AppendDot => {
                 let mut bytes = self.bytes(x)?.to_vec();
                 bytes.push(b'.');
                 bytes.extend(self.bytes(y)?);
-                self.push_node(Node::Bytes(bytes))
+                self.push_node(Node::bytes(bytes))
             }
             BytesBinOp::Eq
             | BytesBinOp::Ne
@@ -4569,6 +8589,9 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: BytesFrameKind::BinFirst { op, y: value },
                 };
+                if self.profile.is_some() {
+                    self.profile_eval_frame_push("Bytes");
+                }
                 stack.push(EvalFrame::Bytes(next_frame));
                 return Ok((next, 0));
             }
@@ -4576,9 +8599,9 @@ impl Program {
         };
 
         if frame.profile_head.is_some() {
-            self.profile_reduction(&frame.profile_head, 1);
+            self.profile_reduction(frame.profile_head, 1);
         }
-        let node = self.apply_strict_redex(frame.redex, node);
+        let node = self.apply_strict_redex(frame.redex, node)?;
         Ok((node, 1))
     }
 
@@ -4806,9 +8829,10 @@ impl Program {
     }
 
     fn node_trace_summary(&self, id: NodeId) -> String {
-        let Some(node) = self.nodes.get(id.0) else {
+        let Some(cell) = self.nodes.get(id.index()).copied() else {
             return format!("{id:?}:<missing>");
         };
+        let node = cell.to_node(&self.cold_nodes);
         match node {
             Node::Int(n) => format!("{id:?}:Int({n})"),
             Node::Int64(n) => format!("{id:?}:Int64({n})"),
@@ -4818,6 +8842,10 @@ impl Program {
             Node::Prim(name) => format!("{id:?}:Prim({})", name.name()),
             Node::Ffi(name) => format!("{id:?}:Ffi({name})"),
             Node::Bytes(bytes) => format!("{id:?}:Bytes(len={})", bytes.len()),
+            Node::BytesView(view) => format!(
+                "{id:?}:BytesView(base={:?}, offset={}, len={})",
+                view.base, view.offset, view.len
+            ),
             Node::MutableBytes(bytes) => {
                 format!(
                     "{id:?}:MutableBytes(size={}, capacity={})",
@@ -4832,6 +8860,7 @@ impl Program {
             ),
             Node::App(fun, arg) => format!("{id:?}:App({fun:?},{arg:?})"),
             Node::Indir(target) => format!("{id:?}:Indir({target:?})"),
+            Node::Free(next) => format!("{id:?}:Free({next:?})"),
             Node::BigInt(bytes) => format!("{id:?}:BigInt(len={})", bytes.len()),
             Node::Array(items) => format!("{id:?}:Array(len={})", items.len()),
             Node::Float64(n) => format!("{id:?}:Float64({n})"),
@@ -4912,12 +8941,8 @@ impl Program {
             }
             "fpnew" if args.len() >= 2 => {
                 let ptr = self.eval_pointer_value(args[0])?;
-                let foreign_ptr = self.push_node(Node::ForeignPtr(Box::new(ForeignPtrNode {
-                    bytes: None,
-                    offset: 0,
-                    ptr,
-                    finalizer: None,
-                })));
+                let node = self.foreign_ptr_node(None, 0, ptr);
+                let foreign_ptr = self.push_node(node);
                 Some((2, self.pair(foreign_ptr, args[1])))
             }
             "fpfin" if args.len() >= 3 => {
@@ -4957,12 +8982,8 @@ impl Program {
                 let bytes_id = self.eval_bytes_id(args[0])?;
                 let bytes = self.bytes(bytes_id)?.to_vec();
                 let ptr = self.pointer_for_node(bytes_id, 0)?;
-                self.push_node(Node::ForeignPtr(Box::new(ForeignPtrNode {
-                    bytes: Some(bytes),
-                    offset: 0,
-                    ptr,
-                    finalizer: None,
-                })))
+                let node = self.foreign_ptr_node(Some(bytes), 0, ptr);
+                self.push_node(node)
             }
             "fp2p" => {
                 let foreign_ptr = self.eval_foreign_ptr_id(args[0])?;
@@ -4971,12 +8992,8 @@ impl Program {
             }
             "fpnew" => {
                 let ptr = self.eval_pointer_value(args[0])?;
-                self.push_node(Node::ForeignPtr(Box::new(ForeignPtrNode {
-                    bytes: None,
-                    offset: 0,
-                    ptr,
-                    finalizer: None,
-                })))
+                let node = self.foreign_ptr_node(None, 0, ptr);
+                self.push_node(node)
             }
             _ => return Ok(None),
         };
@@ -4991,12 +9008,12 @@ impl Program {
         let rewrite = match name {
             "A.alloc" if args.len() >= 3 => {
                 let len = int_to_usize(self.eval_int(args[0])?)?;
-                let array = self.push_node(Node::Array(vec![args[1]; len]));
+                let array = self.push_node(Node::array(vec![args[1]; len]));
                 Some((3, self.pair(array, args[2])))
             }
             "A.alloc" => {
                 let len = int_to_usize(self.eval_int(args[0])?)?;
-                Some((2, self.push_node(Node::Array(vec![args[1]; len]))))
+                Some((2, self.push_node(Node::array(vec![args[1]; len]))))
             }
             "A.read" if args.len() >= 3 => {
                 let array = self.eval_array_id(args[0])?;
@@ -5073,13 +9090,13 @@ impl Program {
             "A.copy" if args.len() >= 2 => {
                 let array = self.eval_array_id(args[0])?;
                 let items = self.array(array)?.to_vec();
-                let copy = self.push_node(Node::Array(items));
+                let copy = self.push_node(Node::array(items));
                 self.pair(copy, args[1])
             }
             "A.copy" => {
                 let array = self.eval_array_id(args[0])?;
                 let items = self.array(array)?.to_vec();
-                self.push_node(Node::Array(items))
+                self.push_node(Node::array(items))
             }
             "A.size" if args.len() >= 2 => {
                 let array = self.eval_array_id(args[0])?;
@@ -5242,40 +9259,40 @@ impl Program {
             "packCString" if args.len() >= 2 => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let bytes = self.read_c_string(ptr)?;
-                let bytes = self.push_node(Node::Bytes(bytes));
+                let bytes = self.push_node(Node::bytes(bytes));
                 Some((2, self.pair(bytes, args[1])))
             }
             "packCStringLen" if args.len() >= 3 => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let len = int_to_usize(self.eval_int(args[1])?)?;
                 let bytes = self.read_pointer_bytes(ptr, len)?;
-                let bytes = self.push_node(Node::Bytes(bytes));
+                let bytes = self.push_node(Node::bytes(bytes));
                 Some((3, self.pair(bytes, args[2])))
             }
             "packCStringLen" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let len = int_to_usize(self.eval_int(args[1])?)?;
                 let bytes = self.read_pointer_bytes(ptr, len)?;
-                Some((2, self.push_node(Node::Bytes(bytes))))
+                Some((2, self.push_node(Node::bytes(bytes))))
             }
             "bsgrab" if args.len() >= 2 => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let bytes = self.read_c_string(ptr)?;
-                let bytes = self.push_node(Node::Bytes(bytes));
+                let bytes = self.push_node(Node::bytes(bytes));
                 Some((2, self.pair(bytes, args[1])))
             }
             "bsgrablen" if args.len() >= 3 => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let len = int_to_usize(self.eval_int(args[1])?)?;
                 let bytes = self.read_pointer_bytes(ptr, len)?;
-                let bytes = self.push_node(Node::Bytes(bytes));
+                let bytes = self.push_node(Node::bytes(bytes));
                 Some((3, self.pair(bytes, args[2])))
             }
             "bsgrablen" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let len = int_to_usize(self.eval_int(args[1])?)?;
                 let bytes = self.read_pointer_bytes(ptr, len)?;
-                Some((2, self.push_node(Node::Bytes(bytes))))
+                Some((2, self.push_node(Node::bytes(bytes))))
             }
             "bsnew" if args.len() >= 3 => {
                 let size = int_to_usize(self.eval_int(args[0])?)?;
@@ -5374,11 +9391,12 @@ impl Program {
             "bsreplicate" => {
                 let len = int_to_usize(self.eval_int(args[0])?)?;
                 let byte = self.eval_int(args[1])? as u8;
-                Some((2, self.push_node(Node::Bytes(vec![byte; len]))))
+                Some((2, self.push_node(Node::bytes(vec![byte; len]))))
             }
             "bsindex" => {
-                let bytes = self.eval_bytes(args[0])?;
+                let bytes_id = self.eval_bytes_id(args[0])?;
                 let index = int_to_usize(self.eval_int(args[1])?)?;
+                let bytes = self.bytes(bytes_id)?;
                 let len = bytes.len();
                 if index >= len {
                     return Err(invalid_bytes!("bsindex index={index} len={len}"));
@@ -5387,17 +9405,19 @@ impl Program {
                 Some((2, self.int(byte as i64)))
             }
             "bssubstr" if args.len() >= 3 => {
-                let bytes = self.eval_bytes(args[0])?;
+                let bytes_id = self.eval_bytes_id(args[0])?;
                 let offset = int_to_usize(self.eval_int(args[1])?)?;
                 let len = int_to_usize(self.eval_int(args[2])?)?;
+                let bytes = self.bytes(bytes_id)?;
                 let bytes_len = bytes.len();
-                let end = offset
+                offset
                     .checked_add(len)
                     .filter(|end| *end <= bytes.len())
                     .ok_or_else(|| {
                         invalid_bytes!("bssubstr offset={offset} len={len} bytes_len={bytes_len}")
                     })?;
-                Some((3, self.push_node(Node::Bytes(bytes[offset..end].to_vec()))))
+                let node = self.byte_slice_node(bytes_id, offset, len)?;
+                Some((3, self.push_node(node)))
             }
             _ => None,
         };
@@ -5424,26 +9444,31 @@ impl Program {
             "packCString" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let bytes = self.read_c_string(ptr)?;
-                self.push_node(Node::Bytes(bytes))
+                self.push_node(Node::bytes(bytes))
             }
             "bsgrab" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let bytes = self.read_c_string(ptr)?;
-                self.push_node(Node::Bytes(bytes))
+                self.push_node(Node::bytes(bytes))
             }
             "bslength" => {
-                let len = i64::try_from(self.eval_bytes(args[0])?.len())
-                    .map_err(|_| EvalError::Overflow)?;
+                let bytes_id = self.eval_bytes_id(args[0])?;
+                let len =
+                    i64::try_from(self.bytes(bytes_id)?.len()).map_err(|_| EvalError::Overflow)?;
                 self.int(len)
             }
             "headUTF8" => {
-                let (codepoint, _) = head_utf8(&self.eval_bytes(args[0])?)?;
+                let bytes_id = self.eval_bytes_id(args[0])?;
+                let (codepoint, _) = head_utf8(self.bytes(bytes_id)?)?;
                 self.int(codepoint as i64)
             }
             "tailUTF8" => {
-                let bytes = self.eval_bytes(args[0])?;
-                let (_, offset) = head_utf8(&bytes)?;
-                self.push_node(Node::Bytes(bytes[offset..].to_vec()))
+                let bytes_id = self.eval_bytes_id(args[0])?;
+                let bytes = self.bytes(bytes_id)?;
+                let (_, offset) = head_utf8(bytes)?;
+                let len = bytes.len() - offset;
+                let node = self.byte_slice_node(bytes_id, offset, len)?;
+                self.push_node(node)
             }
             "bsunpack" => {
                 let bytes = self.eval_bytes(args[0])?;
@@ -5667,8 +9692,8 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 Node::Int(self.mpz_value(ptr)?.log2()?)
             }
-            "&closeb" => Node::FunPtr("closeb".to_owned()),
-            "&free" => Node::FunPtr("free".to_owned()),
+            "&closeb" => Node::fun_ptr("closeb"),
+            "&free" => Node::fun_ptr("free"),
             "&errno" | "errno" => Node::Ptr(self.errno_ptr()?),
             "malloc" => {
                 let size = int_to_usize(self.eval_int(args[0])?)?;
@@ -6476,8 +10501,8 @@ impl Program {
             "sizeof_size_t" => Node::Int(size_of_i64::<usize>()),
             "want_gmp" => Node::Int(0),
             "want_imath" => Node::Int(1),
-            "&closeb" => Node::FunPtr("closeb".to_owned()),
-            "&free" => Node::FunPtr("free".to_owned()),
+            "&closeb" => Node::fun_ptr("closeb"),
+            "&free" => Node::fun_ptr("free"),
             "&errno" | "errno" => Node::Ptr(self.errno_ptr()?),
             _ => return Ok(None),
         };
@@ -6553,7 +10578,7 @@ impl Program {
             } else {
                 "K"
             }),
-            b'S' => Node::Bytes(host_js_call_string(body, arity, &js_args)?),
+            b'S' => Node::bytes(host_js_call_string(body, arity, &js_args)?),
             b'I' => Node::Int(i64::from(host_js_call_int(body, arity, &js_args)?)),
             b'U' => Node::Int(i64::from(host_js_call_uint(body, arity, &js_args)?)),
             b'J' => self.js_object_node(host_js_call_object(body, arity, &js_args)?),
@@ -6582,7 +10607,8 @@ impl Program {
                 return Err(err);
             }
         };
-        let result = self.push_node(self.js_object_node(object));
+        let result_node = self.js_object_node(object);
+        let result = self.push_node(result_node);
         Ok(Some((2, self.pair(result, args[1]))))
     }
 
@@ -6601,7 +10627,7 @@ impl Program {
             (b'B', JsValue::Bool(value)) => return Ok(self.prim(if *value { "A" } else { "K" })),
             (b'P', JsValue::Pointer(value)) => Node::Ptr(i64::from(*value)),
             (b'J', JsValue::Object(value)) => self.js_object_node(*value),
-            (b'S', JsValue::Bytes(value)) => Node::Bytes(value.clone()),
+            (b'S', JsValue::Bytes(value)) => Node::bytes(value.clone()),
             _ => return Err(EvalError::InvalidByteString),
         };
         Ok(self.push_value_node(node))
@@ -6637,9 +10663,10 @@ impl Program {
     fn eval_string_bytes(&mut self, id: NodeId) -> Result<Vec<u8>, EvalError> {
         let root = self.reduce_node_whnf(id, FORCE_REDUCTION_LIMIT)?;
         let root = self.resolve(root)?;
-        let bytes = match self.nodes[root.0].clone() {
-            Node::Bytes(bytes) => bytes,
-            Node::MutableBytes(bytes) => bytes.visible().to_vec(),
+        let bytes = match self.cold_node(root) {
+            Some(Node::Bytes(bytes)) => bytes.as_slice().to_vec(),
+            Some(Node::BytesView(_)) => self.bytes(root)?.to_vec(),
+            Some(Node::MutableBytes(bytes)) => bytes.visible().to_vec(),
             _ => self.eval_char_list(root)?,
         };
         Ok(bytes)
@@ -6650,20 +10677,21 @@ impl Program {
         loop {
             let root = self.reduce_node_whnf(id, FORCE_REDUCTION_LIMIT)?;
             let root = self.resolve(root)?;
-            match self.nodes[root.0].clone() {
-                Node::Prim(name) if name == "K" => return Ok(out),
-                Node::App(fun, tail) => {
+            if matches!(self.cell(root).prim(), Some(Prim::Known(KnownPrim::K))) {
+                return Ok(out);
+            }
+            match self.cell(root).app_fields() {
+                Some((fun, tail)) => {
                     let fun = self.resolve(fun)?;
-                    let Node::App(cons, head) = self.nodes[fun.0].clone() else {
+                    let Some((cons, head)) = self.cell(fun).app_fields() else {
                         return Err(EvalError::InvalidByteString);
                     };
                     let cons = self.resolve(cons)?;
-                    match &self.nodes[cons.0] {
-                        Node::Prim(name) if name == "O" => {
-                            out.extend(modified_utf8(self.eval_int(head)?)?);
-                            id = tail;
-                        }
-                        _ => return Err(EvalError::InvalidByteString),
+                    if matches!(self.cell(cons).prim(), Some(Prim::Known(KnownPrim::O))) {
+                        out.extend(modified_utf8(self.eval_int(head)?)?);
+                        id = tail;
+                    } else {
+                        return Err(EvalError::InvalidByteString);
                     }
                 }
                 _ => return Err(EvalError::InvalidByteString),
@@ -6690,10 +10718,7 @@ impl Program {
     fn eval_int(&mut self, id: NodeId) -> Result<i64, EvalError> {
         self.eval_whnf_value(
             id,
-            |program, root| match program.nodes[root.0] {
-                Node::Int(n) => Some(n),
-                _ => None,
-            },
+            |program, root| program.cell(root).int_value(),
             EvalError::ExpectedInt,
         )
     }
@@ -6701,10 +10726,7 @@ impl Program {
     fn eval_int64(&mut self, id: NodeId) -> Result<i64, EvalError> {
         self.eval_whnf_value(
             id,
-            |program, root| match program.nodes[root.0] {
-                Node::Int64(n) => Some(n),
-                _ => None,
-            },
+            |program, root| program.cell(root).int64_value(),
             EvalError::ExpectedInt64,
         )
     }
@@ -6712,10 +10734,7 @@ impl Program {
     fn eval_float64(&mut self, id: NodeId) -> Result<f64, EvalError> {
         self.eval_whnf_value(
             id,
-            |program, root| match program.nodes[root.0] {
-                Node::Float64(n) => Some(n),
-                _ => None,
-            },
+            |program, root| program.cell(root).float64_value(),
             EvalError::ExpectedFloat64,
         )
     }
@@ -6723,10 +10742,7 @@ impl Program {
     fn eval_float32(&mut self, id: NodeId) -> Result<f32, EvalError> {
         self.eval_whnf_value(
             id,
-            |program, root| match program.nodes[root.0] {
-                Node::Float32(n) => Some(n),
-                _ => None,
-            },
+            |program, root| program.cell(root).float32_value(),
             EvalError::ExpectedFloat32,
         )
     }
@@ -6734,9 +10750,9 @@ impl Program {
     fn eval_bool(&mut self, id: NodeId) -> Result<bool, EvalError> {
         self.eval_whnf_value(
             id,
-            |program, root| match &program.nodes[root.0] {
-                Node::Prim(name) if name == "A" => Some(true),
-                Node::Prim(name) if name == "K" => Some(false),
+            |program, root| match program.cell(root).prim() {
+                Some(Prim::Known(KnownPrim::A)) => Some(true),
+                Some(Prim::Known(KnownPrim::K)) => Some(false),
                 _ => None,
             },
             EvalError::ExpectedInt,
@@ -6746,10 +10762,7 @@ impl Program {
     fn eval_thread_id(&mut self, id: NodeId) -> Result<i64, EvalError> {
         self.eval_whnf_value(
             id,
-            |program, root| match program.nodes[root.0] {
-                Node::ThreadId(n) => Some(n),
-                _ => None,
-            },
+            |program, root| program.cell(root).thread_id_value(),
             EvalError::ExpectedThreadId,
         )
     }
@@ -6770,9 +10783,21 @@ impl Program {
     }
 
     fn pointer_value_from_whnf(&self, root: NodeId) -> Option<i64> {
-        match &self.nodes[root.0] {
-            Node::Int(n) | Node::Ptr(n) | Node::RawFunPtr(n) | Node::ThreadId(n) => Some(*n),
-            Node::Prim(name) => std_handle_ptr(name.name()),
+        let cell = self.cell(root);
+        if let Some(value) = cell.int_value() {
+            return Some(value);
+        }
+        if let Some(value) = cell.ptr_value() {
+            return Some(value);
+        }
+        if let Some(value) = cell.raw_fun_ptr_value() {
+            return Some(value);
+        }
+        if let Some(value) = cell.thread_id_value() {
+            return Some(value);
+        }
+        match cell.prim() {
+            Some(prim) => std_handle_ptr(prim.name()),
             _ => None,
         }
     }
@@ -6810,13 +10835,34 @@ impl Program {
         }
     }
 
+    fn expected_bytes_error(&self, id: NodeId) -> EvalError {
+        if self.trace_expected_bytes {
+            eprintln!("expected bytes: reductions={}", self.reductions);
+            eprintln!(
+                "  gc_collections={} gc_last_live_nodes={} gc_last_free_nodes={} gc_current_nodes={} gc_current_free_nodes={} gc_allocations_since_collect={}",
+                self.gc_collections,
+                self.gc_last_live_nodes,
+                self.gc_last_free_nodes,
+                self.nodes.len(),
+                self.free_nodes,
+                self.gc_allocations_since_collect
+            );
+            eprintln!("  node={}", self.node_trace_summary(id));
+        }
+        EvalError::ExpectedBytes(id)
+    }
+
     fn eval_foreign_ptr_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
             id,
-            |program, root| match &program.nodes[root.0] {
-                Node::ForeignPtr(_) => Some(root),
-                Node::Prim(name) if std_handle(name.name()).is_some() => Some(root),
-                _ => None,
+            |program, root| {
+                if matches!(program.cold_node(root), Some(Node::ForeignPtr(_))) {
+                    return Some(root);
+                }
+                match program.cell(root).prim() {
+                    Some(prim) if std_handle(prim.name()).is_some() => Some(root),
+                    _ => None,
+                }
             },
             EvalError::ExpectedForeignPtr,
         )
@@ -6830,8 +10876,8 @@ impl Program {
     fn eval_bytes_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
             id,
-            |program, root| match program.nodes[root.0] {
-                Node::Bytes(_) | Node::MutableBytes(_) => Some(root),
+            |program, root| match program.cold_node(root) {
+                Some(Node::Bytes(_) | Node::BytesView(_) | Node::MutableBytes(_)) => Some(root),
                 _ => None,
             },
             EvalError::ExpectedBytes,
@@ -6841,8 +10887,8 @@ impl Program {
     fn eval_array_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
             id,
-            |program, root| match program.nodes[root.0] {
-                Node::Array(_) => Some(root),
+            |program, root| match program.cold_node(root) {
+                Some(Node::Array(_)) => Some(root),
                 _ => None,
             },
             EvalError::ExpectedArray,
@@ -6850,25 +10896,59 @@ impl Program {
     }
 
     fn array(&self, id: NodeId) -> Result<&[NodeId], EvalError> {
-        match &self.nodes[id.0] {
-            Node::Array(items) => Ok(items),
+        match self.cold_node(id) {
+            Some(Node::Array(items)) => Ok(items.as_slice()),
             _ => Err(EvalError::ExpectedArray(id)),
         }
     }
 
     fn array_mut(&mut self, id: NodeId) -> Result<&mut Vec<NodeId>, EvalError> {
-        match &mut self.nodes[id.0] {
-            Node::Array(items) => Ok(items),
+        match self.cold_node_mut(id) {
+            Some(Node::Array(items)) => Ok(items.as_mut()),
             _ => Err(EvalError::ExpectedArray(id)),
         }
     }
 
     fn bytes(&self, id: NodeId) -> Result<&[u8], EvalError> {
-        match &self.nodes[id.0] {
-            Node::Bytes(bytes) => Ok(bytes),
-            Node::MutableBytes(bytes) => Ok(bytes.visible()),
-            _ => Err(EvalError::ExpectedBytes(id)),
+        match self.cold_node(id) {
+            Some(Node::Bytes(bytes)) => Ok(bytes.as_slice()),
+            Some(Node::BytesView(view)) => {
+                let base = self.bytes(view.base)?;
+                let end = view
+                    .offset
+                    .checked_add(view.len)
+                    .ok_or(EvalError::Overflow)?;
+                base.get(view.offset..end)
+                    .ok_or(EvalError::InvalidByteString)
+            }
+            Some(Node::MutableBytes(bytes)) => Ok(bytes.visible()),
+            _ => Err(self.expected_bytes_error(id)),
         }
+    }
+
+    fn byte_slice_node(&self, id: NodeId, offset: usize, len: usize) -> Result<Node, EvalError> {
+        let bytes = self.bytes(id)?;
+        let end = offset.checked_add(len).ok_or(EvalError::Overflow)?;
+        if end > bytes.len() {
+            return Err(EvalError::InvalidByteString);
+        }
+        match self.cold_node(id) {
+            Some(Node::Bytes(_)) => Ok(Node::bytes_view(id, offset, len)),
+            Some(Node::BytesView(view)) => {
+                let offset = view.offset.checked_add(offset).ok_or(EvalError::Overflow)?;
+                Ok(Node::bytes_view(view.base, offset, len))
+            }
+            Some(Node::MutableBytes(_)) => Ok(Node::bytes(bytes[offset..end].to_vec())),
+            _ => Err(self.expected_bytes_error(id)),
+        }
+    }
+
+    fn materialize_bytes_view_for_write(&mut self, id: NodeId) -> Result<(), EvalError> {
+        if matches!(self.cold_node(id), Some(Node::BytesView(_))) {
+            let bytes = self.bytes(id)?.to_vec();
+            self.set_node_at(id.index(), Node::bytes(bytes));
+        }
+        Ok(())
     }
 
     fn new_mutable_bytes(&mut self, size: usize, capacity: usize) -> Result<NodeId, EvalError> {
@@ -6886,22 +10966,24 @@ impl Program {
     }
 
     fn freeze_bytes(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
-        let frozen = match &mut self.nodes[id.0] {
-            Node::Bytes(_) => return Ok(id),
-            Node::MutableBytes(bytes) => bytes.visible().to_vec(),
-            _ => return Err(EvalError::ExpectedBytes(id)),
+        let frozen = match self.cold_node(id) {
+            Some(Node::Bytes(_)) => return Ok(id),
+            Some(Node::BytesView(_)) => return Ok(id),
+            Some(Node::MutableBytes(bytes)) => bytes.visible().to_vec(),
+            _ => return Err(self.expected_bytes_error(id)),
         };
-        self.nodes[id.0] = Node::Bytes(frozen);
+        self.set_node_at(id.index(), Node::bytes(frozen));
         Ok(id)
     }
 
     fn append_byte(&mut self, id: NodeId, byte: u8) -> Result<(), EvalError> {
-        match &mut self.nodes[id.0] {
-            Node::Bytes(bytes) => {
+        self.materialize_bytes_view_for_write(id)?;
+        match self.cold_node_mut(id) {
+            Some(Node::Bytes(bytes)) => {
                 bytes.push(byte);
                 Ok(())
             }
-            Node::MutableBytes(bytes) => {
+            Some(Node::MutableBytes(bytes)) => {
                 if bytes.size >= bytes.capacity {
                     bytes.capacity = bytes
                         .capacity
@@ -6920,37 +11002,53 @@ impl Program {
                 bytes.size += 1;
                 Ok(())
             }
-            _ => Err(EvalError::ExpectedBytes(id)),
+            _ => Err(self.expected_bytes_error(id)),
         }
     }
 
     fn append_bytes(&mut self, id: NodeId, bytes: &[u8]) -> Result<(), EvalError> {
-        for &byte in bytes {
-            self.append_byte(id, byte)?;
+        self.materialize_bytes_view_for_write(id)?;
+        match self.cold_node_mut(id) {
+            Some(Node::Bytes(dst)) => {
+                dst.extend_from_slice(bytes);
+                Ok(())
+            }
+            Some(Node::MutableBytes(_)) => {
+                for &byte in bytes {
+                    self.append_byte(id, byte)?;
+                }
+                Ok(())
+            }
+            _ => Err(self.expected_bytes_error(id)),
         }
-        Ok(())
     }
 
     fn read_byte_unchecked_prim(&self, id: NodeId, index: usize) -> Result<u8, EvalError> {
-        match &self.nodes[id.0] {
-            Node::Bytes(bytes) => bytes
+        match self.cold_node(id) {
+            Some(Node::Bytes(bytes)) => bytes
                 .get(index)
                 .copied()
                 .ok_or(EvalError::InvalidByteString),
-            Node::MutableBytes(bytes) => bytes
+            Some(Node::BytesView(_)) => self
+                .bytes(id)?
+                .get(index)
+                .copied()
+                .ok_or(EvalError::InvalidByteString),
+            Some(Node::MutableBytes(bytes)) => bytes
                 .bytes
                 .get(index)
                 .copied()
                 .ok_or(EvalError::InvalidByteString),
-            _ => Err(EvalError::ExpectedBytes(id)),
+            _ => Err(self.expected_bytes_error(id)),
         }
     }
 
     fn byte_prim_lengths(&self, id: NodeId) -> Result<(usize, usize), EvalError> {
-        match &self.nodes[id.0] {
-            Node::Bytes(bytes) => Ok((bytes.len(), bytes.len())),
-            Node::MutableBytes(bytes) => Ok((bytes.size, bytes.bytes.len())),
-            _ => Err(EvalError::ExpectedBytes(id)),
+        match self.cold_node(id) {
+            Some(Node::Bytes(bytes)) => Ok((bytes.len(), bytes.len())),
+            Some(Node::BytesView(view)) => Ok((view.len, view.len)),
+            Some(Node::MutableBytes(bytes)) => Ok((bytes.size, bytes.bytes.len())),
+            _ => Err(self.expected_bytes_error(id)),
         }
     }
 
@@ -6960,13 +11058,14 @@ impl Program {
         index: usize,
         byte: u8,
     ) -> Result<(), EvalError> {
-        match &mut self.nodes[id.0] {
-            Node::Bytes(bytes) => {
+        self.materialize_bytes_view_for_write(id)?;
+        match self.cold_node_mut(id) {
+            Some(Node::Bytes(bytes)) => {
                 let slot = bytes.get_mut(index).ok_or(EvalError::InvalidByteString)?;
                 *slot = byte;
                 Ok(())
             }
-            Node::MutableBytes(bytes) => {
+            Some(Node::MutableBytes(bytes)) => {
                 let slot = bytes
                     .bytes
                     .get_mut(index)
@@ -6974,7 +11073,7 @@ impl Program {
                 *slot = byte;
                 Ok(())
             }
-            _ => Err(EvalError::ExpectedBytes(id)),
+            _ => Err(self.expected_bytes_error(id)),
         }
     }
 
@@ -7221,23 +11320,18 @@ impl Program {
     }
 
     fn new_mpz_node(&mut self) -> Result<Node, EvalError> {
-        let bigint = self.push_node(Node::BigInt(b"0".to_vec()));
+        let bigint = self.push_node(Node::bigint(b"0".to_vec()));
         let ptr = self.pointer_for_node(bigint, 0)?;
-        Ok(Node::ForeignPtr(Box::new(ForeignPtrNode {
-            bytes: None,
-            offset: 0,
-            ptr,
-            finalizer: None,
-        })))
+        Ok(self.foreign_ptr_node(None, 0, ptr))
     }
 
     fn mpz_node_id(&self, ptr: i64) -> Result<NodeId, EvalError> {
         let (slot, offset) = self.decode_pointer(ptr)?;
         if offset != 0 {
-            return Err(EvalError::ExpectedForeignPtr(NodeId(slot)));
+            return Err(EvalError::ExpectedForeignPtr(NodeId::from_index(slot)));
         }
-        let id = NodeId(slot);
-        match self.nodes.get(id.0) {
+        let id = NodeId::from_index(slot);
+        match self.cold_node(id) {
             Some(Node::BigInt(_)) => Ok(id),
             _ => Err(EvalError::ExpectedForeignPtr(id)),
         }
@@ -7248,15 +11342,16 @@ impl Program {
         if offset != 0 {
             return None;
         }
-        match self.nodes.get(slot)? {
-            Node::BigInt(bytes) => Some(bytes),
+        let id = NodeId::from_index(slot);
+        match self.cold_node(id)? {
+            Node::BigInt(bytes) => Some(bytes.as_slice()),
             _ => None,
         }
     }
 
     fn mpz_value(&self, ptr: i64) -> Result<MpzValue, EvalError> {
         let id = self.mpz_node_id(ptr)?;
-        let Node::BigInt(bytes) = &self.nodes[id.0] else {
+        let Some(Node::BigInt(bytes)) = self.cold_node(id) else {
             return Err(EvalError::ExpectedForeignPtr(id));
         };
         MpzValue::parse_decimal(bytes).map_err(|_| EvalError::InvalidByteString)
@@ -7264,7 +11359,7 @@ impl Program {
 
     fn write_mpz_value(&mut self, ptr: i64, value: MpzValue) -> Result<(), EvalError> {
         let id = self.mpz_node_id(ptr)?;
-        self.nodes[id.0] = Node::BigInt(value.to_decimal_bytes());
+        self.set_node_at(id.index(), Node::bigint(value.to_decimal_bytes()));
         Ok(())
     }
 
@@ -7697,7 +11792,7 @@ impl Program {
                 self.node_pointers.len()
             )
         })?;
-        Ok((block.0, offset))
+        Ok((block.index(), offset))
     }
 
     fn decode_allocation_pointer(&self, ptr: i64) -> Result<(usize, usize), EvalError> {
@@ -7773,17 +11868,19 @@ impl Program {
             return Ok(bytes);
         }
         let (base, offset) = self.decode_pointer(ptr)?;
-        let Some(node) = self.nodes.get(base) else {
+        if base >= self.nodes.len() {
             return Err(trace_invalid_bytes!(
                 self,
                 "pointer base missing ptr={ptr} base={base} offset={offset} nodes={}",
                 self.nodes.len()
             ));
         };
-        let bytes = match node {
-            Node::Bytes(bytes) => bytes,
-            Node::MutableBytes(bytes) => &bytes.bytes,
-            Node::ForeignPtr(foreign_ptr) if foreign_ptr.bytes.is_some() => {
+        let node_id = NodeId::from_index(base);
+        let bytes = match self.cold_node(node_id) {
+            Some(Node::Bytes(bytes)) => bytes.as_slice(),
+            Some(Node::BytesView(_)) => self.bytes(node_id)?,
+            Some(Node::MutableBytes(bytes)) => bytes.bytes.as_slice(),
+            Some(Node::ForeignPtr(foreign_ptr)) if foreign_ptr.bytes.is_some() => {
                 let bytes = foreign_ptr.bytes.as_ref().expect("checked above");
                 let offset = foreign_ptr
                     .offset
@@ -7801,7 +11898,7 @@ impl Program {
                 return Err(trace_invalid_bytes!(
                     self,
                     "pointer base not bytes ptr={ptr} base={base} offset={offset} kind={}",
-                    self.profile_head_key(NodeId(base))
+                    self.profile_head_key(NodeId::from_index(base))
                 ));
             }
         };
@@ -7845,9 +11942,25 @@ impl Program {
             ));
         }
         let write_len = bytes.len();
-        let kind = self.profile_head_key(NodeId(base));
-        let dst = match &mut self.nodes[base] {
-            Node::Bytes(dst) => {
+        let node_id = NodeId::from_index(base);
+        if matches!(self.cold_node(node_id), Some(Node::BytesView(_))) {
+            let current = self.bytes(node_id)?;
+            let available = current.len().saturating_sub(offset);
+            if offset > current.len() || available < write_len {
+                return Err(trace_invalid_bytes!(
+                    self,
+                    "write bytes view out of range ptr={ptr} base={base} offset={offset} write_len={write_len} len={}",
+                    current.len()
+                ));
+            }
+            let mut owned = current.to_vec();
+            owned[offset..offset + write_len].copy_from_slice(bytes);
+            self.set_node_at(node_id.index(), Node::bytes(owned));
+            return Ok(());
+        }
+        let kind = self.profile_head_key(NodeId::from_index(base));
+        let is_mutable_bytes = match self.cold_node(node_id) {
+            Some(Node::Bytes(dst)) => {
                 let available = dst.len().saturating_sub(offset);
                 if offset > dst.len() || available < write_len {
                     return Err(trace_invalid_bytes!(
@@ -7856,9 +11969,9 @@ impl Program {
                         dst.len()
                     ));
                 }
-                &mut dst[offset..offset + write_len]
+                false
             }
-            Node::MutableBytes(dst) => {
+            Some(Node::MutableBytes(dst)) => {
                 let storage_len = dst.bytes.len();
                 let available = storage_len.saturating_sub(offset);
                 if offset > storage_len || available < write_len {
@@ -7867,7 +11980,7 @@ impl Program {
                         "write mutable bytes out of range ptr={ptr} base={base} offset={offset} write_len={write_len} storage_len={storage_len}"
                     ));
                 }
-                &mut dst.bytes[offset..offset + write_len]
+                true
             }
             _ => {
                 return Err(trace_invalid_bytes!(
@@ -7876,6 +11989,13 @@ impl Program {
                     kind
                 ));
             }
+        };
+        let dst = match self.cold_node_mut(node_id) {
+            Some(Node::Bytes(dst)) if !is_mutable_bytes => &mut dst[offset..offset + write_len],
+            Some(Node::MutableBytes(dst)) if is_mutable_bytes => {
+                &mut dst.bytes[offset..offset + write_len]
+            }
+            _ => unreachable!("validated pointer target changed during write"),
         };
         dst.copy_from_slice(bytes);
         Ok(())
@@ -9485,115 +13605,261 @@ impl Program {
     }
 
     pub fn serialize_program(&self, root: NodeId) -> Result<Vec<u8>, EvalError> {
-        let mut out = b"v8.4\n0\n".to_vec();
-        self.serialize_comb_into(root, 0, &mut out)?;
+        let mut labels = self.find_serialization_labels(root)?;
+        let mut out = b"v8.4\n".to_vec();
+        push_display(&mut out, labels.shared.len());
+        out.push(b'\n');
+        self.serialize_comb_into(root, &mut labels, &mut out)?;
         out.extend_from_slice(b"}\n");
         Ok(out)
     }
 
+    fn find_serialization_labels(&self, root: NodeId) -> Result<SerializationLabels, EvalError> {
+        let mut labels = SerializationLabels::default();
+        let mut marked = HashSet::new();
+        let mut work = vec![root];
+        while let Some(id) = work.pop() {
+            let id = self.resolve(id)?;
+            let node = self.node_for_debug(id);
+            if !serialization_shareable_node(&node) {
+                continue;
+            }
+            if !marked.insert(id) {
+                labels.shared.insert(id);
+                continue;
+            }
+            match node {
+                Node::App(fun, arg) => {
+                    work.push(arg);
+                    work.push(fun);
+                }
+                Node::Array(items) => {
+                    work.extend(items.iter().copied());
+                }
+                _ => {}
+            }
+        }
+        Ok(labels)
+    }
+
     fn serialize_comb_into(
         &self,
-        id: NodeId,
-        depth: usize,
+        root: NodeId,
+        labels: &mut SerializationLabels,
         out: &mut Vec<u8>,
     ) -> Result<(), EvalError> {
-        if depth > 10_000 {
-            return Err(EvalError::StepLimit { limit: depth });
+        enum SerializeTask {
+            Node(NodeId),
+            App,
+            Array(usize),
+            Label(NodeId),
         }
-        let id = self.resolve(id)?;
-        let is_app = matches!(&self.nodes[id.0], Node::App(_, _));
-        match &self.nodes[id.0] {
-            Node::App(fun, arg) => {
-                self.serialize_comb_into(*fun, depth + 1, out)?;
-                self.serialize_comb_into(*arg, depth + 1, out)?;
-                out.push(b'@');
-            }
-            Node::Indir(_) => return Err(EvalError::DanglingIndirection(id)),
-            Node::Prim(name) => out.extend_from_slice(name.name().as_bytes()),
-            Node::Int(n) => {
-                out.push(b'#');
-                push_display(out, *n);
-            }
-            Node::Int64(n) => {
-                out.extend_from_slice(b"##");
-                push_display(out, *n);
-            }
-            Node::Float64(n) => {
-                out.push(b'&');
-                out.extend_from_slice(format_float(*n).as_bytes());
-            }
-            Node::Float32(n) => {
-                out.extend_from_slice(b"&&");
-                out.extend_from_slice(format_float(f64::from(*n)).as_bytes());
-            }
-            Node::ThreadId(_) | Node::Weak(_) | Node::MVar(_) => {
-                return Err(EvalError::UnsupportedSerialization(id));
-            }
-            Node::Ptr(ptr) => serialize_ptr(*ptr, out),
-            Node::RawFunPtr(ptr) => {
-                out.extend_from_slice(b"toFunPtr #");
-                push_display(out, *ptr);
-                out.extend_from_slice(b" @");
-            }
-            Node::ForeignPtr(foreign_ptr) => {
-                if let Some(mpz) = self.mpz_decimal_bytes_for_ptr(foreign_ptr.ptr) {
-                    serialize_bigint_decimal(mpz, out);
-                } else if let Some(bytes) = &foreign_ptr.bytes {
-                    if foreign_ptr.offset == 0 {
-                        out.extend_from_slice(b"bs2fp ");
-                        serialize_bytes_comb(bytes, out);
-                        out.extend_from_slice(b" @");
+
+        let mut work = vec![SerializeTask::Node(root)];
+        while let Some(task) = work.pop() {
+            match task {
+                SerializeTask::Node(id) => {
+                    let id = self.resolve(id)?;
+                    let share = if labels.shared.contains(&id) {
+                        if !labels.printed.insert(id) {
+                            out.push(b'_');
+                            push_display(out, id.index());
+                            out.push(b' ');
+                            continue;
+                        }
+                        true
                     } else {
-                        out.extend_from_slice(b"fp+ bs2fp ");
-                        serialize_bytes_comb(bytes, out);
-                        out.extend_from_slice(b" @ #");
-                        push_display(out, foreign_ptr.offset);
-                        out.extend_from_slice(b" @");
+                        false
+                    };
+
+                    match self.node_for_debug(id) {
+                        Node::App(fun, arg) => {
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                            work.push(SerializeTask::App);
+                            work.push(SerializeTask::Node(arg));
+                            work.push(SerializeTask::Node(fun));
+                        }
+                        Node::Indir(_) | Node::Free(_) => {
+                            return Err(EvalError::DanglingIndirection(id));
+                        }
+                        Node::Prim(name) => {
+                            out.extend_from_slice(name.name().as_bytes());
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::Int(n) => {
+                            out.push(b'#');
+                            push_display(out, n);
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::Int64(n) => {
+                            out.extend_from_slice(b"##");
+                            push_display(out, n);
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::Float64(n) => {
+                            out.push(b'&');
+                            out.extend_from_slice(format_float(n).as_bytes());
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::Float32(n) => {
+                            out.extend_from_slice(b"&&");
+                            out.extend_from_slice(format_float(f64::from(n)).as_bytes());
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::ThreadId(_) | Node::Weak(_) | Node::MVar(_) => {
+                            return Err(EvalError::UnsupportedSerialization(id));
+                        }
+                        Node::Ptr(ptr) => {
+                            serialize_ptr(ptr, out);
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::RawFunPtr(ptr) => {
+                            out.extend_from_slice(b"toFunPtr #");
+                            push_display(out, ptr);
+                            out.extend_from_slice(b" @ ");
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::ForeignPtr(foreign_ptr) => {
+                            if let Some(mpz) = self.mpz_decimal_bytes_for_ptr(foreign_ptr.ptr) {
+                                serialize_bigint_decimal(mpz, out);
+                            } else if let Some(bytes) = &foreign_ptr.bytes {
+                                if foreign_ptr.offset == 0 {
+                                    out.extend_from_slice(b"bs2fp ");
+                                    serialize_bytes_comb(bytes, out);
+                                    out.extend_from_slice(b" @");
+                                } else {
+                                    out.extend_from_slice(b"fp+ bs2fp ");
+                                    serialize_bytes_comb(bytes, out);
+                                    out.extend_from_slice(b" @ #");
+                                    push_display(out, foreign_ptr.offset);
+                                    out.extend_from_slice(b" @");
+                                }
+                            } else {
+                                out.extend_from_slice(b"fpnew ");
+                                serialize_ptr(foreign_ptr.ptr, out);
+                                out.extend_from_slice(b" @");
+                            }
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::BigInt(bytes) => {
+                            serialize_bigint_decimal(&bytes, out);
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::Bytes(bytes) => {
+                            serialize_bytes_comb(&bytes, out);
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::BytesView(_) => {
+                            serialize_bytes_comb(self.bytes(id)?, out);
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::MutableBytes(bytes) => {
+                            serialize_bytes_comb(bytes.visible(), out);
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::Array(items) => {
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                            work.push(SerializeTask::Array(items.len()));
+                            for item in items.iter().rev() {
+                                work.push(SerializeTask::Node(*item));
+                            }
+                        }
+                        Node::Ffi(name) => {
+                            out.push(b'^');
+                            out.extend_from_slice(name.as_bytes());
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::JsCall(call) => {
+                            out.push(b'~');
+                            out.extend_from_slice(call.tags.as_bytes());
+                            out.push(b' ');
+                            serialize_bytes_quoted(&call.body, out);
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::JsWrap { tags } => {
+                            out.push(b'`');
+                            out.extend_from_slice(tags.as_bytes());
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::FunPtr(name) => {
+                            out.push(b';');
+                            out.extend_from_slice(name.as_bytes());
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
+                        Node::Tick(name) => {
+                            out.push(b'!');
+                            serialize_bytes_quoted(&name, out);
+                            out.push(b' ');
+                            if share {
+                                work.push(SerializeTask::Label(id));
+                            }
+                        }
                     }
-                } else {
-                    out.extend_from_slice(b"fpnew ");
-                    serialize_ptr(foreign_ptr.ptr, out);
-                    out.extend_from_slice(b" @");
+                }
+                SerializeTask::App => out.push(b'@'),
+                SerializeTask::Array(len) => {
+                    out.push(b'[');
+                    push_display(out, len);
+                    out.push(b']');
+                    out.push(b' ');
+                }
+                SerializeTask::Label(id) => {
+                    out.push(b':');
+                    push_display(out, id.index());
+                    out.push(b' ');
                 }
             }
-            Node::BigInt(bytes) => {
-                serialize_bigint_decimal(bytes, out);
-            }
-            Node::Bytes(bytes) => serialize_bytes_comb(bytes, out),
-            Node::MutableBytes(bytes) => serialize_bytes_comb(bytes.visible(), out),
-            Node::Array(items) => {
-                for item in items {
-                    self.serialize_comb_into(*item, depth + 1, out)?;
-                }
-                out.push(b'[');
-                push_display(out, items.len());
-                out.push(b']');
-            }
-            Node::Ffi(name) => {
-                out.push(b'^');
-                out.extend_from_slice(name.as_bytes());
-            }
-            Node::JsCall(call) => {
-                out.push(b'~');
-                out.extend_from_slice(call.tags.as_bytes());
-                out.push(b' ');
-                serialize_bytes_quoted(&call.body, out);
-            }
-            Node::JsWrap { tags } => {
-                out.push(b'`');
-                out.extend_from_slice(tags.as_bytes());
-            }
-            Node::FunPtr(name) => {
-                out.push(b';');
-                out.extend_from_slice(name.as_bytes());
-            }
-            Node::Tick(name) => {
-                out.push(b'!');
-                serialize_bytes_quoted(name, out);
-            }
-        }
-        if !is_app {
-            out.push(b' ');
         }
         Ok(())
     }
@@ -9646,9 +13912,34 @@ impl Program {
         Ok(())
     }
 
+    fn new_foreign_finalizer(&mut self, arg: i64) -> usize {
+        let state = ForeignFinalizerState {
+            arg,
+            finalizer: None,
+        };
+        if let Some(index) = self.foreign_finalizer_free.pop() {
+            self.foreign_finalizers[index] = Some(state);
+            index
+        } else {
+            let index = self.foreign_finalizers.len();
+            self.foreign_finalizers.push(Some(state));
+            index
+        }
+    }
+
+    fn foreign_ptr_node(&mut self, bytes: Option<Vec<u8>>, offset: usize, ptr: i64) -> Node {
+        let finalizer = Some(self.new_foreign_finalizer(ptr));
+        Node::ForeignPtr(Box::new(ForeignPtrNode {
+            bytes,
+            offset,
+            ptr,
+            finalizer,
+        }))
+    }
+
     fn offset_foreign_ptr(&mut self, id: NodeId, by: usize) -> Result<NodeId, EvalError> {
-        let (bytes, offset, ptr, finalizer) = match &self.nodes[id.0] {
-            Node::ForeignPtr(foreign_ptr) => (
+        let (bytes, offset, ptr, finalizer) = match self.cold_node(id) {
+            Some(Node::ForeignPtr(foreign_ptr)) => (
                 foreign_ptr.bytes.clone(),
                 foreign_ptr.offset,
                 foreign_ptr.ptr,
@@ -9669,32 +13960,33 @@ impl Program {
     }
 
     fn foreign_ptr_to_bytes(&mut self, id: NodeId, len: usize) -> Result<NodeId, EvalError> {
-        let bytes = match &self.nodes[id.0] {
-            Node::ForeignPtr(foreign_ptr) => match self.read_pointer_bytes(foreign_ptr.ptr, len) {
-                Ok(bytes) => bytes,
-                Err(_) if foreign_ptr.bytes.is_some() => {
-                    let bytes = foreign_ptr.bytes.as_ref().expect("checked above");
-                    let end = foreign_ptr
-                        .offset
-                        .checked_add(len)
-                        .filter(|end| *end <= bytes.len())
-                        .ok_or(EvalError::InvalidByteString)?;
-                    bytes[foreign_ptr.offset..end].to_vec()
-                }
-                Err(err) => return Err(err),
-            },
+        let foreign_ptr = match self.cold_node(id) {
+            Some(Node::ForeignPtr(foreign_ptr)) => foreign_ptr.clone(),
             _ => return Err(EvalError::ExpectedForeignPtr(id)),
         };
-        Ok(self.push_node(Node::Bytes(bytes)))
+        let bytes = match self.read_pointer_bytes(foreign_ptr.ptr, len) {
+            Ok(bytes) => bytes,
+            Err(_) if foreign_ptr.bytes.is_some() => {
+                let bytes = foreign_ptr.bytes.as_ref().expect("checked above");
+                let end = foreign_ptr
+                    .offset
+                    .checked_add(len)
+                    .filter(|end| *end <= bytes.len())
+                    .ok_or(EvalError::InvalidByteString)?;
+                bytes[foreign_ptr.offset..end].to_vec()
+            }
+            Err(err) => return Err(err),
+        };
+        Ok(self.push_node(Node::bytes(bytes)))
     }
 
     fn foreign_ptr_value(&self, id: NodeId) -> Result<i64, EvalError> {
-        match &self.nodes[id.0] {
-            Node::ForeignPtr(foreign_ptr) => Ok(foreign_ptr.ptr),
-            Node::Prim(name) => {
-                std_handle_ptr(name.name()).ok_or(EvalError::ExpectedForeignPtr(id))
-            }
-            _ => Err(EvalError::ExpectedForeignPtr(id)),
+        match self.cold_node(id) {
+            Some(Node::ForeignPtr(foreign_ptr)) => Ok(foreign_ptr.ptr),
+            _ => match self.cell(id).prim() {
+                Some(prim) => std_handle_ptr(prim.name()).ok_or(EvalError::ExpectedForeignPtr(id)),
+                _ => Err(EvalError::ExpectedForeignPtr(id)),
+            },
         }
     }
 
@@ -9703,13 +13995,8 @@ impl Program {
         u32::try_from(self.foreign_ptr_value(foreign_ptr)?).map_err(|_| EvalError::Overflow)
     }
 
-    fn js_object_node(&self, handle: u32) -> Node {
-        Node::ForeignPtr(Box::new(ForeignPtrNode {
-            bytes: None,
-            offset: 0,
-            ptr: i64::from(handle),
-            finalizer: None,
-        }))
+    fn js_object_node(&mut self, handle: u32) -> Node {
+        self.foreign_ptr_node(None, 0, i64::from(handle))
     }
 
     fn set_foreign_ptr_finalizer(
@@ -9717,12 +14004,60 @@ impl Program {
         id: NodeId,
         finalizer: NodeId,
     ) -> Result<(), EvalError> {
-        match &mut self.nodes[id.0] {
-            Node::ForeignPtr(foreign_ptr) => {
-                foreign_ptr.finalizer = Some(finalizer);
-                Ok(())
+        let finalizer = self.eval_foreign_finalizer(finalizer)?;
+        let (group, ptr) = match self.cold_node(id) {
+            Some(Node::ForeignPtr(foreign_ptr)) => (foreign_ptr.finalizer, foreign_ptr.ptr),
+            _ => return Err(EvalError::ExpectedForeignPtr(id)),
+        };
+        let group = match group {
+            Some(group) => group,
+            None => {
+                let group = self.new_foreign_finalizer(ptr);
+                match self.cold_node_mut(id) {
+                    Some(Node::ForeignPtr(foreign_ptr)) => {
+                        foreign_ptr.finalizer = Some(group);
+                    }
+                    _ => return Err(EvalError::ExpectedForeignPtr(id)),
+                }
+                group
             }
-            _ => Err(EvalError::ExpectedForeignPtr(id)),
+        };
+        let state = self
+            .foreign_finalizers
+            .get_mut(group)
+            .and_then(Option::as_mut)
+            .ok_or(EvalError::ExpectedForeignPtr(id))?;
+        state.finalizer = Some(finalizer);
+        Ok(())
+    }
+
+    fn eval_foreign_finalizer(&mut self, id: NodeId) -> Result<ForeignFinalizer, EvalError> {
+        let root = self.reduce_node_whnf(id, FORCE_REDUCTION_LIMIT)?;
+        let root = self.resolve(root)?;
+        if let Some(value) = self.cell(root).raw_fun_ptr_value() {
+            return if value == 0 {
+                Ok(ForeignFinalizer::RawZero)
+            } else {
+                Err(EvalError::UnsupportedForeignFinalizer(format!(
+                    "FunPtr#{value}"
+                )))
+            };
+        }
+        match self.cold_node(root) {
+            Some(Node::FunPtr(name)) => match name.as_str() {
+                "0" => Ok(ForeignFinalizer::RawZero),
+                "free" => Ok(ForeignFinalizer::Free),
+                "closeb" => Ok(ForeignFinalizer::CloseB),
+                _ => Err(EvalError::UnsupportedForeignFinalizer(name.to_string())),
+            },
+            Some(Node::Ffi(name)) => match name.as_str() {
+                "&free" => Ok(ForeignFinalizer::Free),
+                "&closeb" => Ok(ForeignFinalizer::CloseB),
+                _ => Err(EvalError::UnsupportedForeignFinalizer(name.to_string())),
+            },
+            _ => Err(EvalError::UnsupportedForeignFinalizer(
+                self.node_trace_summary(root),
+            )),
         }
     }
 
@@ -9736,8 +14071,8 @@ impl Program {
     fn eval_weak_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
             id,
-            |program, root| match program.nodes[root.0] {
-                Node::Weak(_) => Some(root),
+            |program, root| match program.cold_node(root) {
+                Some(Node::Weak(_)) => Some(root),
                 _ => None,
             },
             EvalError::ExpectedWeak,
@@ -9746,8 +14081,8 @@ impl Program {
 
     fn deref_weak_ptr(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         let id = self.eval_weak_id(id)?;
-        let value = match &self.nodes[id.0] {
-            Node::Weak(weak) => weak.value,
+        let value = match self.cold_node(id) {
+            Some(Node::Weak(weak)) => weak.value,
             _ => unreachable!(),
         };
         Ok(match value {
@@ -9758,8 +14093,8 @@ impl Program {
 
     fn finalize_weak_ptr(&mut self, id: NodeId) -> Result<(), EvalError> {
         let id = self.eval_weak_id(id)?;
-        let finalizer = match &mut self.nodes[id.0] {
-            Node::Weak(weak) => weak.finalizer.take(),
+        let finalizer = match self.cold_node_mut(id) {
+            Some(Node::Weak(weak)) => weak.finalizer.take(),
             _ => unreachable!(),
         };
         if let Some(finalizer) = finalizer {
@@ -9773,8 +14108,8 @@ impl Program {
     fn eval_mvar_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
             id,
-            |program, root| match program.nodes[root.0] {
-                Node::MVar(_) => Some(root),
+            |program, root| match program.cold_node(root) {
+                Some(Node::MVar(_)) => Some(root),
                 _ => None,
             },
             EvalError::ExpectedMVar,
@@ -9782,15 +14117,15 @@ impl Program {
     }
 
     fn read_mvar(&self, id: NodeId) -> Result<Option<NodeId>, EvalError> {
-        match self.nodes[id.0] {
-            Node::MVar(value) => Ok(value),
+        match self.cold_node(id) {
+            Some(Node::MVar(value)) => Ok(*value),
             _ => Err(EvalError::ExpectedMVar(id)),
         }
     }
 
     fn take_mvar(&mut self, id: NodeId) -> Result<Option<NodeId>, EvalError> {
-        match &mut self.nodes[id.0] {
-            Node::MVar(value) => Ok(value.take()),
+        match self.cold_node_mut(id) {
+            Some(Node::MVar(value)) => Ok(value.take()),
             _ => Err(EvalError::ExpectedMVar(id)),
         }
     }
@@ -9803,12 +14138,12 @@ impl Program {
     }
 
     fn try_put_mvar(&mut self, id: NodeId, new_value: NodeId) -> Result<bool, EvalError> {
-        match &mut self.nodes[id.0] {
-            Node::MVar(value) if value.is_none() => {
+        match self.cold_node_mut(id) {
+            Some(Node::MVar(value)) if value.is_none() => {
                 *value = Some(new_value);
                 Ok(true)
             }
-            Node::MVar(_) => Ok(false),
+            Some(Node::MVar(_)) => Ok(false),
             _ => Err(EvalError::ExpectedMVar(id)),
         }
     }
@@ -9836,7 +14171,7 @@ impl Program {
             let cons_string = self.app(cons, string);
             list = self.app(cons_string, list);
         }
-        let array = self.push_node(Node::Array(vec![list]));
+        let array = self.push_node(Node::array(vec![list]));
         self.arg_ref_array = Some(array);
         array
     }
@@ -9859,7 +14194,7 @@ impl Program {
                 Err(EvalError::Raised(_)) if noerr => continue,
                 Err(err) => return Err(err),
             };
-            if let Node::App(fun, arg) = self.nodes[root.0] {
+            if let Some((fun, arg)) = self.cell(root).app_fields() {
                 stack.push(arg);
                 stack.push(fun);
             }
@@ -9882,24 +14217,26 @@ impl Program {
             out.push_str("<dangling>");
             return;
         };
-        match &self.nodes[id.0] {
+        let node = self.node_for_debug(id);
+        match node {
             Node::App(fun, arg) => {
                 out.push('(');
-                self.render_into(*fun, depth + 1, out);
+                self.render_into(fun, depth + 1, out);
                 out.push(' ');
-                self.render_into(*arg, depth + 1, out);
+                self.render_into(arg, depth + 1, out);
                 out.push(')');
             }
             Node::Indir(_) => out.push_str("<indir>"),
+            Node::Free(_) => out.push_str("<free>"),
             Node::Prim(name) => out.push_str(name.name()),
             Node::Int(n) => out.push_str(&n.to_string()),
             Node::Int64(n) => {
                 out.push_str(&n.to_string());
                 out.push_str("i64");
             }
-            Node::Float64(n) => out.push_str(&format_float(*n)),
+            Node::Float64(n) => out.push_str(&format_float(n)),
             Node::Float32(n) => {
-                out.push_str(&format_float(f64::from(*n)));
+                out.push_str(&format_float(f64::from(n)));
                 out.push('f');
             }
             Node::ThreadId(n) => {
@@ -9933,9 +14270,16 @@ impl Program {
             }
             Node::BigInt(bytes) => {
                 out.push('%');
-                render_bytes(bytes, out);
+                render_bytes(&bytes, out);
             }
-            Node::Bytes(bytes) => render_bytes(bytes, out),
+            Node::Bytes(bytes) => render_bytes(&bytes, out),
+            Node::BytesView(_) => {
+                if let Ok(bytes) = self.bytes(id) {
+                    render_bytes(bytes, out);
+                } else {
+                    out.push_str("<bytes-view>");
+                }
+            }
             Node::MutableBytes(bytes) => render_bytes(bytes.visible(), out),
             Node::Array(items) => {
                 out.push('[');
@@ -9949,7 +14293,7 @@ impl Program {
             }
             Node::Ffi(name) => {
                 out.push('^');
-                out.push_str(name);
+                out.push_str(&name);
             }
             Node::JsCall(call) => {
                 out.push('~');
@@ -9959,15 +14303,15 @@ impl Program {
             }
             Node::JsWrap { tags } => {
                 out.push('`');
-                out.push_str(tags);
+                out.push_str(&tags);
             }
             Node::FunPtr(name) => {
                 out.push(';');
-                out.push_str(name);
+                out.push_str(&name);
             }
             Node::Tick(name) => {
                 out.push('!');
-                render_bytes(name, out);
+                render_bytes(&name, out);
             }
         }
     }
@@ -10535,8 +14879,12 @@ fn rts_exception_message(code: i64) -> &'static [u8] {
 }
 
 pub(crate) fn is_runtime_prim_name(name: &str) -> bool {
-    is_supported_runtime_prim_name(name)
-        || matches!(
+    Prim::from_name(name).is_some()
+}
+
+fn is_supported_runtime_prim_name(name: &str) -> bool {
+    is_runtime_prim_name(name)
+        && !matches!(
             name,
             "IO.deserialize"
                 | "IO.fork"
@@ -10544,89 +14892,6 @@ pub(crate) fn is_runtime_prim_name(name: &str) -> bool {
                 | "IO.threaddelay"
                 | "IO.waitrdfd"
                 | "IO.waitwrfd"
-        )
-}
-
-fn is_supported_runtime_prim_name(name: &str) -> bool {
-    KnownPrim::from_name(name).is_some()
-        || IntBinOp::from_prim(name).is_some()
-        || IntUnOp::from_prim(name).is_some()
-        || Int64BinOp::from_prim(name).is_some()
-        || Int64UnOp::from_prim(name).is_some()
-        || Float64BinOp::from_prim(name).is_some()
-        || Float64UnOp::from_prim(name).is_some()
-        || Float32BinOp::from_prim(name).is_some()
-        || Float32UnOp::from_prim(name).is_some()
-        || matches!(
-            name,
-            "itoI"
-                | "utoU"
-                | "Itoi"
-                | "Utou"
-                | "itod"
-                | "utod"
-                | "Itod"
-                | "dtoi"
-                | "itof"
-                | "utof"
-                | "Itof"
-                | "ftoi"
-                | "dtof"
-                | "ftod"
-                | "toDbl"
-                | "fromDbl"
-                | "toFlt"
-                | "fromFlt"
-                | "toInt"
-                | "toPtr"
-                | "toFunPtr"
-                | "fp+"
-                | "fp2bs"
-                | "fpnew"
-                | "fpfin"
-                | "bs2fp"
-                | "fp2p"
-                | "A.alloc"
-                | "A.read"
-                | "A.write"
-                | "A.trunc"
-                | "A.=="
-                | "A.copy"
-                | "A.size"
-                | "SPnew"
-                | "SPderef"
-                | "SPfree"
-                | "Wknewfin"
-                | "Wknew"
-                | "Wkderef"
-                | "Wkfinal"
-                | "packCString"
-                | "packCStringLen"
-                | "bsgrab"
-                | "bsgrablen"
-                | "bsnew"
-                | "bsread"
-                | "bswrite"
-                | "bsfreeze"
-                | "bsappbyte"
-                | "bsappchar"
-                | "bs++"
-                | "bs++."
-                | "bs=="
-                | "bs/="
-                | "bs<"
-                | "bs<="
-                | "bs>"
-                | "bs>="
-                | "bscmp"
-                | "bsreplicate"
-                | "bsindex"
-                | "bssubstr"
-                | "bslength"
-                | "headUTF8"
-                | "tailUTF8"
-                | "bsunpack"
-                | "fromUTF8"
         )
 }
 
@@ -11926,13 +16191,20 @@ impl MpzValue {
         }
     }
 
+    #[cold]
+    #[inline(never)]
     fn to_f64(&self) -> f64 {
-        let mut out = 0.0;
-        for &digit in self.digits.iter().rev() {
-            out = out * f64::from(MPZ_BASE) + f64::from(digit);
-        }
-        if self.negative { -out } else { out }
+        let decimal = self.to_decimal_bytes();
+        mpz_decimal_to_f64(&decimal)
     }
+}
+
+#[cold]
+#[inline(never)]
+fn mpz_decimal_to_f64(decimal: &[u8]) -> f64 {
+    let text = std::str::from_utf8(decimal).expect("mpz decimal bytes are ASCII");
+    text.parse::<f64>()
+        .expect("mpz decimal bytes should parse as f64")
 }
 
 fn size_of_i64<T>() -> i64 {
@@ -13521,11 +17793,10 @@ fn nibble(n: u8) -> char {
 #[cfg(test)]
 mod tests {
     use super::{
-        IGNORED_IO_SHORTCUT_RECURSION_LIMIT, bwt_decode, bwt_encode, lz77_compress,
+        IGNORED_IO_SHORTCUT_RECURSION_LIMIT, MpzValue, bwt_decode, bwt_encode, lz77_compress,
         lz77_decompress, lzma_compress_payload, lzma_decompress_payload, serialize_bytes_quoted,
     };
     use crate::{EvalError, Node, NodeId, ParseError, Program, parse_program};
-    use std::collections::HashMap;
 
     fn whnf(input: &[u8]) -> String {
         let mut program = parse_program(input).unwrap();
@@ -13593,7 +17864,7 @@ mod tests {
             input.extend_from_slice(b" }\n");
 
             let program = parse_program(&input).unwrap();
-            match &program.nodes()[program.root().0] {
+            match &program.nodes()[program.root().index()] {
                 Node::Bytes(bytes) => assert_eq!(
                     bytes.as_slice(),
                     &[byte],
@@ -13617,10 +17888,70 @@ mod tests {
         );
 
         let legacy = parse_program(b"v8.4\n0\n%\"123456789\" }\n").unwrap();
-        match &legacy.nodes()[legacy.root().0] {
+        match &legacy.nodes()[legacy.root().index()] {
             Node::BigInt(bytes) => assert_eq!(bytes.as_slice(), b"123456789"),
             other => panic!("legacy bigint parsed as {other:?}"),
         }
+    }
+
+    #[test]
+    fn mpz_get_d_uses_decimal_rounding_like_c() {
+        let decimal = b"-299228957055072645483636";
+        let value = MpzValue::parse_decimal(decimal).unwrap();
+        let expected = std::str::from_utf8(decimal)
+            .unwrap()
+            .parse::<f64>()
+            .unwrap();
+        assert_eq!(value.to_f64().to_bits(), expected.to_bits());
+    }
+
+    #[test]
+    fn serializes_shared_apps_with_labels() {
+        let program = parse_program(b"v8.4\n1\nK #1 @ :0 _0 @ }\n").unwrap();
+        let serialized = program.serialize_program(program.root()).unwrap();
+        assert!(serialized.starts_with(b"v8.4\n1\n"), "{serialized:?}");
+        assert!(
+            serialized
+                .windows(b":2 ".len())
+                .any(|window| window == b":2 "),
+            "{}",
+            String::from_utf8_lossy(&serialized)
+        );
+        assert!(
+            serialized
+                .windows(b"_2 ".len())
+                .any(|window| window == b"_2 "),
+            "{}",
+            String::from_utf8_lossy(&serialized)
+        );
+
+        let round_trip = parse_program(&serialized).unwrap();
+        assert_eq!(
+            round_trip.serialize_program(round_trip.root()).unwrap(),
+            serialized
+        );
+    }
+
+    #[test]
+    fn serializes_cyclic_apps_with_labels() {
+        let program = parse_program(b"v8.4\n1\nK _0 @ :0 }\n").unwrap();
+        let serialized = program.serialize_program(program.root()).unwrap();
+        assert!(serialized.starts_with(b"v8.4\n1\n"), "{serialized:?}");
+        assert!(
+            serialized
+                .windows(b":2 ".len())
+                .any(|window| window == b":2 "),
+            "{}",
+            String::from_utf8_lossy(&serialized)
+        );
+        assert!(
+            serialized
+                .windows(b"_2 ".len())
+                .any(|window| window == b"_2 "),
+            "{}",
+            String::from_utf8_lossy(&serialized)
+        );
+        parse_program(&serialized).unwrap();
     }
 
     #[test]
@@ -13770,20 +18101,6 @@ mod tests {
         assert!(matches!(
             unsupported.reduce_whnf(10),
             Err(EvalError::UnknownPrim(name)) if name == "IO.fork"
-        ));
-
-        let mut program = Program::new(
-            vec![
-                Node::prim("missing-prim"),
-                Node::Int(1),
-                Node::App(NodeId(0), NodeId(1)),
-            ],
-            NodeId(2),
-            HashMap::new(),
-        );
-        assert!(matches!(
-            program.reduce_whnf(10),
-            Err(EvalError::UnknownPrim(name)) if name == "missing-prim"
         ));
     }
 
@@ -14053,7 +18370,7 @@ mod tests {
         let mut program = parse_program(b"v8.4\n0\nIO.performIO ^GETTIMEMICRO @ }").unwrap();
         let (root, _) = program.reduce_whnf(100).unwrap();
         let root = program.resolve(root).unwrap();
-        match program.nodes()[root.0] {
+        match program.nodes()[root.index()] {
             Node::Int(n) => assert!(n >= 0),
             _ => panic!("GETTIMEMICRO did not return an Int"),
         }
@@ -14083,7 +18400,7 @@ mod tests {
             panic!("lz77c did not return a pair");
         };
         assert_eq!(returned_world, world);
-        let compressed_len = match program.nodes()[compressed_len.0] {
+        let compressed_len = match program.nodes()[compressed_len.index()] {
             Node::Int(n) => usize::try_from(n).unwrap(),
             ref other => panic!("lz77c length returned {other:?}"),
         };

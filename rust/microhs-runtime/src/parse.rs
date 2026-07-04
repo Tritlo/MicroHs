@@ -4,6 +4,9 @@ use std::fmt;
 use crate::runtime::{Node, NodeId, Program, is_runtime_prim_name};
 
 const COMB_VERSION: &[u8] = b"v8.4\n";
+const PARSE_SMALL_INT_MIN: i64 = -10;
+const PARSE_SMALL_INT_MAX: i64 = 255;
+const PARSE_SMALL_INT_COUNT: usize = (PARSE_SMALL_INT_MAX - PARSE_SMALL_INT_MIN + 1) as usize;
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -55,6 +58,8 @@ struct Parser<'a> {
     nodes: Vec<Node>,
     stack: Vec<NodeId>,
     labels: HashMap<usize, NodeId>,
+    prim_nodes: HashMap<String, NodeId>,
+    small_int_nodes: [Option<NodeId>; PARSE_SMALL_INT_COUNT],
 }
 
 impl<'a> Parser<'a> {
@@ -75,6 +80,8 @@ impl<'a> Parser<'a> {
             nodes,
             stack,
             labels: HashMap::new(),
+            prim_nodes: HashMap::new(),
+            small_int_nodes: [None; PARSE_SMALL_INT_COUNT],
         }
     }
 
@@ -89,7 +96,7 @@ impl<'a> Parser<'a> {
         self.gobble(b'\r');
         let root = self.parse_expr()?;
         for (label, id) in &self.labels {
-            if matches!(self.nodes[id.0], Node::Indir(None)) {
+            if matches!(self.nodes[id.index()], Node::Indir(None)) {
                 return Err(ParseError::DanglingLabel(*label));
             }
         }
@@ -116,7 +123,7 @@ impl<'a> Parser<'a> {
                 b'%' => {
                     self.gobble(b'"');
                     let digits = self.parse_string()?;
-                    let node = self.push(Node::BigInt(digits));
+                    let node = self.push(Node::bigint(digits));
                     self.stack.push(node);
                 }
                 b'&' => {
@@ -131,12 +138,13 @@ impl<'a> Parser<'a> {
                     self.stack.push(id);
                 }
                 b'#' => {
-                    let node = if self.gobble(b'#') {
-                        Node::Int64(self.parse_i64()?)
+                    let id = if self.gobble(b'#') {
+                        let value = self.parse_i64()?;
+                        self.push(Node::Int64(value))
                     } else {
-                        Node::Int(self.parse_i64()?)
+                        let value = self.parse_i64()?;
+                        self.push_int(value)
                     };
-                    let id = self.push(node);
                     self.stack.push(id);
                 }
                 b'[' => {
@@ -147,7 +155,7 @@ impl<'a> Parser<'a> {
                     }
                     let start = self.stack.len() - size;
                     let items = self.stack.drain(start..).collect();
-                    let id = self.push(Node::Array(items));
+                    let id = self.push(Node::array(items));
                     self.stack.push(id);
                 }
                 b'_' => {
@@ -163,7 +171,7 @@ impl<'a> Parser<'a> {
                 }
                 b'"' => {
                     let bytes = self.parse_string()?;
-                    let id = self.push(Node::Bytes(bytes));
+                    let id = self.push(Node::bytes(bytes));
                     self.stack.push(id);
                 }
                 b'$' => {
@@ -174,18 +182,18 @@ impl<'a> Parser<'a> {
                     }
                     let bytes = self.input[self.pos..self.pos + len].to_vec();
                     self.pos += len;
-                    let id = self.push(Node::Bytes(bytes));
+                    let id = self.push(Node::bytes(bytes));
                     self.stack.push(id);
                 }
                 b'!' => {
                     self.expect(b'"')?;
                     let name = self.parse_string()?;
-                    let id = self.push(Node::Tick(name));
+                    let id = self.push(Node::tick(name));
                     self.stack.push(id);
                 }
                 b'^' => {
                     let name = self.token_after_prefix_string()?;
-                    let id = self.push(Node::Ffi(name));
+                    let id = self.push(Node::ffi(name));
                     self.stack.push(id);
                 }
                 b'~' => {
@@ -200,21 +208,18 @@ impl<'a> Parser<'a> {
                 }
                 b'`' => {
                     let tags = self.token_after_prefix_string()?;
-                    let id = self.push(Node::JsWrap { tags });
+                    let id = self.push(Node::js_wrap(tags));
                     self.stack.push(id);
                 }
                 b';' => {
                     let name = self.token_after_prefix_string()?;
-                    let id = self.push(Node::FunPtr(name));
+                    let id = self.push(Node::fun_ptr(name));
                     self.stack.push(id);
                 }
                 _ => {
                     let start = self.pos - 1;
                     let name = self.token_str_from(start)?;
-                    if !is_runtime_prim_name(name) {
-                        return Err(ParseError::UnknownPrim(name.to_owned()));
-                    }
-                    let id = self.push(Node::prim(name));
+                    let id = self.prim(name)?;
                     self.stack.push(id);
                 }
             }
@@ -340,7 +345,7 @@ impl<'a> Parser<'a> {
 
     fn define_label(&mut self, label: usize, target: NodeId) -> Result<(), ParseError> {
         if let Some(id) = self.labels.get(&label).copied() {
-            match &mut self.nodes[id.0] {
+            match &mut self.nodes[id.index()] {
                 Node::Indir(slot @ None) => {
                     *slot = Some(target);
                     Ok(())
@@ -354,9 +359,33 @@ impl<'a> Parser<'a> {
     }
 
     fn push(&mut self, node: Node) -> NodeId {
-        let id = NodeId(self.nodes.len());
+        let id = NodeId::from_index(self.nodes.len());
         self.nodes.push(node);
         id
+    }
+
+    fn push_int(&mut self, value: i64) -> NodeId {
+        let Some(index) = parse_small_int_index(value) else {
+            return self.push(Node::Int(value));
+        };
+        if let Some(id) = self.small_int_nodes[index] {
+            return id;
+        }
+        let id = self.push(Node::Int(value));
+        self.small_int_nodes[index] = Some(id);
+        id
+    }
+
+    fn prim(&mut self, name: &str) -> Result<NodeId, ParseError> {
+        if let Some(id) = self.prim_nodes.get(name).copied() {
+            return Ok(id);
+        }
+        if !is_runtime_prim_name(name) {
+            return Err(ParseError::UnknownPrim(name.to_owned()));
+        }
+        let id = self.push(Node::prim(name));
+        self.prim_nodes.insert(name.to_owned(), id);
+        Ok(id)
     }
 
     fn pop(&mut self) -> Result<NodeId, ParseError> {
@@ -389,5 +418,13 @@ impl<'a> Parser<'a> {
 
     fn peek(&self) -> Option<u8> {
         self.input.get(self.pos).copied()
+    }
+}
+
+fn parse_small_int_index(value: i64) -> Option<usize> {
+    if (PARSE_SMALL_INT_MIN..=PARSE_SMALL_INT_MAX).contains(&value) {
+        Some((value - PARSE_SMALL_INT_MIN) as usize)
+    } else {
+        None
     }
 }
