@@ -3177,13 +3177,6 @@ impl Program {
     }
 
     #[inline]
-    fn app_fun(&self, id: NodeId) -> Option<NodeId> {
-        let word0 = self.nodes[id.index()].word0;
-        ((word0 & CELL_TAG_BITS) == CellTag::App.bits())
-            .then(|| NodeId((word0 >> CELL_PAYLOAD_SHIFT) as u32))
-    }
-
-    #[inline]
     fn app_fun_trusted(&self, id: NodeId) -> Option<NodeId> {
         let word0 = self.cell_trusted(id).word0;
         let tag = word0 & CELL_TAG_BITS;
@@ -7046,7 +7039,7 @@ impl Program {
                 }};
             }
 
-            let head_dispatch = match self.cell(head).prim() {
+            let head_dispatch = match self.cell_trusted(head).prim() {
                 Some(Prim::Known(known)) => EvalHead::Known(known),
                 Some(Prim::Runtime(runtime)) => {
                     let action = runtime.strict_action(args_len);
@@ -7128,9 +7121,9 @@ impl Program {
                     match action {
                         StrictPrimitiveAction::IntBin(op) => {
                             let (redex, x, y) = take_args!(2, take_args2);
-                            let y_immediate = self.cell(y).int_value();
+                            let y_immediate = self.cell_trusted(y).int_value();
                             if let Some(y_value) = y_immediate {
-                                if let Some(x_value) = self.cell(x).int_value() {
+                                if let Some(x_value) = self.cell_trusted(x).int_value() {
                                     let result = op
                                         .apply(x_value, y_value)
                                         .map_err(|err| self.arithmetic_eval_error(err))?;
@@ -7457,7 +7450,7 @@ impl Program {
                     profile_rewrite_args!("S", ("x", x), ("y", y), ("z", z));
                     if carried_reductions + 1 < budget
                         && z != redex
-                        && matches!(self.cell(x).prim(), Some(Prim::Known(I)))
+                        && matches!(self.cell_trusted(x).prim(), Some(Prim::Known(I)))
                     {
                         let right = app_site!("S.right", y, z);
                         app_taken_reductions!(redex, 3, z, right, 2);
@@ -8603,7 +8596,7 @@ impl Program {
             Conversion(ConversionValue),
         }
 
-        let current_cell = self.cell(current);
+        let current_cell = self.cell_trusted(current);
         let ready = match stack.peek_frame() {
             Some(StackFrame::Int(_)) => current_cell.int_value().map(ReadyFrame::Int),
             Some(StackFrame::Int64Shift(_)) => current_cell.int_value().map(ReadyFrame::Int64Shift),
@@ -9412,7 +9405,7 @@ impl Program {
             }
 
             let descent_started = stack_phase_start!();
-            while let Some(fun) = self.app_fun(current) {
+            while let Some(fun) = self.app_fun_trusted(current) {
                 if profiling {
                     self.profile_stack_descent_push();
                 }
