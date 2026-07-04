@@ -3183,6 +3183,19 @@ impl Program {
             .then(|| NodeId((word0 >> CELL_PAYLOAD_SHIFT) as u32))
     }
 
+    #[inline]
+    fn app_fun_trusted(&self, id: NodeId) -> Option<NodeId> {
+        let word0 = self.cell_trusted(id).word0;
+        let tag = word0 & CELL_TAG_BITS;
+        if tag == CellTag::App.bits() {
+            Some(NodeId((word0 >> CELL_PAYLOAD_SHIFT) as u32))
+        } else {
+            debug_assert_ne!(tag, CellTag::Indir.bits());
+            debug_assert_ne!(tag, CellTag::Free.bits());
+            None
+        }
+    }
+
     fn set_cell_at(&mut self, index: usize, cell: Cell) {
         self.drop_cold_payload(index);
         self.nodes[index] = cell;
@@ -8506,7 +8519,7 @@ impl Program {
         profiling: bool,
     ) -> Result<NodeId, EvalError> {
         current = self.resolve_for_whnf(current, profile_resolve)?;
-        while let Some(fun) = self.app_fun(current) {
+        while let Some(fun) = self.app_fun_trusted(current) {
             if profiling {
                 self.profile_stack_descent_push();
             }
