@@ -395,6 +395,7 @@ fn encode_known_prim(known: KnownPrim) -> u16 {
     }
 }
 
+#[inline(always)]
 fn decode_known_prim(code: u16) -> KnownPrim {
     match code {
         0 => KnownPrim::A,
@@ -908,6 +909,7 @@ impl Cell {
             .then(|| (self.id_payload(), self.id_word1()))
     }
 
+    #[inline(always)]
     fn prim(self) -> Option<Prim> {
         match self.tag_bits() {
             3 => Some(Prim::Known(decode_known_prim(self.word1 as u16))),
