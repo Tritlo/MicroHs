@@ -7298,6 +7298,13 @@ impl Program {
                 S if args_len >= 3 => {
                     let (redex, x, y, z) = take_args!(3, take_args3);
                     profile_rewrite_args!("S", ("x", x), ("y", y), ("z", z));
+                    if carried_reductions + 1 < budget
+                        && z != redex
+                        && matches!(self.cell(x).prim(), Some(Prim::Known(I)))
+                    {
+                        let right = app_site!("S.right", y, z);
+                        app_taken_reductions!(redex, 3, z, right, 2);
+                    }
                     let left = app_site!("S.left", x, z);
                     let right = app_site!("S.right", y, z);
                     app_taken!(redex, 3, left, right);
