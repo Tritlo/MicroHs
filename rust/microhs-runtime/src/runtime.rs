@@ -4659,7 +4659,20 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_app_opportunities(&mut self, fun: NodeId, arg: NodeId) {
+    fn profile_stack_rewrite_opportunity_at(&mut self, opportunity: &'static str, site: &str) {
+        self.profile_stack_rewrite_opportunity(opportunity);
+        if let Some(profile) = self.profile.as_mut() {
+            let mut key = String::with_capacity(opportunity.len() + site.len() + 1);
+            key.push_str(opportunity);
+            key.push('@');
+            key.push_str(site);
+            *profile.stack_rewrite_opportunities.entry(key).or_default() += 1;
+        }
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_app_opportunities(&mut self, site: &str, fun: NodeId, arg: NodeId) {
         use KnownPrim::*;
 
         let funt = self.gc_profile_prim(fun);
@@ -4670,28 +4683,28 @@ impl Program {
         let arg_fun_t = arg_app.and_then(|(arg_fun, _)| self.gc_profile_prim(arg_fun));
 
         if funt == Some(Prim::Known(I)) {
-            self.profile_stack_rewrite_opportunity("red_i");
+            self.profile_stack_rewrite_opportunity_at("red_i", site);
         }
         if funfunt == Some(Prim::Known(K)) {
-            self.profile_stack_rewrite_opportunity("red_k");
+            self.profile_stack_rewrite_opportunity_at("red_k", site);
         }
         if funfunt == Some(Prim::Known(A)) {
-            self.profile_stack_rewrite_opportunity("red_a");
+            self.profile_stack_rewrite_opportunity_at("red_a", site);
         }
         if funt == Some(Prim::Known(B)) && argt == Some(Prim::Known(I)) {
-            self.profile_stack_rewrite_opportunity("red_bi");
+            self.profile_stack_rewrite_opportunity_at("red_bi", site);
         }
         if funfunt == Some(Prim::Known(B)) && argt == Some(Prim::Known(I)) {
-            self.profile_stack_rewrite_opportunity("red_bxi");
+            self.profile_stack_rewrite_opportunity_at("red_bxi", site);
         }
         if funfunt == Some(Prim::Known(CPrimeB)) && argt == Some(Prim::Known(I)) {
-            self.profile_stack_rewrite_opportunity("red_ccbi");
+            self.profile_stack_rewrite_opportunity_at("red_ccbi", site);
         }
         if funt == Some(Prim::Known(C)) && arg_fun_t == Some(Prim::Known(C)) {
-            self.profile_stack_rewrite_opportunity("red_cc");
+            self.profile_stack_rewrite_opportunity_at("red_cc", site);
         }
         if funt == Some(Prim::Known(CPrime)) && argt == Some(Prim::Known(I)) {
-            self.profile_stack_rewrite_opportunity("red_cci");
+            self.profile_stack_rewrite_opportunity_at("red_cci", site);
         }
         if funt == Some(Prim::Known(CPrimeB)) {
             if let Some((arg_fun, arg_arg)) = arg_app {
@@ -4704,12 +4717,12 @@ impl Program {
                     })
                     .unwrap_or(false);
                 if fun_arg_is_p && fun_arg_is_bc {
-                    self.profile_stack_rewrite_opportunity("red_ccbbcp");
+                    self.profile_stack_rewrite_opportunity_at("red_ccbbcp", site);
                 }
             }
         }
         if funt == Some(Prim::Known(C)) && argt.and_then(Self::gc_profile_flipped_prim).is_some() {
-            self.profile_stack_rewrite_opportunity("red_flip");
+            self.profile_stack_rewrite_opportunity_at("red_flip", site);
         }
     }
 
@@ -6616,7 +6629,7 @@ impl Program {
                     #[cfg(feature = "eval-phase-profile")]
                     {
                         if profiling {
-                            self.profile_stack_app_opportunities(fun, arg);
+                            self.profile_stack_app_opportunities($key, fun, arg);
                         }
                     }
                     self.app_with_site($key, fun, arg)
@@ -6753,7 +6766,7 @@ impl Program {
                     #[cfg(feature = "eval-phase-profile")]
                     {
                         if profiling {
-                            self.profile_stack_app_opportunities(fun, arg);
+                            self.profile_stack_app_opportunities("<app_step>", fun, arg);
                         }
                     }
                     #[cfg(feature = "eval-phase-profile")]
@@ -6801,7 +6814,7 @@ impl Program {
                     #[cfg(feature = "eval-phase-profile")]
                     {
                         if profiling {
-                            self.profile_stack_app_opportunities(fun, arg);
+                            self.profile_stack_app_opportunities("<app_taken>", fun, arg);
                         }
                     }
                     #[cfg(feature = "eval-phase-profile")]
