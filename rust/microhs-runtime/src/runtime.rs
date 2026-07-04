@@ -155,6 +155,7 @@ pub enum KnownPrim {
     IoReadMVar,
     IoReturn,
     IoSerialize,
+    IoDeserialize,
     IoSetMaskingState,
     IoStderr,
     IoStdin,
@@ -221,6 +222,7 @@ impl KnownPrim {
             "IO.readmvar" => Self::IoReadMVar,
             "IO.return" => Self::IoReturn,
             "IO.serialize" => Self::IoSerialize,
+            "IO.deserialize" => Self::IoDeserialize,
             "IO.setmaskingstate" => Self::IoSetMaskingState,
             "IO.stderr" => Self::IoStderr,
             "IO.stdin" => Self::IoStdin,
@@ -305,6 +307,7 @@ impl KnownPrim {
             Self::IoReadMVar => "IO.readmvar",
             Self::IoReturn => "IO.return",
             Self::IoSerialize => "IO.serialize",
+            Self::IoDeserialize => "IO.deserialize",
             Self::IoSetMaskingState => "IO.setmaskingstate",
             Self::IoStderr => "IO.stderr",
             Self::IoStdin => "IO.stdin",
@@ -374,6 +377,7 @@ fn encode_known_prim(known: KnownPrim) -> u16 {
         KnownPrim::IoReadMVar => 44,
         KnownPrim::IoReturn => 45,
         KnownPrim::IoSerialize => 46,
+        KnownPrim::IoDeserialize => 61,
         KnownPrim::IoSetMaskingState => 47,
         KnownPrim::IoStderr => 48,
         KnownPrim::IoStdin => 49,
@@ -440,6 +444,7 @@ fn decode_known_prim(code: u16) -> KnownPrim {
         44 => KnownPrim::IoReadMVar,
         45 => KnownPrim::IoReturn,
         46 => KnownPrim::IoSerialize,
+        61 => KnownPrim::IoDeserialize,
         47 => KnownPrim::IoSetMaskingState,
         48 => KnownPrim::IoStderr,
         49 => KnownPrim::IoStdin,
@@ -5319,6 +5324,11 @@ impl Program {
                 self.write_bfile_bytes(ptr, &serialized)?;
                 let unit = self.prim("I");
                 Some((3, self.pair(unit, arg!(2))))
+            }
+            Some(IoDeserialize) if args_len >= 2 => {
+                let ptr = self.eval_pointer_value(arg!(0))?;
+                let value = self.deserialize_bfile(ptr)?;
+                Some((2, self.pair(value, arg!(1))))
             }
             Some(IoGetArgRef) if args_len >= 1 => {
                 let arg_array = self.arg_ref_array();
@@ -13940,6 +13950,106 @@ impl Program {
         }
     }
 
+    #[cold]
+    #[inline(never)]
+    fn deserialize_bfile(&mut self, ptr: i64) -> Result<NodeId, EvalError> {
+        let mut input = Vec::new();
+        let mut last_error = None;
+        loop {
+            let byte = self.read_bfile_bytes(ptr, 1)?;
+            if byte.is_empty() {
+                return Err(last_error
+                    .map(Self::deserialize_parse_error)
+                    .unwrap_or(EvalError::InvalidByteString));
+            }
+            input.push(byte[0]);
+            match crate::parse::parse_program(&input) {
+                Ok(parsed) => return self.append_parsed_program(parsed),
+                Err(err) => last_error = Some(err),
+            }
+        }
+    }
+
+    fn deserialize_parse_error(error: crate::parse::ParseError) -> EvalError {
+        match error {
+            crate::parse::ParseError::UnknownPrim(name) => EvalError::UnknownPrim(name),
+            _ => EvalError::InvalidByteString,
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn append_parsed_program(&mut self, parsed: Program) -> Result<NodeId, EvalError> {
+        let root = parsed.root();
+        let nodes = parsed.nodes();
+        let mut remap = Vec::with_capacity(nodes.len());
+        for node in &nodes {
+            let id = match node {
+                Node::App(_, _)
+                | Node::Indir(_)
+                | Node::BytesView(_)
+                | Node::MVar(Some(_))
+                | Node::Weak(_)
+                | Node::Array(_) => self.push_node(Node::Indir(None)),
+                Node::Free(_) => return Err(EvalError::InvalidByteString),
+                node => self.push_value_node(node.clone()),
+            };
+            remap.push(id);
+        }
+
+        for (index, node) in nodes.into_iter().enumerate() {
+            let target = remap[index];
+            let node = match node {
+                Node::App(fun, arg) => Node::App(
+                    Self::remap_parsed_id(&remap, fun)?,
+                    Self::remap_parsed_id(&remap, arg)?,
+                ),
+                Node::Indir(target) => Node::Indir(
+                    target
+                        .map(|id| Self::remap_parsed_id(&remap, id))
+                        .transpose()?,
+                ),
+                Node::BytesView(view) => Node::bytes_view(
+                    Self::remap_parsed_id(&remap, view.base)?,
+                    view.offset,
+                    view.len,
+                ),
+                Node::MVar(Some(value)) => Node::MVar(Some(Self::remap_parsed_id(&remap, value)?)),
+                Node::Weak(weak) => {
+                    let weak = *weak;
+                    Node::Weak(Box::new(WeakNode {
+                        value: weak
+                            .value
+                            .map(|id| Self::remap_parsed_id(&remap, id))
+                            .transpose()?,
+                        finalizer: weak
+                            .finalizer
+                            .map(|id| Self::remap_parsed_id(&remap, id))
+                            .transpose()?,
+                    }))
+                }
+                Node::Array(items) => Node::array(
+                    items
+                        .iter()
+                        .map(|id| Self::remap_parsed_id(&remap, *id))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+                Node::Free(_) => return Err(EvalError::InvalidByteString),
+                _ => continue,
+            };
+            self.set_node_at(target.index(), node);
+        }
+
+        Self::remap_parsed_id(&remap, root)
+    }
+
+    fn remap_parsed_id(remap: &[NodeId], id: NodeId) -> Result<NodeId, EvalError> {
+        remap
+            .get(id.index())
+            .copied()
+            .ok_or(EvalError::InvalidByteString)
+    }
+
     fn get_utf8_bfile_byte(&mut self, ptr: i64, inner: i64) -> Result<i64, EvalError> {
         let c1 = self.get_bfile_byte(inner)?;
         if c1 < 0 {
@@ -15583,12 +15693,7 @@ fn is_supported_runtime_prim_name(name: &str) -> bool {
     is_runtime_prim_name(name)
         && !matches!(
             name,
-            "IO.deserialize"
-                | "IO.fork"
-                | "IO.throwto"
-                | "IO.threaddelay"
-                | "IO.waitrdfd"
-                | "IO.waitwrfd"
+            "IO.fork" | "IO.throwto" | "IO.threaddelay" | "IO.waitrdfd" | "IO.waitwrfd"
         )
 }
 
@@ -18498,15 +18603,42 @@ fn nibble(n: u8) -> char {
 #[cfg(test)]
 mod tests {
     use super::{
-        IGNORED_IO_SHORTCUT_RECURSION_LIMIT, MpzValue, bwt_decode, bwt_encode, lz77_compress,
-        lz77_decompress, lzma_compress_payload, lzma_decompress_payload, serialize_bytes_quoted,
+        BFile, BFileKind, FORCE_REDUCTION_LIMIT, IGNORED_IO_SHORTCUT_RECURSION_LIMIT, MpzValue,
+        bwt_decode, bwt_encode, lz77_compress, lz77_decompress, lzma_compress_payload,
+        lzma_decompress_payload, serialize_bytes_quoted,
     };
-    use crate::{EvalError, Node, NodeId, ParseError, Program, parse_program};
+    use crate::{EvalError, KnownPrim, Node, NodeId, ParseError, Prim, Program, parse_program};
 
     fn whnf(input: &[u8]) -> String {
         let mut program = parse_program(input).unwrap();
         let (root, _) = program.reduce_whnf(100).unwrap();
         program.render(root)
+    }
+
+    fn deserialize_memory(program: &mut Program, bytes: Vec<u8>) -> (NodeId, i64) {
+        let ptr = program
+            .alloc_bfile(BFile {
+                kind: BFileKind::Memory { bytes, pos: 0 },
+                readable: true,
+                writable: false,
+            })
+            .unwrap();
+        let ptr_node = program.push_node(Node::Ptr(ptr));
+        let world = program.push_node(Node::Int(99_999));
+        let deserialize = program.prim("IO.deserialize");
+        let deserialize_ptr = program.app(deserialize, ptr_node);
+        let action = program.app(deserialize_ptr, world);
+        let pair = program
+            .reduce_node_whnf(action, FORCE_REDUCTION_LIMIT)
+            .unwrap();
+        let (left, returned_world) = program.cell(pair).app_fields().unwrap();
+        assert_eq!(returned_world, world);
+        let (head, value) = program.cell(left).app_fields().unwrap();
+        assert!(matches!(
+            program.cell(head).prim(),
+            Some(Prim::Known(KnownPrim::P))
+        ));
+        (value, ptr)
     }
 
     #[test]
@@ -18653,6 +18785,33 @@ mod tests {
             serialized
                 .windows(b"_2 ".len())
                 .any(|window| window == b"_2 "),
+            "{}",
+            String::from_utf8_lossy(&serialized)
+        );
+        parse_program(&serialized).unwrap();
+    }
+
+    #[test]
+    fn io_deserialize_reads_one_comb_from_bfile() {
+        let mut program = parse_program(b"v8.4\n0\nI }\n").unwrap();
+        let (value, ptr) = deserialize_memory(&mut program, b"v8.4\n0\n#42 }tail".to_vec());
+        assert_eq!(program.render(value), "42");
+        assert_eq!(program.read_bfile_bytes(ptr, 4).unwrap(), b"tail");
+    }
+
+    #[test]
+    fn io_deserialize_preserves_shared_cycles() {
+        let mut program = parse_program(b"v8.4\n0\nI }\n").unwrap();
+        let (value, _) = deserialize_memory(&mut program, b"v8.4\n1\nK _0 @ :0 }\n".to_vec());
+        let serialized = program.serialize_program(value).unwrap();
+        assert!(serialized.starts_with(b"v8.4\n1\n"), "{serialized:?}");
+        assert!(
+            serialized.contains(&b'_'),
+            "{}",
+            String::from_utf8_lossy(&serialized)
+        );
+        assert!(
+            serialized.contains(&b':'),
             "{}",
             String::from_utf8_lossy(&serialized)
         );
