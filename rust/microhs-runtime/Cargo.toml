@@ -4,6 +4,11 @@ version = "0.0.0"
 edition = "2024"
 license = "BSD-3-Clause"
 
+[features]
+default = []
+eval-phase-profile = []
+gc-phase-profile = []
+
 [dependencies]
 libc = "0.2.186"
 lzma-sdk-rs = { version = "0.2301.1", features = ["decode"] }

@@ -1,11 +1,14 @@
 use std::env;
 use std::fs;
 use std::hint::black_box;
+use std::mem::size_of;
 use std::process::Command;
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use microhs_runtime::{EvalError, EvalProfile, GcStats, Program, parse_program};
+use microhs_runtime::{
+    EvalError, EvalProfile, GcStats, Node, NodeId, Prim, Program, parse_program,
+};
 
 const DEFAULT_ITERS: usize = 1_000;
 const DEFAULT_WARMUP_ITERS: usize = 0;
@@ -87,6 +90,9 @@ fn main() -> ExitCode {
     println!("input: {}", config.name);
     println!("mode: {}", config.mode.as_str());
     println!("bytes: {bytes}");
+    println!("node_size_bytes: {}", size_of::<Node>());
+    println!("node_id_size_bytes: {}", size_of::<NodeId>());
+    println!("prim_size_bytes: {}", size_of::<Prim>());
     println!("iters: {}", config.iters);
     println!("warmup_iters: {}", config.warmup_iters);
     match config.step_limit {
@@ -124,6 +130,42 @@ fn main() -> ExitCode {
     println!("gc_high_water_nodes: {}", eval.gc.high_water_nodes);
     println!("gc_current_nodes: {}", eval.gc.current_nodes);
     println!("gc_current_free_nodes: {}", eval.gc.current_free_nodes);
+    println!(
+        "gc_last_pause_ms: {:.3}",
+        nanos_millis(eval.gc.last_pause_nanos)
+    );
+    println!(
+        "gc_total_pause_ms: {:.3}",
+        nanos_millis(eval.gc.total_pause_nanos)
+    );
+    #[cfg(feature = "gc-phase-profile")]
+    {
+        println!(
+            "gc_last_mark_ms: {:.3}",
+            nanos_millis(eval.gc.last_mark_nanos)
+        );
+        println!(
+            "gc_total_mark_ms: {:.3}",
+            nanos_millis(eval.gc.total_mark_nanos)
+        );
+        println!(
+            "gc_last_sweep_ms: {:.3}",
+            nanos_millis(eval.gc.last_sweep_nanos)
+        );
+        println!(
+            "gc_total_sweep_ms: {:.3}",
+            nanos_millis(eval.gc.total_sweep_nanos)
+        );
+    }
+    println!(
+        "gc_last_allocations_since_collect: {}",
+        eval.gc.last_allocations_since_collect
+    );
+    println!(
+        "gc_current_allocations_since_collect: {}",
+        eval.gc.current_allocations_since_collect
+    );
+    print_gc_events("gc_events", &eval.gc);
 
     if config.profile {
         let profile = profile_eval(
@@ -959,7 +1001,7 @@ fn bench_parse(input: &[u8], warmup_iters: usize, iters: usize) -> ParseBench {
 
 fn parse_once(input: &[u8]) -> usize {
     let program = parse_program(black_box(input)).expect("parse benchmark input");
-    program.nodes().len()
+    program.node_count()
 }
 
 struct EvalBench {
@@ -1022,6 +1064,22 @@ fn bench_eval(
         gc.high_water_nodes = gc.high_water_nodes.max(run.gc.high_water_nodes);
         gc.current_nodes = run.gc.current_nodes;
         gc.current_free_nodes = run.gc.current_free_nodes;
+        gc.last_pause_nanos = run.gc.last_pause_nanos;
+        gc.total_pause_nanos = gc
+            .total_pause_nanos
+            .saturating_add(run.gc.total_pause_nanos);
+        #[cfg(feature = "gc-phase-profile")]
+        {
+            gc.last_mark_nanos = run.gc.last_mark_nanos;
+            gc.total_mark_nanos = gc.total_mark_nanos.saturating_add(run.gc.total_mark_nanos);
+            gc.last_sweep_nanos = run.gc.last_sweep_nanos;
+            gc.total_sweep_nanos = gc
+                .total_sweep_nanos
+                .saturating_add(run.gc.total_sweep_nanos);
+        }
+        gc.last_allocations_since_collect = run.gc.last_allocations_since_collect;
+        gc.current_allocations_since_collect = run.gc.current_allocations_since_collect;
+        gc.events.extend(run.gc.events);
     }
     black_box(serialize_sink);
     EvalBench {
@@ -1094,7 +1152,7 @@ fn profile_eval(
     let mut program = parse_program(black_box(input)).expect("profile benchmark input");
     program.set_program_args(program_args.to_vec());
     program.set_executable_path(executable_path.map(Vec::from));
-    let nodes_before = program.nodes().len();
+    let nodes_before = program.node_count();
     program.enable_profile();
     let limit = step_limit.unwrap_or(usize::MAX);
     let run = match mode {
@@ -1128,7 +1186,7 @@ fn profile_eval(
         }
     };
     let elapsed = started.elapsed();
-    let nodes_after = program.nodes().len();
+    let nodes_after = program.node_count();
     let gc = program.gc_stats();
     let profile = program.take_profile().expect("profile enabled");
     ProfileBench {
@@ -1167,6 +1225,42 @@ fn print_profile(profile: &ProfileBench, top: usize) {
         profile.gc.current_free_nodes
     );
     println!(
+        "profile_gc_last_pause_ms: {:.3}",
+        nanos_millis(profile.gc.last_pause_nanos)
+    );
+    println!(
+        "profile_gc_total_pause_ms: {:.3}",
+        nanos_millis(profile.gc.total_pause_nanos)
+    );
+    #[cfg(feature = "gc-phase-profile")]
+    {
+        println!(
+            "profile_gc_last_mark_ms: {:.3}",
+            nanos_millis(profile.gc.last_mark_nanos)
+        );
+        println!(
+            "profile_gc_total_mark_ms: {:.3}",
+            nanos_millis(profile.gc.total_mark_nanos)
+        );
+        println!(
+            "profile_gc_last_sweep_ms: {:.3}",
+            nanos_millis(profile.gc.last_sweep_nanos)
+        );
+        println!(
+            "profile_gc_total_sweep_ms: {:.3}",
+            nanos_millis(profile.gc.total_sweep_nanos)
+        );
+    }
+    println!(
+        "profile_gc_last_allocations_since_collect: {}",
+        profile.gc.last_allocations_since_collect
+    );
+    println!(
+        "profile_gc_current_allocations_since_collect: {}",
+        profile.gc.current_allocations_since_collect
+    );
+    print_gc_events("profile_gc_events", &profile.gc);
+    println!(
         "profile_node_growth: {}",
         profile.nodes_after.saturating_sub(profile.nodes_before)
     );
@@ -1197,6 +1291,88 @@ fn print_profile(profile: &ProfileBench, top: usize) {
     println!(
         "profile_app_rewrite_extra_args: {}",
         profile.profile.app_rewrite_extra_args
+    );
+    println!("profile_stack_rewrites: {}", profile.profile.stack_rewrites);
+    println!(
+        "profile_stack_rewrite_apps: {}",
+        profile.profile.stack_rewrite_apps
+    );
+    println!(
+        "profile_stack_rewrite_indirections: {}",
+        profile.profile.stack_rewrite_indirections
+    );
+    println!(
+        "profile_stack_app_updates: {}",
+        profile.profile.stack_app_updates
+    );
+    println!(
+        "profile_stack_app_update_apps: {}",
+        profile.profile.stack_app_update_apps
+    );
+    println!(
+        "profile_stack_app_update_allocations: {}",
+        profile.profile.stack_app_update_allocations
+    );
+    println!(
+        "profile_stack_rethreads: {}",
+        profile.profile.stack_rethreads
+    );
+    println!(
+        "profile_stack_rethread_apps: {}",
+        profile.profile.stack_rethread_apps
+    );
+    println!(
+        "profile_stack_descent_pushes: {}",
+        profile.profile.stack_descent_pushes
+    );
+    println!(
+        "profile_stack_arg_reads: {}",
+        profile.profile.stack_arg_reads
+    );
+    println!(
+        "profile_stack_arg_batches: {}",
+        profile.profile.stack_arg_batches
+    );
+    #[cfg(feature = "eval-phase-profile")]
+    print_phase_profile(profile, top);
+    let spine_arity_entries: usize = profile
+        .profile
+        .spine_arity
+        .iter()
+        .map(|(arity, count)| arity.saturating_mul(*count))
+        .sum();
+    println!("profile_spine_arity_entries: {spine_arity_entries}");
+    println!(
+        "profile_persistent_forces: {}",
+        profile.profile.persistent_forces
+    );
+    println!(
+        "profile_persistent_fallbacks: {}",
+        profile.profile.persistent_fallbacks
+    );
+    println!(
+        "profile_fallback_eval_loop_steps: {}",
+        profile.profile.fallback_eval_loop_steps
+    );
+    println!(
+        "profile_strict_redex_snapshots: {}",
+        profile.profile.strict_redex_snapshots
+    );
+    println!(
+        "profile_strict_redex_snapshot_apps: {}",
+        profile.profile.strict_redex_snapshot_apps
+    );
+    println!(
+        "profile_remaining_app_scans: {}",
+        profile.profile.remaining_app_scans
+    );
+    println!(
+        "profile_remaining_app_scan_apps: {}",
+        profile.profile.remaining_app_scan_apps
+    );
+    println!(
+        "profile_eval_frame_pushes: {}",
+        profile.profile.eval_frame_pushes
     );
     println!(
         "profile_small_int_cache_hits: {}",
@@ -1259,6 +1435,142 @@ fn print_profile(profile: &ProfileBench, top: usize) {
     println!("profile_app_allocation_sites:");
     for (site, count) in profile.profile.top_app_allocation_sites(top) {
         println!("  {site}: {count}");
+    }
+    println!("profile_eval_frame_push_kinds:");
+    for (kind, count) in profile.profile.top_eval_frame_push_kinds(top) {
+        println!("  {kind}: {count}");
+    }
+    println!("profile_stack_fallback_heads:");
+    for (head, count) in profile.profile.top_stack_fallback_heads(top) {
+        println!("  {head}: {count}");
+    }
+}
+
+#[cfg(feature = "eval-phase-profile")]
+fn print_phase_profile(profile: &ProfileBench, top: usize) {
+    println!(
+        "profile_stack_loop_iterations: {}",
+        profile.profile.stack_loop_iterations
+    );
+    println!(
+        "profile_stack_ready_checks: {}",
+        profile.profile.stack_ready_checks
+    );
+    println!(
+        "profile_stack_ready_successes: {}",
+        profile.profile.stack_ready_successes
+    );
+    println!(
+        "profile_stack_eval_step_calls: {}",
+        profile.profile.stack_eval_step_calls
+    );
+    println!(
+        "profile_stack_step_reduced: {}",
+        profile.profile.stack_step_reduced
+    );
+    println!(
+        "profile_stack_step_force: {}",
+        profile.profile.stack_step_force
+    );
+    println!(
+        "profile_stack_step_whnf: {}",
+        profile.profile.stack_step_whnf
+    );
+    println!(
+        "profile_stack_step_fallback: {}",
+        profile.profile.stack_step_fallback
+    );
+    println!(
+        "profile_stack_gc_check_ms: {:.3}",
+        nanos_millis(profile.profile.stack_gc_check_nanos)
+    );
+    println!(
+        "profile_stack_resolve_ms: {:.3}",
+        nanos_millis(profile.profile.stack_resolve_nanos)
+    );
+    println!(
+        "profile_stack_ready_frame_ms: {:.3}",
+        nanos_millis(profile.profile.stack_ready_frame_nanos)
+    );
+    println!(
+        "profile_stack_descent_ms: {:.3}",
+        nanos_millis(profile.profile.stack_descent_nanos)
+    );
+    println!(
+        "profile_stack_eval_step_ms: {:.3}",
+        nanos_millis(profile.profile.stack_eval_step_nanos)
+    );
+    println!(
+        "profile_stack_whnf_finish_ms: {:.3}",
+        nanos_millis(profile.profile.stack_whnf_finish_nanos)
+    );
+    println!(
+        "profile_stack_arg_read_ms: {:.3}",
+        nanos_millis(profile.profile.stack_arg_read_nanos)
+    );
+    println!(
+        "profile_stack_app_alloc_ms: {:.3}",
+        nanos_millis(profile.profile.stack_app_alloc_nanos)
+    );
+    println!(
+        "profile_stack_apply_rewrite_ms: {:.3}",
+        nanos_millis(profile.profile.stack_apply_rewrite_nanos)
+    );
+    println!(
+        "profile_stack_apply_app_ms: {:.3}",
+        nanos_millis(profile.profile.stack_apply_app_nanos)
+    );
+    println!(
+        "profile_stack_force_frame_ms: {:.3}",
+        nanos_millis(profile.profile.stack_force_frame_nanos)
+    );
+    println!(
+        "profile_stack_inner_descent_ms: {:.3}",
+        nanos_millis(profile.profile.stack_inner_descent_nanos)
+    );
+    println!(
+        "profile_profile_step_ms: {:.3}",
+        nanos_millis(profile.profile.profile_step_nanos)
+    );
+    println!(
+        "profile_profile_reduction_ms: {:.3}",
+        nanos_millis(profile.profile.profile_reduction_nanos)
+    );
+    println!(
+        "profile_profile_stack_head_time_ms: {:.3}",
+        nanos_millis(profile.profile.profile_stack_head_time_nanos)
+    );
+    println!(
+        "profile_profile_app_alloc_bookkeeping_ms: {:.3}",
+        nanos_millis(profile.profile.profile_app_alloc_bookkeeping_nanos)
+    );
+    println!("profile_stack_eval_step_head_ms:");
+    for (head, nanos) in profile.profile.top_stack_eval_step_head_times(top) {
+        println!("  {head}: {:.3}", nanos_millis(nanos));
+    }
+    println!("profile_stack_arg_read_head_ms:");
+    for (head, nanos) in profile.profile.top_stack_arg_read_head_times(top) {
+        println!("  {head}: {:.3}", nanos_millis(nanos));
+    }
+    println!("profile_stack_app_alloc_site_ms:");
+    for (site, nanos) in profile.profile.top_stack_app_alloc_site_times(top) {
+        println!("  {site}: {:.3}", nanos_millis(nanos));
+    }
+    println!("profile_stack_apply_rewrite_head_ms:");
+    for (head, nanos) in profile.profile.top_stack_apply_rewrite_head_times(top) {
+        println!("  {head}: {:.3}", nanos_millis(nanos));
+    }
+    println!("profile_stack_apply_app_head_ms:");
+    for (head, nanos) in profile.profile.top_stack_apply_app_head_times(top) {
+        println!("  {head}: {:.3}", nanos_millis(nanos));
+    }
+    println!("profile_stack_force_frame_head_ms:");
+    for (head, nanos) in profile.profile.top_stack_force_frame_head_times(top) {
+        println!("  {head}: {:.3}", nanos_millis(nanos));
+    }
+    println!("profile_stack_inner_descent_head_ms:");
+    for (head, nanos) in profile.profile.top_stack_inner_descent_head_times(top) {
+        println!("  {head}: {:.3}", nanos_millis(nanos));
     }
 }
 
@@ -1420,6 +1732,40 @@ fn temp_comb_file() -> std::path::PathBuf {
 
 fn millis(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
+}
+
+fn nanos_millis(nanos: u128) -> f64 {
+    nanos as f64 / 1_000_000.0
+}
+
+fn print_gc_events(label: &str, gc: &GcStats) {
+    println!("{label}:");
+    for event in &gc.events {
+        #[cfg(feature = "gc-phase-profile")]
+        println!(
+            "  collection={} pause_ms={:.3} mark_ms={:.3} sweep_ms={:.3} live_nodes={} free_nodes={} arena_nodes={} freed_nodes={} allocations_since_collect={}",
+            event.collection,
+            nanos_millis(event.pause_nanos),
+            nanos_millis(event.mark_nanos),
+            nanos_millis(event.sweep_nanos),
+            event.live_nodes,
+            event.free_nodes,
+            event.arena_nodes,
+            event.freed_nodes,
+            event.allocations_since_collect
+        );
+        #[cfg(not(feature = "gc-phase-profile"))]
+        println!(
+            "  collection={} pause_ms={:.3} live_nodes={} free_nodes={} arena_nodes={} freed_nodes={} allocations_since_collect={}",
+            event.collection,
+            nanos_millis(event.pause_nanos),
+            event.live_nodes,
+            event.free_nodes,
+            event.arena_nodes,
+            event.freed_nodes,
+            event.allocations_since_collect
+        );
+    }
 }
 
 fn nanos_per_iter(duration: Duration, iters: usize) -> f64 {
