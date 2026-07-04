@@ -181,6 +181,46 @@ fn main() -> ExitCode {
             "gc_red_flip_opportunities: {}",
             eval.gc.red_flip_opportunities
         );
+        println!(
+            "gc_young_profile_last_slots: {}",
+            eval.gc.young_profile_last_slots
+        );
+        println!(
+            "gc_young_profile_last_live: {}",
+            eval.gc.young_profile_last_live
+        );
+        println!(
+            "gc_young_profile_last_dead: {}",
+            eval.gc.young_profile_last_dead
+        );
+        println!(
+            "gc_young_profile_last_old_to_young_sources: {}",
+            eval.gc.young_profile_last_old_to_young_sources
+        );
+        println!(
+            "gc_young_profile_last_old_to_young_edges: {}",
+            eval.gc.young_profile_last_old_to_young_edges
+        );
+        println!(
+            "gc_young_profile_total_slots: {}",
+            eval.gc.young_profile_total_slots
+        );
+        println!(
+            "gc_young_profile_total_live: {}",
+            eval.gc.young_profile_total_live
+        );
+        println!(
+            "gc_young_profile_total_dead: {}",
+            eval.gc.young_profile_total_dead
+        );
+        println!(
+            "gc_young_profile_total_old_to_young_sources: {}",
+            eval.gc.young_profile_total_old_to_young_sources
+        );
+        println!(
+            "gc_young_profile_total_old_to_young_edges: {}",
+            eval.gc.young_profile_total_old_to_young_edges
+        );
     }
     println!(
         "gc_last_allocations_since_collect: {}",
@@ -1101,6 +1141,27 @@ fn bench_eval(
             gc.total_sweep_nanos = gc
                 .total_sweep_nanos
                 .saturating_add(run.gc.total_sweep_nanos);
+            gc.young_profile_last_slots = run.gc.young_profile_last_slots;
+            gc.young_profile_last_live = run.gc.young_profile_last_live;
+            gc.young_profile_last_dead = run.gc.young_profile_last_dead;
+            gc.young_profile_last_old_to_young_sources =
+                run.gc.young_profile_last_old_to_young_sources;
+            gc.young_profile_last_old_to_young_edges = run.gc.young_profile_last_old_to_young_edges;
+            gc.young_profile_total_slots = gc
+                .young_profile_total_slots
+                .saturating_add(run.gc.young_profile_total_slots);
+            gc.young_profile_total_live = gc
+                .young_profile_total_live
+                .saturating_add(run.gc.young_profile_total_live);
+            gc.young_profile_total_dead = gc
+                .young_profile_total_dead
+                .saturating_add(run.gc.young_profile_total_dead);
+            gc.young_profile_total_old_to_young_sources = gc
+                .young_profile_total_old_to_young_sources
+                .saturating_add(run.gc.young_profile_total_old_to_young_sources);
+            gc.young_profile_total_old_to_young_edges = gc
+                .young_profile_total_old_to_young_edges
+                .saturating_add(run.gc.young_profile_total_old_to_young_edges);
         }
         gc.last_allocations_since_collect = run.gc.last_allocations_since_collect;
         gc.current_allocations_since_collect = run.gc.current_allocations_since_collect;
@@ -1314,6 +1375,46 @@ fn print_profile(profile: &ProfileBench, top: usize) {
         println!(
             "profile_gc_red_flip_opportunities: {}",
             profile.gc.red_flip_opportunities
+        );
+        println!(
+            "profile_gc_young_profile_last_slots: {}",
+            profile.gc.young_profile_last_slots
+        );
+        println!(
+            "profile_gc_young_profile_last_live: {}",
+            profile.gc.young_profile_last_live
+        );
+        println!(
+            "profile_gc_young_profile_last_dead: {}",
+            profile.gc.young_profile_last_dead
+        );
+        println!(
+            "profile_gc_young_profile_last_old_to_young_sources: {}",
+            profile.gc.young_profile_last_old_to_young_sources
+        );
+        println!(
+            "profile_gc_young_profile_last_old_to_young_edges: {}",
+            profile.gc.young_profile_last_old_to_young_edges
+        );
+        println!(
+            "profile_gc_young_profile_total_slots: {}",
+            profile.gc.young_profile_total_slots
+        );
+        println!(
+            "profile_gc_young_profile_total_live: {}",
+            profile.gc.young_profile_total_live
+        );
+        println!(
+            "profile_gc_young_profile_total_dead: {}",
+            profile.gc.young_profile_total_dead
+        );
+        println!(
+            "profile_gc_young_profile_total_old_to_young_sources: {}",
+            profile.gc.young_profile_total_old_to_young_sources
+        );
+        println!(
+            "profile_gc_young_profile_total_old_to_young_edges: {}",
+            profile.gc.young_profile_total_old_to_young_edges
         );
     }
     println!(
@@ -1828,7 +1929,7 @@ fn print_gc_events(label: &str, gc: &GcStats) {
     for event in &gc.events {
         #[cfg(feature = "gc-phase-profile")]
         println!(
-            "  collection={} pause_ms={:.3} mark_ms={:.3} sweep_ms={:.3} live_nodes={} free_nodes={} arena_nodes={} freed_nodes={} allocations_since_collect={}",
+            "  collection={} pause_ms={:.3} mark_ms={:.3} sweep_ms={:.3} live_nodes={} free_nodes={} arena_nodes={} freed_nodes={} allocations_since_collect={} young_slots={} young_live={} young_dead={} old_to_young_sources={} old_to_young_edges={}",
             event.collection,
             nanos_millis(event.pause_nanos),
             nanos_millis(event.mark_nanos),
@@ -1837,7 +1938,12 @@ fn print_gc_events(label: &str, gc: &GcStats) {
             event.free_nodes,
             event.arena_nodes,
             event.freed_nodes,
-            event.allocations_since_collect
+            event.allocations_since_collect,
+            event.young_profile_slots,
+            event.young_profile_live,
+            event.young_profile_dead,
+            event.young_profile_old_to_young_sources,
+            event.young_profile_old_to_young_edges
         );
         #[cfg(not(feature = "gc-phase-profile"))]
         println!(

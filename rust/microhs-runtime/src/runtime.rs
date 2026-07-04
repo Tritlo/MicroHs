@@ -1345,6 +1345,28 @@ pub struct Program {
     gc_red_ccbbcp_opportunities: usize,
     #[cfg(feature = "gc-phase-profile")]
     gc_red_flip_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_young_profile_allocated_slots: Vec<NodeId>,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_young_profile_last_slots: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_young_profile_last_live: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_young_profile_last_dead: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_young_profile_last_old_to_young_sources: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_young_profile_last_old_to_young_edges: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_young_profile_total_slots: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_young_profile_total_live: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_young_profile_total_dead: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_young_profile_total_old_to_young_sources: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_young_profile_total_old_to_young_edges: usize,
     gc_marked: Vec<bool>,
     gc_mark_work: Vec<NodeId>,
     gc_foreign_finalizer_marked: Vec<bool>,
@@ -1412,6 +1434,26 @@ pub struct GcStats {
     pub red_ccbbcp_opportunities: usize,
     #[cfg(feature = "gc-phase-profile")]
     pub red_flip_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub young_profile_last_slots: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub young_profile_last_live: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub young_profile_last_dead: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub young_profile_last_old_to_young_sources: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub young_profile_last_old_to_young_edges: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub young_profile_total_slots: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub young_profile_total_live: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub young_profile_total_dead: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub young_profile_total_old_to_young_sources: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub young_profile_total_old_to_young_edges: usize,
     pub last_allocations_since_collect: usize,
     pub current_allocations_since_collect: usize,
     pub events: Vec<GcEventStats>,
@@ -1430,6 +1472,16 @@ pub struct GcEventStats {
     pub arena_nodes: usize,
     pub freed_nodes: usize,
     pub allocations_since_collect: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub young_profile_slots: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub young_profile_live: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub young_profile_dead: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub young_profile_old_to_young_sources: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub young_profile_old_to_young_edges: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -2534,6 +2586,8 @@ impl EvalStack {
     }
 
     fn arg_from_app(nodes: &[Cell], app: NodeId) -> NodeId {
+        debug_assert!(app.index() < nodes.len());
+        debug_assert_eq!(nodes[app.index()].tag(), CellTag::App);
         unsafe { nodes.get_unchecked(app.index()).id_word1() }
     }
 
@@ -2918,6 +2972,28 @@ impl Program {
             gc_red_ccbbcp_opportunities: 0,
             #[cfg(feature = "gc-phase-profile")]
             gc_red_flip_opportunities: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_young_profile_allocated_slots: Vec::new(),
+            #[cfg(feature = "gc-phase-profile")]
+            gc_young_profile_last_slots: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_young_profile_last_live: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_young_profile_last_dead: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_young_profile_last_old_to_young_sources: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_young_profile_last_old_to_young_edges: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_young_profile_total_slots: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_young_profile_total_live: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_young_profile_total_dead: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_young_profile_total_old_to_young_sources: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_young_profile_total_old_to_young_edges: 0,
             gc_marked: Vec::new(),
             gc_mark_work: Vec::new(),
             gc_foreign_finalizer_marked: Vec::new(),
@@ -3014,6 +3090,11 @@ impl Program {
         id
     }
 
+    #[cfg(feature = "gc-phase-profile")]
+    fn gc_profile_record_allocated_slot(&mut self, id: NodeId) {
+        self.gc_young_profile_allocated_slots.push(id);
+    }
+
     fn push_node_fresh(&mut self, node: Node) -> NodeId {
         let cell = Cell::from_node(node, &mut self.cold_nodes);
         self.push_cell(cell)
@@ -3104,9 +3185,15 @@ impl Program {
         self.gc_allocations_since_collect = self.gc_allocations_since_collect.saturating_add(1);
         if let Some(index) = self.pop_free_node() {
             self.set_node_at(index, node);
-            NodeId::from_index(index)
+            let id = NodeId::from_index(index);
+            #[cfg(feature = "gc-phase-profile")]
+            self.gc_profile_record_allocated_slot(id);
+            id
         } else {
-            self.push_node_fresh(node)
+            let id = self.push_node_fresh(node);
+            #[cfg(feature = "gc-phase-profile")]
+            self.gc_profile_record_allocated_slot(id);
+            id
         }
     }
 
@@ -3134,6 +3221,9 @@ impl Program {
             #[cfg(feature = "eval-phase-profile")]
             let write_started = profiling.then(Instant::now);
             self.set_free_cell_at(index, Cell::app(fun, arg));
+            let id = NodeId::from_index(index);
+            #[cfg(feature = "gc-phase-profile")]
+            self.gc_profile_record_allocated_slot(id);
             #[cfg(feature = "eval-phase-profile")]
             if let Some(started) = write_started {
                 if let Some(profile) = self.profile.as_mut() {
@@ -3142,7 +3232,7 @@ impl Program {
                         .saturating_add(started.elapsed().as_nanos());
                 }
             }
-            NodeId::from_index(index)
+            id
         } else {
             #[cfg(feature = "eval-phase-profile")]
             if let Some(profile) = self.profile.as_mut() {
@@ -3151,6 +3241,8 @@ impl Program {
             #[cfg(feature = "eval-phase-profile")]
             let push_started = profiling.then(Instant::now);
             let id = self.push_cell(Cell::app(fun, arg));
+            #[cfg(feature = "gc-phase-profile")]
+            self.gc_profile_record_allocated_slot(id);
             #[cfg(feature = "eval-phase-profile")]
             if let Some(started) = push_started {
                 if let Some(profile) = self.profile.as_mut() {
@@ -3202,6 +3294,28 @@ impl Program {
             red_ccbbcp_opportunities: self.gc_red_ccbbcp_opportunities,
             #[cfg(feature = "gc-phase-profile")]
             red_flip_opportunities: self.gc_red_flip_opportunities,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_last_slots: self.gc_young_profile_last_slots,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_last_live: self.gc_young_profile_last_live,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_last_dead: self.gc_young_profile_last_dead,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_last_old_to_young_sources: self
+                .gc_young_profile_last_old_to_young_sources,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_last_old_to_young_edges: self.gc_young_profile_last_old_to_young_edges,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_total_slots: self.gc_young_profile_total_slots,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_total_live: self.gc_young_profile_total_live,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_total_dead: self.gc_young_profile_total_dead,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_total_old_to_young_sources: self
+                .gc_young_profile_total_old_to_young_sources,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_total_old_to_young_edges: self.gc_young_profile_total_old_to_young_edges,
             last_allocations_since_collect: self.gc_last_allocations_since_collect,
             current_allocations_since_collect: self.gc_allocations_since_collect,
             events: self.gc_events.clone(),
@@ -3232,6 +3346,106 @@ impl Program {
         if let Some(id) = self.node_pointer_target(ptr) {
             Self::mark_node_id(marked, work, id);
         }
+    }
+
+    #[cfg(feature = "gc-phase-profile")]
+    fn gc_profile_young_edge(young: &[bool], id: NodeId) -> usize {
+        young.get(id.index()).copied().unwrap_or(false) as usize
+    }
+
+    #[cfg(feature = "gc-phase-profile")]
+    fn gc_profile_young_pointer_edge(&self, young: &[bool], ptr: i64) -> usize {
+        self.node_pointer_target(ptr)
+            .map(|id| Self::gc_profile_young_edge(young, id))
+            .unwrap_or(0)
+    }
+
+    #[cfg(feature = "gc-phase-profile")]
+    fn gc_profile_old_to_young_edges_for_cell(
+        &self,
+        index: usize,
+        cell: Cell,
+        young: &[bool],
+    ) -> usize {
+        if let Some((fun, arg)) = cell.app_fields() {
+            return Self::gc_profile_young_edge(young, fun)
+                + Self::gc_profile_young_edge(young, arg);
+        }
+        match cell.tag() {
+            CellTag::Indir => cell
+                .option_id_word1()
+                .map(|id| Self::gc_profile_young_edge(young, id))
+                .unwrap_or(0),
+            CellTag::Ptr | CellTag::RawFunPtr => {
+                self.gc_profile_young_pointer_edge(young, cell.word1 as i64)
+            }
+            CellTag::Cold => match self.cold_node(NodeId::from_index(index)) {
+                Some(Node::ForeignPtr(foreign_ptr)) => {
+                    self.gc_profile_young_pointer_edge(young, foreign_ptr.ptr)
+                }
+                Some(Node::Weak(weak)) => {
+                    weak.value
+                        .map(|id| Self::gc_profile_young_edge(young, id))
+                        .unwrap_or(0)
+                        + weak
+                            .finalizer
+                            .map(|id| Self::gc_profile_young_edge(young, id))
+                            .unwrap_or(0)
+                }
+                Some(Node::BytesView(view)) => Self::gc_profile_young_edge(young, view.base),
+                Some(Node::MVar(Some(value))) => Self::gc_profile_young_edge(young, *value),
+                Some(Node::Array(items)) => items
+                    .iter()
+                    .map(|id| Self::gc_profile_young_edge(young, *id))
+                    .sum(),
+                _ => 0,
+            },
+            CellTag::App
+            | CellTag::Free
+            | CellTag::KnownPrim
+            | CellTag::RuntimePrim
+            | CellTag::Int
+            | CellTag::Int64
+            | CellTag::Float64
+            | CellTag::Float32
+            | CellTag::ThreadId => 0,
+        }
+    }
+
+    #[cfg(feature = "gc-phase-profile")]
+    fn gc_profile_young_candidate_stats(
+        &self,
+        marked: &[bool],
+    ) -> (usize, usize, usize, usize, usize) {
+        let slots = self.gc_young_profile_allocated_slots.len();
+        let mut young = vec![false; marked.len()];
+        for id in self.gc_young_profile_allocated_slots.iter().copied() {
+            if let Some(slot) = young.get_mut(id.index()) {
+                *slot = true;
+            }
+        }
+
+        let live = self
+            .gc_young_profile_allocated_slots
+            .iter()
+            .filter(|id| marked.get(id.index()).copied().unwrap_or(false))
+            .count();
+        let dead = slots.saturating_sub(live);
+        let mut old_to_young_sources = 0usize;
+        let mut old_to_young_edges = 0usize;
+        for (index, cell) in self.nodes.iter().copied().enumerate() {
+            if !marked.get(index).copied().unwrap_or(false)
+                || young.get(index).copied().unwrap_or(false)
+            {
+                continue;
+            }
+            let edges = self.gc_profile_old_to_young_edges_for_cell(index, cell, &young);
+            if edges != 0 {
+                old_to_young_sources += 1;
+                old_to_young_edges += edges;
+            }
+        }
+        (slots, live, dead, old_to_young_sources, old_to_young_edges)
     }
 
     fn mark_strict_redex(marked: &mut [bool], work: &mut Vec<NodeId>, redex: &StrictRedex) {
@@ -3799,6 +4013,14 @@ impl Program {
         self.labels
             .retain(|_, id| marked.get(id.index()).copied().unwrap_or(false));
         self.run_dead_foreign_finalizers(&foreign_finalizer_marked)?;
+        #[cfg(feature = "gc-phase-profile")]
+        let (
+            young_profile_slots,
+            young_profile_live,
+            young_profile_dead,
+            young_profile_old_to_young_sources,
+            young_profile_old_to_young_edges,
+        ) = self.gc_profile_young_candidate_stats(&marked);
 
         #[cfg(feature = "gc-phase-profile")]
         let sweep_started = Instant::now();
@@ -3832,6 +4054,26 @@ impl Program {
             self.gc_total_mark_nanos = self.gc_total_mark_nanos.saturating_add(mark_nanos);
             self.gc_last_sweep_nanos = sweep_nanos;
             self.gc_total_sweep_nanos = self.gc_total_sweep_nanos.saturating_add(sweep_nanos);
+            self.gc_young_profile_last_slots = young_profile_slots;
+            self.gc_young_profile_last_live = young_profile_live;
+            self.gc_young_profile_last_dead = young_profile_dead;
+            self.gc_young_profile_last_old_to_young_sources = young_profile_old_to_young_sources;
+            self.gc_young_profile_last_old_to_young_edges = young_profile_old_to_young_edges;
+            self.gc_young_profile_total_slots = self
+                .gc_young_profile_total_slots
+                .saturating_add(young_profile_slots);
+            self.gc_young_profile_total_live = self
+                .gc_young_profile_total_live
+                .saturating_add(young_profile_live);
+            self.gc_young_profile_total_dead = self
+                .gc_young_profile_total_dead
+                .saturating_add(young_profile_dead);
+            self.gc_young_profile_total_old_to_young_sources = self
+                .gc_young_profile_total_old_to_young_sources
+                .saturating_add(young_profile_old_to_young_sources);
+            self.gc_young_profile_total_old_to_young_edges = self
+                .gc_young_profile_total_old_to_young_edges
+                .saturating_add(young_profile_old_to_young_edges);
         }
         self.gc_last_allocations_since_collect = allocations_since_collect;
         self.gc_allocations_since_collect = 0;
@@ -3847,7 +4089,19 @@ impl Program {
             arena_nodes: self.nodes.len(),
             freed_nodes: freed,
             allocations_since_collect,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_slots,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_live,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_dead,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_old_to_young_sources,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_old_to_young_edges,
         });
+        #[cfg(feature = "gc-phase-profile")]
+        self.gc_young_profile_allocated_slots.clear();
         Ok(freed)
     }
 
