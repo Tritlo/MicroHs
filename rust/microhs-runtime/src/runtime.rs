@@ -7796,22 +7796,8 @@ impl Program {
 
     #[inline]
     fn app(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
-        #[cfg(feature = "eval-phase-profile")]
-        let profile_started = self.profile.is_some().then(Instant::now);
-        if let Some(profile) = self.profile.as_mut() {
-            profile.app_allocations += 1;
-            *profile
-                .node_allocations
-                .entry(node_allocation_key(&Node::App(fun, arg)).to_owned())
-                .or_default() += 1;
-            *profile
-                .app_allocation_sites
-                .entry("<generic app()>".to_owned())
-                .or_default() += 1;
-        }
-        #[cfg(feature = "eval-phase-profile")]
-        if let Some(started) = profile_started {
-            self.profile_app_alloc_bookkeeping_time(started.elapsed().as_nanos());
+        if self.profile.is_some() {
+            self.app_alloc_bookkeeping_cold("<generic app()>", fun, arg);
         }
         #[cfg(feature = "eval-phase-profile")]
         let started = self.profile.is_some().then(Instant::now);
@@ -7827,6 +7813,24 @@ impl Program {
 
     #[inline]
     fn app_with_site(&mut self, key: &'static str, fun: NodeId, arg: NodeId) -> NodeId {
+        if self.profile.is_some() {
+            self.app_alloc_bookkeeping_cold(key, fun, arg);
+        }
+        #[cfg(feature = "eval-phase-profile")]
+        let started = self.profile.is_some().then(Instant::now);
+        let node = self.push_app_node(fun, arg);
+        #[cfg(feature = "eval-phase-profile")]
+        if let Some(started) = started {
+            let nanos = started.elapsed().as_nanos();
+            self.profile_stack_app_alloc_time(nanos);
+            self.profile_stack_app_alloc_site_time(key, nanos);
+        }
+        node
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn app_alloc_bookkeeping_cold(&mut self, key: &'static str, fun: NodeId, arg: NodeId) {
         #[cfg(feature = "eval-phase-profile")]
         let profile_started = self.profile.is_some().then(Instant::now);
         if let Some(profile) = self.profile.as_mut() {
@@ -7844,16 +7848,6 @@ impl Program {
         if let Some(started) = profile_started {
             self.profile_app_alloc_bookkeeping_time(started.elapsed().as_nanos());
         }
-        #[cfg(feature = "eval-phase-profile")]
-        let started = self.profile.is_some().then(Instant::now);
-        let node = self.push_app_node(fun, arg);
-        #[cfg(feature = "eval-phase-profile")]
-        if let Some(started) = started {
-            let nanos = started.elapsed().as_nanos();
-            self.profile_stack_app_alloc_time(nanos);
-            self.profile_stack_app_alloc_site_time(key, nanos);
-        }
-        node
     }
 
     fn prim(&mut self, name: &str) -> NodeId {
