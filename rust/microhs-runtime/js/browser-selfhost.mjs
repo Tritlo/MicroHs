@@ -40,6 +40,10 @@ async function main() {
 
 async function runRustSelfHost(input, referenceSha) {
   const runtime = await instantiateMicroHsRuntime(rustWasm);
+  runtime.hostMkdirp("/tmp");
+  await preloadRuntimeDirectory(runtime, path.join(repo, "mhs"), "/mhs");
+  await preloadRuntimeDirectory(runtime, path.join(repo, "src"), "/src");
+  await preloadRuntimeDirectory(runtime, path.join(repo, "lib"), "/lib");
   const handle = runtime.newProgram(input);
   try {
     runtime.setArgs(handle, compilerArgs);
@@ -53,10 +57,12 @@ async function runRustSelfHost(input, referenceSha) {
     if (status !== 0) {
       const message = runtime.resultText().trim();
       console.log(`  error: ${message || "<no message>"}`);
-      console.log("  note: wasm32-unknown-unknown still uses browser ENOSYS host-file/env stubs");
     } else {
-      console.log(`  reference_sha256: ${referenceSha}`);
-      console.log("  note: output capture is not available until browser filesystem writes are implemented");
+      const output = runtime.hostReadFile("/tmp/browser-selfhost-out.comb");
+      const outputSha = sha256(output);
+      console.log(`  output_bytes: ${output.length}`);
+      console.log(`  output_sha256: ${outputSha}`);
+      console.log(`  byte_match: ${outputSha === referenceSha}`);
     }
   } finally {
     runtime.freeProgram(handle);
@@ -135,6 +141,24 @@ async function preloadDirectory(fs, localRoot, wasmRoot) {
       const info = await stat(local).catch(() => null);
       if (info?.isFile()) {
         fs.writeFile(wasm, await readFile(local));
+      }
+    }
+  }
+}
+
+async function preloadRuntimeDirectory(runtime, localRoot, wasmRoot) {
+  runtime.hostMkdirp(wasmRoot);
+  for (const entry of await readdir(localRoot, { withFileTypes: true })) {
+    const local = path.join(localRoot, entry.name);
+    const wasm = `${wasmRoot}/${entry.name}`;
+    if (entry.isDirectory()) {
+      await preloadRuntimeDirectory(runtime, local, wasm);
+    } else if (entry.isFile()) {
+      runtime.hostWriteFile(wasm, await readFile(local));
+    } else if (entry.isSymbolicLink()) {
+      const info = await stat(local).catch(() => null);
+      if (info?.isFile()) {
+        runtime.hostWriteFile(wasm, await readFile(local));
       }
     }
   }

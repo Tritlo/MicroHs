@@ -2,7 +2,33 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::mem::{MaybeUninit, size_of};
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 use std::time::Instant;
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+#[derive(Clone, Copy)]
+struct Instant;
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+impl Instant {
+    fn now() -> Self {
+        Self
+    }
+
+    fn elapsed(self) -> BrowserDuration {
+        BrowserDuration
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+struct BrowserDuration;
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+impl BrowserDuration {
+    fn as_nanos(&self) -> u128 {
+        0
+    }
+}
 
 macro_rules! trace_invalid_bytes {
     ($program:expr, $($arg:tt)*) => {{
@@ -1090,7 +1116,10 @@ const SMALL_INT_COUNT: usize = (SMALL_INT_MAX - SMALL_INT_MIN + 1) as usize;
 const IGNORED_IO_SHORTCUT_RECURSION_LIMIT: usize = 256;
 const UTF8_ASCII_REFILL: usize = 1024;
 const READ_ONLY_MEMORY_VIEW_MIN_LEN: usize = 8;
+#[cfg(not(target_os = "wasi"))]
 const GC_NODE_INTERVAL: usize = 32 * 1024 * 1024;
+#[cfg(target_os = "wasi")]
+const WASI_GC_NODE_INTERVAL: usize = 500_000;
 
 #[derive(Clone, Debug)]
 struct BFile {
@@ -1111,9 +1140,14 @@ enum BFileKind {
         len: usize,
         pos: usize,
     },
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
     NativeFile {
         file: NativeFileHandle,
+        ungot: Vec<u8>,
+    },
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    BrowserFile {
+        handle: i64,
         ungot: Vec<u8>,
     },
     Utf8 {
@@ -1176,7 +1210,7 @@ enum BFileKind {
     },
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 type NativeFileHandle = std::rc::Rc<std::cell::RefCell<std::fs::File>>;
 
 #[derive(Clone, Debug)]
@@ -1185,7 +1219,7 @@ struct DirHandle {
     pos: usize,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(all(target_arch = "wasm32", not(target_os = "wasi")), allow(dead_code))]
 #[derive(Clone, Copy, Debug)]
 struct NativeFileMode {
     readable: bool,
@@ -1290,7 +1324,10 @@ impl fmt::Display for EvalError {
 
 impl std::error::Error for EvalError {}
 
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[cfg_attr(
+    not(all(target_arch = "wasm32", not(target_os = "wasi"))),
+    allow(dead_code)
+)]
 enum JsArg {
     Int(i32),
     UInt(u32),
@@ -3012,10 +3049,14 @@ impl ConversionFrameKind {
 
 impl Program {
     pub fn new(nodes: Vec<Node>, root: NodeId, labels: HashMap<usize, NodeId>) -> Self {
+        #[cfg(target_os = "wasi")]
+        let default_gc_node_interval = WASI_GC_NODE_INTERVAL;
+        #[cfg(not(target_os = "wasi"))]
+        let default_gc_node_interval = GC_NODE_INTERVAL;
         let gc_node_interval = std::env::var("MHS_GC_NODE_INTERVAL")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(GC_NODE_INTERVAL);
+            .unwrap_or(default_gc_node_interval);
         let high_water_nodes = nodes.len();
         let mut cold_nodes = Vec::new();
         let nodes = nodes
@@ -13393,7 +13434,7 @@ impl Program {
         }
         let slot = self.bfiles.get_mut(slot).ok_or(EvalError::InvalidHandle)?;
         let _bfile = slot.as_ref().ok_or(EvalError::InvalidHandle)?;
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
         if let BFileKind::NativeFile { file, .. } = &_bfile.kind {
             use std::io::Write as _;
 
@@ -13401,6 +13442,19 @@ impl Program {
                 file.borrow_mut()
                     .flush()
                     .map_err(|_| EvalError::InvalidHandle)?;
+            }
+        }
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+        if let BFileKind::BrowserFile { handle, .. } = &_bfile.kind {
+            if _bfile.writable {
+                let rc = unsafe { mhs_host_file_flush(*handle) };
+                if rc < 0 {
+                    return Err(EvalError::InvalidHandle);
+                }
+            }
+            let rc = unsafe { mhs_host_file_close(*handle) };
+            if rc < 0 {
+                return Err(EvalError::InvalidHandle);
             }
         }
         *slot = None;
@@ -13581,7 +13635,7 @@ impl Program {
             return self.flush_bfile(inner);
         }
         let _bfile = self.bfile(ptr)?;
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
         if let BFileKind::NativeFile { file, .. } = &_bfile.kind {
             use std::io::Write as _;
 
@@ -13589,6 +13643,15 @@ impl Program {
                 file.borrow_mut()
                     .flush()
                     .map_err(|_| EvalError::InvalidHandle)?;
+            }
+        }
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+        if let BFileKind::BrowserFile { handle, .. } = &_bfile.kind {
+            if _bfile.writable {
+                let rc = unsafe { mhs_host_file_flush(*handle) };
+                if rc < 0 {
+                    return Err(EvalError::InvalidHandle);
+                }
             }
         }
         Ok(())
@@ -13666,18 +13729,35 @@ impl Program {
                 Ok(i64::from(byte))
             }
             BFileKind::ReadOnlyMemoryView { .. } => unreachable!("handled above"),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
             BFileKind::NativeFile { file, ungot } => {
                 if let Some(byte) = ungot.pop() {
                     return Ok(i64::from(byte));
                 }
                 use std::io::Read as _;
 
+                #[cfg(target_os = "wasi")]
+                wasi_trace_every("getb_native", 8192);
                 let mut byte = [0];
                 match file.borrow_mut().read(&mut byte) {
                     Ok(0) => Ok(-1),
                     Ok(_) => Ok(i64::from(byte[0])),
                     Err(_) => Err(EvalError::InvalidHandle),
+                }
+            }
+            #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+            BFileKind::BrowserFile { handle, ungot } => {
+                if let Some(byte) = ungot.pop() {
+                    return Ok(i64::from(byte));
+                }
+                let mut byte = [0];
+                let read = unsafe { mhs_host_file_read(*handle, byte.as_mut_ptr(), 1) };
+                if read < 0 {
+                    Err(EvalError::InvalidHandle)
+                } else if read == 0 {
+                    Ok(-1)
+                } else {
+                    Ok(i64::from(byte[0]))
                 }
             }
             BFileKind::Utf8 { .. } => unreachable!("handled above"),
@@ -14028,8 +14108,13 @@ impl Program {
                 Ok(())
             }
             BFileKind::ReadOnlyMemoryView { .. } => unreachable!("handled above"),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
             BFileKind::NativeFile { ungot, .. } => {
+                ungot.push(byte as u8);
+                Ok(())
+            }
+            #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+            BFileKind::BrowserFile { ungot, .. } => {
                 ungot.push(byte as u8);
                 Ok(())
             }
@@ -14135,13 +14220,25 @@ impl Program {
             BFileKind::ReadOnlyMemoryView { .. } => {
                 unreachable!("read-only handle is not writable")
             }
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
             BFileKind::NativeFile { file, .. } => {
                 use std::io::Write as _;
 
+                #[cfg(target_os = "wasi")]
+                wasi_trace_every("putb_native", 8192);
                 file.borrow_mut()
                     .write_all(&[byte as u8])
                     .map_err(|_| EvalError::InvalidHandle)
+            }
+            #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+            BFileKind::BrowserFile { handle, .. } => {
+                let byte = [byte as u8];
+                let written = unsafe { mhs_host_file_write(*handle, byte.as_ptr(), 1) };
+                if written == 1 {
+                    Ok(())
+                } else {
+                    Err(EvalError::InvalidHandle)
+                }
             }
             BFileKind::Utf8 { .. } => unreachable!("handled above"),
             BFileKind::Crlf { .. } => unreachable!("handled above"),
@@ -14378,7 +14475,7 @@ impl Program {
             if handle != StdHandle::Stdin {
                 return Err(EvalError::InvalidHandle);
             }
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
             {
                 use std::io::Read as _;
 
@@ -14390,7 +14487,7 @@ impl Program {
                 bytes.truncate(read);
                 return Ok(bytes);
             }
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
             {
                 return Ok(Vec::new());
             }
@@ -14438,10 +14535,12 @@ impl Program {
                 Ok(out)
             }
             BFileKind::ReadOnlyMemoryView { .. } => unreachable!("handled above"),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
             BFileKind::NativeFile { file, ungot } => {
                 use std::io::Read as _;
 
+                #[cfg(target_os = "wasi")]
+                wasi_trace_host("readb_native", &format!("len={len}"));
                 let mut bytes = vec![0; len];
                 let mut read = 0;
                 while read < len {
@@ -14456,6 +14555,29 @@ impl Program {
                         .borrow_mut()
                         .read(&mut bytes[read..])
                         .map_err(|_| EvalError::InvalidHandle)?;
+                }
+                bytes.truncate(read);
+                Ok(bytes)
+            }
+            #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+            BFileKind::BrowserFile { handle, ungot } => {
+                let mut bytes = vec![0; len];
+                let mut read = 0;
+                while read < len {
+                    let Some(byte) = ungot.pop() else {
+                        break;
+                    };
+                    bytes[read] = byte;
+                    read += 1;
+                }
+                if read < len {
+                    let host_read = unsafe {
+                        mhs_host_file_read(*handle, bytes[read..].as_mut_ptr(), len - read)
+                    };
+                    if host_read < 0 {
+                        return Err(EvalError::InvalidHandle);
+                    }
+                    read += usize::try_from(host_read).map_err(|_| EvalError::Overflow)?;
                 }
                 bytes.truncate(read);
                 Ok(bytes)
@@ -14556,13 +14678,22 @@ impl Program {
             BFileKind::ReadOnlyMemoryView { .. } => {
                 unreachable!("read-only handle is not writable")
             }
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
             BFileKind::NativeFile { file, .. } => {
                 use std::io::Write as _;
 
+                #[cfg(target_os = "wasi")]
+                wasi_trace_host("writeb_native", &format!("len={}", bytes.len()));
                 file.borrow_mut()
                     .write_all(bytes)
                     .map_err(|_| EvalError::InvalidHandle)?;
+            }
+            #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+            BFileKind::BrowserFile { handle, .. } => {
+                let written = unsafe { mhs_host_file_write(*handle, bytes.as_ptr(), bytes.len()) };
+                if written < 0 || usize::try_from(written).ok() != Some(bytes.len()) {
+                    return Err(EvalError::InvalidHandle);
+                }
             }
             BFileKind::Utf8 { .. }
             | BFileKind::Crlf { .. }
@@ -14623,8 +14754,10 @@ impl Program {
         match &bfile.kind {
             BFileKind::Memory { bytes, pos } => Ok(bytes[..*pos].to_vec()),
             BFileKind::ReadOnlyMemoryView { .. } => Err(EvalError::InvalidHandle),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
             BFileKind::NativeFile { .. } => Err(EvalError::InvalidHandle),
+            #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+            BFileKind::BrowserFile { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Utf8 { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Crlf { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Rle { .. } => Err(EvalError::InvalidHandle),
@@ -14844,8 +14977,10 @@ impl Program {
         let inner = self.bfile(inner)?;
         match &inner.kind {
             BFileKind::Memory { .. } | BFileKind::ReadOnlyMemoryView { .. } => Ok(true),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
             BFileKind::NativeFile { .. } => Ok(true),
+            #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+            BFileKind::BrowserFile { .. } => Ok(true),
             _ => Ok(false),
         }
     }
@@ -14878,7 +15013,7 @@ impl Program {
         if handle == StdHandle::Stdin {
             return Err(EvalError::InvalidHandle);
         }
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
         {
             use std::io::Write as _;
 
@@ -14898,7 +15033,7 @@ impl Program {
                 StdHandle::Stdin => unreachable!("checked above"),
             }
         }
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
         {
             let _ = bytes;
         }
@@ -14909,7 +15044,7 @@ impl Program {
         if handle == StdHandle::Stdin {
             return Ok(());
         }
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
         {
             use std::io::Write as _;
 
@@ -14929,7 +15064,7 @@ impl Program {
     }
 
     fn read_stdin_byte(&self) -> Result<i64, EvalError> {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
         {
             use std::io::Read as _;
 
@@ -14940,7 +15075,7 @@ impl Program {
                 Err(_) => Err(EvalError::InvalidHandle),
             }
         }
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
         {
             Ok(-1)
         }
@@ -16919,7 +17054,7 @@ fn validate_js_tags(tags: &[u8]) -> Result<(), EvalError> {
 }
 
 fn host_js_debug(bytes: &[u8]) -> Result<(), EvalError> {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let bytes = nul_terminated(bytes)?;
         unsafe {
@@ -16927,7 +17062,7 @@ fn host_js_debug(bytes: &[u8]) -> Result<(), EvalError> {
         }
         Ok(())
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     {
         let _ = bytes;
         Err(EvalError::UnsupportedJsFfi)
@@ -16935,7 +17070,7 @@ fn host_js_debug(bytes: &[u8]) -> Result<(), EvalError> {
 }
 
 fn host_js_eval_run(bytes: &[u8]) -> Result<(), EvalError> {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let bytes = nul_terminated(bytes)?;
         unsafe {
@@ -16943,7 +17078,7 @@ fn host_js_eval_run(bytes: &[u8]) -> Result<(), EvalError> {
         }
         Ok(())
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     {
         let _ = bytes;
         Err(EvalError::UnsupportedJsFfi)
@@ -16951,7 +17086,7 @@ fn host_js_eval_run(bytes: &[u8]) -> Result<(), EvalError> {
 }
 
 fn host_js_eval_call(bytes: &[u8]) -> Result<Vec<u8>, EvalError> {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let bytes = nul_terminated(bytes)?;
         unsafe {
@@ -16959,7 +17094,7 @@ fn host_js_eval_call(bytes: &[u8]) -> Result<Vec<u8>, EvalError> {
             copy_host_c_string(ptr)
         }
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     {
         let _ = bytes;
         Err(EvalError::UnsupportedJsFfi)
@@ -16967,14 +17102,14 @@ fn host_js_eval_call(bytes: &[u8]) -> Result<Vec<u8>, EvalError> {
 }
 
 fn host_js_set_haskell_callback(callback: i32) -> Result<(), EvalError> {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         unsafe {
             mhs_js_set_haskellCallback(callback);
         }
         Ok(())
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     {
         let _ = callback;
         Err(EvalError::UnsupportedJsFfi)
@@ -16982,7 +17117,7 @@ fn host_js_set_haskell_callback(callback: i32) -> Result<(), EvalError> {
 }
 
 fn host_js_call_void(body: &[u8], arity: usize, args: &[JsArg]) -> Result<(), EvalError> {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
         unsafe {
@@ -16990,7 +17125,7 @@ fn host_js_call_void(body: &[u8], arity: usize, args: &[JsArg]) -> Result<(), Ev
         }
         host_js_check_error()
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     {
         let _ = (body, arity, args);
         Err(EvalError::UnsupportedJsFfi)
@@ -16998,14 +17133,14 @@ fn host_js_call_void(body: &[u8], arity: usize, args: &[JsArg]) -> Result<(), Ev
 }
 
 fn host_js_call_int(body: &[u8], arity: usize, args: &[JsArg]) -> Result<i32, EvalError> {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
         let result = unsafe { mhs_js_call_int(idx) };
         host_js_check_error()?;
         Ok(result)
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     {
         let _ = (body, arity, args);
         Err(EvalError::UnsupportedJsFfi)
@@ -17013,14 +17148,14 @@ fn host_js_call_int(body: &[u8], arity: usize, args: &[JsArg]) -> Result<i32, Ev
 }
 
 fn host_js_call_uint(body: &[u8], arity: usize, args: &[JsArg]) -> Result<u32, EvalError> {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
         let result = unsafe { mhs_js_call_uint(idx) };
         host_js_check_error()?;
         Ok(result)
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     {
         let _ = (body, arity, args);
         Err(EvalError::UnsupportedJsFfi)
@@ -17028,14 +17163,14 @@ fn host_js_call_uint(body: &[u8], arity: usize, args: &[JsArg]) -> Result<u32, E
 }
 
 fn host_js_call_double(body: &[u8], arity: usize, args: &[JsArg]) -> Result<f64, EvalError> {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
         let result = unsafe { mhs_js_call_dbl(idx) };
         host_js_check_error()?;
         Ok(result)
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     {
         let _ = (body, arity, args);
         Err(EvalError::UnsupportedJsFfi)
@@ -17043,14 +17178,14 @@ fn host_js_call_double(body: &[u8], arity: usize, args: &[JsArg]) -> Result<f64,
 }
 
 fn host_js_call_ptr(body: &[u8], arity: usize, args: &[JsArg]) -> Result<u32, EvalError> {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
         let result = unsafe { mhs_js_call_ptr(idx) };
         host_js_check_error()?;
         Ok(result)
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     {
         let _ = (body, arity, args);
         Err(EvalError::UnsupportedJsFfi)
@@ -17058,14 +17193,14 @@ fn host_js_call_ptr(body: &[u8], arity: usize, args: &[JsArg]) -> Result<u32, Ev
 }
 
 fn host_js_call_object(body: &[u8], arity: usize, args: &[JsArg]) -> Result<u32, EvalError> {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
         let result = unsafe { mhs_js_call_obj(idx) };
         host_js_check_error()?;
         Ok(result)
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     {
         let _ = (body, arity, args);
         Err(EvalError::UnsupportedJsFfi)
@@ -17073,14 +17208,14 @@ fn host_js_call_object(body: &[u8], arity: usize, args: &[JsArg]) -> Result<u32,
 }
 
 fn host_js_call_bool(body: &[u8], arity: usize, args: &[JsArg]) -> Result<bool, EvalError> {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
         let result = unsafe { mhs_js_call_bool(idx) != 0 };
         host_js_check_error()?;
         Ok(result)
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     {
         let _ = (body, arity, args);
         Err(EvalError::UnsupportedJsFfi)
@@ -17088,7 +17223,7 @@ fn host_js_call_bool(body: &[u8], arity: usize, args: &[JsArg]) -> Result<bool, 
 }
 
 fn host_js_call_string(body: &[u8], arity: usize, args: &[JsArg]) -> Result<Vec<u8>, EvalError> {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
         unsafe {
@@ -17099,7 +17234,7 @@ fn host_js_call_string(body: &[u8], arity: usize, args: &[JsArg]) -> Result<Vec<
             Ok(result)
         }
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     {
         let _ = (body, arity, args);
         Err(EvalError::UnsupportedJsFfi)
@@ -17111,21 +17246,21 @@ fn host_js_make_wrapper(
     stable_ptr: i64,
     wrapper_index: u32,
 ) -> Result<u32, EvalError> {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let stable_ptr = u32::try_from(stable_ptr).map_err(|_| EvalError::Overflow)?;
         let result = unsafe { mhs_js_make_wrapper(program_handle, stable_ptr, wrapper_index) };
         host_js_check_error()?;
         Ok(result)
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     {
         let _ = (program_handle, stable_ptr, wrapper_index);
         Err(EvalError::UnsupportedJsFfi)
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn host_js_prepare_call(body: &[u8], arity: usize, args: &[JsArg]) -> Result<i32, EvalError> {
     let body = nul_terminated(body)?;
     let arity = i32::try_from(arity).map_err(|_| EvalError::Overflow)?;
@@ -17149,7 +17284,7 @@ fn host_js_prepare_call(body: &[u8], arity: usize, args: &[JsArg]) -> Result<i32
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn host_js_check_error() -> Result<(), EvalError> {
     unsafe {
         if mhs_js_haserr() != 0 {
@@ -17160,7 +17295,7 @@ fn host_js_check_error() -> Result<(), EvalError> {
     Ok(())
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn nul_terminated(bytes: &[u8]) -> Result<Vec<u8>, EvalError> {
     if bytes.contains(&0) {
         return Err(EvalError::InvalidByteString);
@@ -17171,7 +17306,7 @@ fn nul_terminated(bytes: &[u8]) -> Result<Vec<u8>, EvalError> {
     Ok(out)
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 unsafe fn copy_host_c_string(ptr: *const std::os::raw::c_char) -> Result<Vec<u8>, EvalError> {
     if ptr.is_null() {
         return Ok(Vec::new());
@@ -17179,7 +17314,7 @@ unsafe fn copy_host_c_string(ptr: *const std::os::raw::c_char) -> Result<Vec<u8>
     Ok(unsafe { std::ffi::CStr::from_ptr(ptr) }.to_bytes().to_vec())
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 unsafe fn copy_host_bytes(
     ptr: *const std::os::raw::c_char,
     len: usize,
@@ -17194,7 +17329,7 @@ unsafe fn copy_host_bytes(
     Ok(unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) }.to_vec())
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 unsafe extern "C" {
     fn mhs_js_debug(ptr: *const u8);
     fn mhs_js_eval_run(ptr: *const u8);
@@ -17834,6 +17969,41 @@ fn strerror_bytes(errno: i32) -> Vec<u8> {
         .into_bytes()
 }
 
+#[cfg(target_os = "wasi")]
+fn wasi_trace_enabled() -> bool {
+    std::env::var_os("MHS_WASI_TRACE").is_some()
+}
+
+#[cfg(target_os = "wasi")]
+fn wasi_trace_host(event: &str, detail: &str) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static COUNT: AtomicUsize = AtomicUsize::new(0);
+    if !wasi_trace_enabled() {
+        return;
+    }
+    let count = COUNT.fetch_add(1, Ordering::Relaxed);
+    if count < 256 {
+        eprintln!("wasi_host[{count}] {event} {detail}");
+    } else if count == 256 {
+        eprintln!("wasi_host trace capped");
+    }
+}
+
+#[cfg(target_os = "wasi")]
+fn wasi_trace_every(event: &str, interval: usize) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static COUNT: AtomicUsize = AtomicUsize::new(0);
+    if !wasi_trace_enabled() {
+        return;
+    }
+    let count = COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if count % interval == 0 {
+        eprintln!("wasi_host {event} count={count}");
+    }
+}
+
 #[cfg(all(
     any(target_os = "linux", target_os = "android"),
     not(target_arch = "wasm32")
@@ -18056,6 +18226,78 @@ fn errno_constant(name: &str) -> Option<i64> {
     ERRNO_NAMES.contains(&name).then_some(-1)
 }
 
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+unsafe extern "C" {
+    fn mhs_host_result_copy(dst: *mut u8, len: usize) -> usize;
+    fn mhs_host_getenv(name_ptr: *const u8, name_len: usize) -> isize;
+    fn mhs_host_setenv(
+        name_ptr: *const u8,
+        name_len: usize,
+        value_ptr: *const u8,
+        value_len: usize,
+        overwrite: i64,
+    ) -> i64;
+    fn mhs_host_unsetenv(name_ptr: *const u8, name_len: usize) -> i64;
+    fn mhs_host_environ() -> isize;
+    fn mhs_host_remove(path_ptr: *const u8, path_len: usize) -> i64;
+    fn mhs_host_chdir(path_ptr: *const u8, path_len: usize) -> i64;
+    fn mhs_host_mkdir(path_ptr: *const u8, path_len: usize, mode: i64) -> i64;
+    fn mhs_host_getcwd() -> isize;
+    fn mhs_host_tmpname(
+        pre_ptr: *const u8,
+        pre_len: usize,
+        suf_ptr: *const u8,
+        suf_len: usize,
+    ) -> isize;
+    fn mhs_host_get_permissions(path_ptr: *const u8, path_len: usize) -> i64;
+    fn mhs_host_set_permissions(path_ptr: *const u8, path_len: usize, permissions: i64) -> i64;
+    fn mhs_host_dir_entries(path_ptr: *const u8, path_len: usize) -> isize;
+    fn mhs_host_file_open(
+        path_ptr: *const u8,
+        path_len: usize,
+        mode_ptr: *const u8,
+        mode_len: usize,
+    ) -> i64;
+    fn mhs_host_file_read(handle: i64, dst: *mut u8, len: usize) -> isize;
+    fn mhs_host_file_write(handle: i64, src: *const u8, len: usize) -> isize;
+    fn mhs_host_file_flush(handle: i64) -> i64;
+    fn mhs_host_file_close(handle: i64) -> i64;
+}
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+fn host_result_i64(rc: i64) -> HostIntResult {
+    if rc < 0 {
+        HostIntResult::err((-rc) as i32)
+    } else {
+        HostIntResult::ok(rc)
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+fn host_result_usize(rc: isize) -> Result<usize, i32> {
+    if rc < 0 {
+        Err((-rc) as i32)
+    } else {
+        usize::try_from(rc).map_err(|_| errno_i32("EOVERFLOW"))
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+fn copy_host_result(len: usize) -> Vec<u8> {
+    let mut bytes = vec![0; len];
+    if len != 0 {
+        let copied = unsafe { mhs_host_result_copy(bytes.as_mut_ptr(), len) };
+        bytes.truncate(copied.min(len));
+    }
+    bytes
+}
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+fn host_bytes_result(rc: isize) -> Result<Vec<u8>, i32> {
+    let len = host_result_usize(rc)?;
+    Ok(copy_host_result(len))
+}
+
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
     use std::ffi::OsStr;
@@ -18064,14 +18306,20 @@ fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
     std::env::var_os(OsStr::from_bytes(name)).map(|value| value.into_vec())
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
-    let _ = name;
-    None
+    let len = unsafe { mhs_host_getenv(name.as_ptr(), name.len()) };
+    if len < 0 {
+        None
+    } else {
+        Some(copy_host_result(usize::try_from(len).ok()?))
+    }
 }
 
-#[cfg(not(any(unix, target_arch = "wasm32")))]
+#[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
+    #[cfg(target_os = "wasi")]
+    wasi_trace_host("getenv", &String::from_utf8_lossy(name));
     let name = std::str::from_utf8(name).ok()?;
     std::env::var_os(name).map(|value| value.to_string_lossy().into_owned().into_bytes())
 }
@@ -18095,14 +18343,30 @@ fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
     HostIntResult::ok(0)
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
-    let _ = (name, value, overwrite);
-    HostIntResult::err(errno_i32("ENOSYS"))
+    host_result_i64(unsafe {
+        mhs_host_setenv(
+            name.as_ptr(),
+            name.len(),
+            value.as_ptr(),
+            value.len(),
+            overwrite,
+        )
+    })
 }
 
-#[cfg(not(any(unix, target_arch = "wasm32")))]
+#[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
+    #[cfg(target_os = "wasi")]
+    wasi_trace_host(
+        "setenv",
+        &format!(
+            "name={} value_len={} overwrite={overwrite}",
+            String::from_utf8_lossy(name),
+            value.len()
+        ),
+    );
     if name.is_empty() || name.contains(&b'=') {
         return HostIntResult::err(errno_i32("EINVAL"));
     }
@@ -18135,14 +18399,15 @@ fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
     HostIntResult::ok(0)
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
-    let _ = name;
-    HostIntResult::err(errno_i32("ENOSYS"))
+    host_result_i64(unsafe { mhs_host_unsetenv(name.as_ptr(), name.len()) })
 }
 
-#[cfg(not(any(unix, target_arch = "wasm32")))]
+#[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
+    #[cfg(target_os = "wasi")]
+    wasi_trace_host("unsetenv", &String::from_utf8_lossy(name));
     if name.is_empty() || name.contains(&b'=') {
         return HostIntResult::err(errno_i32("EINVAL"));
     }
@@ -18170,12 +18435,19 @@ fn environ_bytes() -> Vec<Vec<u8>> {
         .collect()
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn environ_bytes() -> Vec<Vec<u8>> {
-    Vec::new()
+    let Ok(bytes) = host_bytes_result(unsafe { mhs_host_environ() }) else {
+        return Vec::new();
+    };
+    bytes
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(Vec::from)
+        .collect()
 }
 
-#[cfg(not(any(unix, target_arch = "wasm32")))]
+#[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 fn environ_bytes() -> Vec<Vec<u8>> {
     std::env::vars_os()
         .map(|(name, value)| {
@@ -18204,14 +18476,15 @@ fn remove_path_bytes(path: &[u8]) -> HostIntResult {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn remove_path_bytes(path: &[u8]) -> HostIntResult {
-    let _ = path;
-    HostIntResult::err(errno_i32("ENOSYS"))
+    host_result_i64(unsafe { mhs_host_remove(path.as_ptr(), path.len()) })
 }
 
-#[cfg(not(any(unix, target_arch = "wasm32")))]
+#[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 fn remove_path_bytes(path: &[u8]) -> HostIntResult {
+    #[cfg(target_os = "wasi")]
+    wasi_trace_host("remove", &String::from_utf8_lossy(path));
     let Ok(path) = std::str::from_utf8(path) else {
         return HostIntResult::err(errno_i32("EINVAL"));
     };
@@ -18281,14 +18554,15 @@ fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
-    let _ = path;
-    HostIntResult::err(errno_i32("ENOSYS"))
+    host_result_i64(unsafe { mhs_host_chdir(path.as_ptr(), path.len()) })
 }
 
-#[cfg(not(any(unix, target_arch = "wasm32")))]
+#[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
+    #[cfg(target_os = "wasi")]
+    wasi_trace_host("chdir", &String::from_utf8_lossy(path));
     let Ok(path) = std::str::from_utf8(path) else {
         return HostIntResult::err(errno_i32("EINVAL"));
     };
@@ -18314,14 +18588,18 @@ fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntResult {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntResult {
-    let _ = (path, mode);
-    HostIntResult::err(errno_i32("ENOSYS"))
+    host_result_i64(unsafe { mhs_host_mkdir(path.as_ptr(), path.len(), mode) })
 }
 
-#[cfg(not(any(unix, target_arch = "wasm32")))]
+#[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntResult {
+    #[cfg(target_os = "wasi")]
+    wasi_trace_host(
+        "mkdir",
+        &format!("path={} mode={mode}", String::from_utf8_lossy(path)),
+    );
     let _ = mode;
     let Ok(path) = std::str::from_utf8(path) else {
         return HostIntResult::err(errno_i32("EINVAL"));
@@ -18341,13 +18619,15 @@ fn current_dir_bytes() -> Result<Vec<u8>, i32> {
         .map_err(|err| io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT")))
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn current_dir_bytes() -> Result<Vec<u8>, i32> {
-    Err(errno_i32("ENOSYS"))
+    host_bytes_result(unsafe { mhs_host_getcwd() })
 }
 
-#[cfg(not(any(unix, target_arch = "wasm32")))]
+#[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 fn current_dir_bytes() -> Result<Vec<u8>, i32> {
+    #[cfg(target_os = "wasi")]
+    wasi_trace_host("getcwd", "");
     std::env::current_dir()
         .map(|path| path.to_string_lossy().into_owned().into_bytes())
         .map_err(|err| io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT")))
@@ -18362,13 +18642,15 @@ fn executable_path_bytes() -> Result<Vec<u8>, i32> {
         .map_err(|err| io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT")))
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn executable_path_bytes() -> Result<Vec<u8>, i32> {
     Err(errno_i32("ENOSYS"))
 }
 
-#[cfg(not(any(unix, target_arch = "wasm32")))]
+#[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 fn executable_path_bytes() -> Result<Vec<u8>, i32> {
+    #[cfg(target_os = "wasi")]
+    wasi_trace_host("get_executable_path", "");
     std::env::current_exe()
         .map(|path| path.to_string_lossy().into_owned().into_bytes())
         .map_err(|err| io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT")))
@@ -18408,8 +18690,17 @@ fn tmpname_bytes(pre: &[u8], suf: &[u8]) -> Result<Vec<u8>, i32> {
 
 #[cfg(target_arch = "wasm32")]
 fn tmpname_bytes(pre: &[u8], suf: &[u8]) -> Result<Vec<u8>, i32> {
-    let _ = (pre, suf);
-    Err(errno_i32("ENOSYS"))
+    #[cfg(target_os = "wasi")]
+    {
+        let _ = (pre, suf);
+        Err(errno_i32("ENOSYS"))
+    }
+    #[cfg(not(target_os = "wasi"))]
+    {
+        host_bytes_result(unsafe {
+            mhs_host_tmpname(pre.as_ptr(), pre.len(), suf.as_ptr(), suf.len())
+        })
+    }
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
@@ -18476,14 +18767,15 @@ fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
     HostIntResult::ok(permissions)
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
-    let _ = path;
-    HostIntResult::err(errno_i32("ENOSYS"))
+    host_result_i64(unsafe { mhs_host_get_permissions(path.as_ptr(), path.len()) })
 }
 
-#[cfg(not(any(unix, target_arch = "wasm32")))]
+#[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
+    #[cfg(target_os = "wasi")]
+    wasi_trace_host("get_permissions", &String::from_utf8_lossy(path));
     let Ok(path) = std::str::from_utf8(path) else {
         return HostIntResult::err(errno_i32("EINVAL"));
     };
@@ -18548,14 +18840,21 @@ fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> HostIntResult {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> HostIntResult {
-    let _ = (path, permissions);
-    HostIntResult::err(errno_i32("ENOSYS"))
+    host_result_i64(unsafe { mhs_host_set_permissions(path.as_ptr(), path.len(), permissions) })
 }
 
-#[cfg(not(any(unix, target_arch = "wasm32")))]
+#[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> HostIntResult {
+    #[cfg(target_os = "wasi")]
+    wasi_trace_host(
+        "set_permissions",
+        &format!(
+            "path={} permissions={permissions}",
+            String::from_utf8_lossy(path)
+        ),
+    );
     let _ = permissions;
     let Ok(path) = std::str::from_utf8(path) else {
         return HostIntResult::err(errno_i32("EINVAL"));
@@ -18589,14 +18888,20 @@ fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
     Ok(entries)
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
-    let _ = path;
-    Err(errno_i32("ENOSYS"))
+    let bytes = host_bytes_result(unsafe { mhs_host_dir_entries(path.as_ptr(), path.len()) })?;
+    Ok(bytes
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(Vec::from)
+        .collect())
 }
 
-#[cfg(not(any(unix, target_arch = "wasm32")))]
+#[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
+    #[cfg(target_os = "wasi")]
+    wasi_trace_host("opendir", &String::from_utf8_lossy(path));
     let path = std::str::from_utf8(path).map_err(|_| errno_i32("EINVAL"))?;
     let mut entries = vec![b".".to_vec(), b"..".to_vec()];
     for entry in std::fs::read_dir(path)
@@ -18632,14 +18937,35 @@ fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
     })
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
-    let _ = (path, mode);
-    Err(errno_i32("ENOSYS"))
+    let handle =
+        unsafe { mhs_host_file_open(path.as_ptr(), path.len(), mode.as_ptr(), mode.len()) };
+    if handle < 0 {
+        return Err((-handle) as i32);
+    }
+    let mode = parse_native_file_mode(mode).ok_or_else(|| errno_i32("EINVAL"))?;
+    Ok(BFile {
+        kind: BFileKind::BrowserFile {
+            handle,
+            ungot: Vec::new(),
+        },
+        readable: mode.readable,
+        writable: mode.writable,
+    })
 }
 
-#[cfg(not(any(unix, target_arch = "wasm32")))]
+#[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
+    #[cfg(target_os = "wasi")]
+    wasi_trace_host(
+        "fopen",
+        &format!(
+            "path={} mode={}",
+            String::from_utf8_lossy(path),
+            String::from_utf8_lossy(mode)
+        ),
+    );
     let path = std::str::from_utf8(path).map_err(|_| errno_i32("EINVAL"))?;
     let mode = parse_native_file_mode(mode).ok_or_else(|| errno_i32("EINVAL"))?;
     let file = open_native_file(std::path::Path::new(path), mode)?;
@@ -18834,7 +19160,6 @@ fn setsockopt_socket(fd: i32, level: i32, optname: i32, optval: &[u8]) -> HostIn
     HostIntResult::err(errno_i32("ENOSYS"))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_native_file_mode(mode: &[u8]) -> Option<NativeFileMode> {
     let mut normalized = Vec::with_capacity(mode.len());
     for byte in mode {
@@ -18890,7 +19215,7 @@ fn parse_native_file_mode(mode: &[u8]) -> Option<NativeFileMode> {
     Some(mode)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 fn open_native_file(path: &std::path::Path, mode: NativeFileMode) -> Result<std::fs::File, i32> {
     std::fs::OpenOptions::new()
         .read(mode.readable)
