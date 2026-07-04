@@ -1602,6 +1602,13 @@ fn print_profile(profile: &ProfileBench, top: usize) {
     for (site, count) in profile.profile.top_app_allocation_sites(top) {
         println!("  {site}: {count}");
     }
+    #[cfg(feature = "eval-phase-profile")]
+    {
+        println!("profile_app_allocation_site_shapes:");
+        for (site, count) in profile.profile.top_app_allocation_site_shapes(top) {
+            println!("  {site}: {count}");
+        }
+    }
     println!("profile_eval_frame_push_kinds:");
     for (kind, count) in profile.profile.top_eval_frame_push_kinds(top) {
         println!("  {kind}: {count}");
@@ -1737,6 +1744,18 @@ fn print_phase_profile(profile: &ProfileBench, top: usize) {
     println!("profile_stack_rewrite_opportunities:");
     for (opportunity, count) in profile.profile.top_stack_rewrite_opportunities(top) {
         println!("  {opportunity}: {count}");
+    }
+    println!("profile_stack_head_arities:");
+    for (head, count) in profile.profile.top_stack_head_arities(top) {
+        println!("  {head}: {count}");
+    }
+    println!("profile_stack_head_arity_classes:");
+    for (head, count) in profile.profile.top_stack_head_arity_classes(top) {
+        println!("  {head}: {count}");
+    }
+    println!("profile_stack_continue_next_heads:");
+    for (transition, count) in profile.profile.top_stack_continue_next_heads(top) {
+        println!("  {transition}: {count}");
     }
     println!("profile_stack_eval_step_head_ms:");
     for (head, nanos) in profile.profile.top_stack_eval_step_head_times(top) {
