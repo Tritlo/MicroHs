@@ -1002,6 +1002,7 @@ pub struct JsCallNode {
 
 #[derive(Clone, Debug)]
 pub struct WeakNode {
+    pub(crate) key: Option<NodeId>,
     pub(crate) value: Option<NodeId>,
     pub(crate) finalizer: Option<NodeId>,
 }
@@ -1377,6 +1378,8 @@ pub struct Program {
     gc_foreign_finalizer_marked: Vec<bool>,
     gc_events: Vec<GcEventStats>,
     stable_ptrs: Vec<Option<NodeId>>,
+    weak_nodes: Vec<NodeId>,
+    pending_weak_finalizers: Vec<NodeId>,
     foreign_finalizers: Vec<Option<ForeignFinalizerState>>,
     foreign_finalizer_free: Vec<usize>,
     allocations: Vec<Option<Vec<u8>>>,
@@ -2923,6 +2926,18 @@ impl Program {
             .map(|node| Cell::from_node(node, &mut cold_nodes))
             .collect::<Vec<_>>();
         let mut small_ints = [None; SMALL_INT_COUNT];
+        let weak_nodes = nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, cell)| {
+                let cold = cell.cold_index()?;
+                matches!(
+                    cold_nodes.get(cold).and_then(Option::as_ref),
+                    Some(Node::Weak(_))
+                )
+                .then(|| NodeId::from_index(index))
+            })
+            .collect();
         for (index, node) in nodes.iter().enumerate() {
             if let Some(value) = node.int_value() {
                 if let Some(slot) = small_int_index(value) {
@@ -3004,6 +3019,8 @@ impl Program {
             gc_foreign_finalizer_marked: Vec::new(),
             gc_events: Vec::new(),
             stable_ptrs: vec![None],
+            weak_nodes,
+            pending_weak_finalizers: Vec::new(),
             foreign_finalizers: Vec::new(),
             foreign_finalizer_free: Vec::new(),
             allocations: Vec::new(),
@@ -3615,6 +3632,9 @@ impl Program {
         for id in self.stable_ptrs.iter().flatten() {
             Self::mark_node_id(marked, work, *id);
         }
+        for id in &self.pending_weak_finalizers {
+            Self::mark_node_id(marked, work, *id);
+        }
         if let Some(id) = self.arg_ref_array {
             Self::mark_node_id(marked, work, id);
         }
@@ -3919,14 +3939,7 @@ impl Program {
                         }
                         self.mark_pointer_target(marked, work, foreign_ptr.ptr);
                     }
-                    Some(Node::Weak(weak)) => {
-                        if let Some(value) = weak.value {
-                            Self::mark_node_id(marked, work, value);
-                        }
-                        if let Some(finalizer) = weak.finalizer {
-                            Self::mark_node_id(marked, work, finalizer);
-                        }
-                    }
+                    Some(Node::Weak(_)) => {}
                     Some(Node::BytesView(view)) => Self::mark_node_id(marked, work, view.base),
                     Some(Node::MVar(Some(value))) => Self::mark_node_id(marked, work, *value),
                     Some(Node::Array(items)) => {
@@ -3948,6 +3961,119 @@ impl Program {
                 | CellTag::ThreadId => {}
             }
         }
+    }
+
+    fn weak_key_target(&mut self, key: NodeId) -> Option<NodeId> {
+        if matches!(
+            self.nodes.get(key.index()).map(|cell| cell.tag()),
+            Some(CellTag::Indir)
+        ) {
+            self.compress_marked_indirection(key)
+        } else if matches!(
+            self.nodes.get(key.index()).map(|cell| cell.tag()),
+            Some(CellTag::Free) | None
+        ) {
+            None
+        } else {
+            Some(key)
+        }
+    }
+
+    fn sweep_weaks_after_mark(
+        &mut self,
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        foreign_finalizer_marked: &mut [bool],
+    ) -> Vec<NodeId> {
+        if self.weak_nodes.is_empty() {
+            return Vec::new();
+        }
+
+        let mut weak_nodes = std::mem::take(&mut self.weak_nodes)
+            .into_iter()
+            .filter(|id| matches!(self.cold_node(*id), Some(Node::Weak(_))))
+            .collect::<Vec<_>>();
+        weak_nodes.sort_unstable_by_key(|id| id.index());
+        weak_nodes.dedup();
+        if weak_nodes.is_empty() {
+            return Vec::new();
+        }
+
+        loop {
+            let mut added_marks = false;
+            for id in weak_nodes.iter().copied() {
+                let index = id.index();
+                let Some((key, value, finalizer)) = self.cold_node(id).and_then(|node| {
+                    if let Node::Weak(weak) = node {
+                        Some((weak.key, weak.value, weak.finalizer))
+                    } else {
+                        None
+                    }
+                }) else {
+                    continue;
+                };
+                let Some(value) = value else {
+                    continue;
+                };
+                let key_live = key
+                    .and_then(|key| self.weak_key_target(key))
+                    .and_then(|target| {
+                        marked
+                            .get(target.index())
+                            .copied()
+                            .filter(|live| *live)
+                            .map(|_| target)
+                    });
+                if let Some(target) = key_live {
+                    if let Some(Node::Weak(weak)) = self.cold_node_mut(id) {
+                        weak.key = Some(target);
+                    }
+                    if let Some(mark) = marked.get_mut(index) {
+                        if !*mark {
+                            *mark = true;
+                            work.push(id);
+                            added_marks = true;
+                        }
+                    }
+                    for child in [Some(value), finalizer].into_iter().flatten() {
+                        if marked
+                            .get(child.index())
+                            .is_some_and(|already_marked| !*already_marked)
+                        {
+                            Self::mark_node_id(marked, work, child);
+                            added_marks = true;
+                        }
+                    }
+                } else if let Some(Node::Weak(weak)) = self.cold_node_mut(id) {
+                    weak.key = None;
+                    weak.value = None;
+                }
+            }
+            if !added_marks {
+                break;
+            }
+            self.mark_reachable(marked, work, foreign_finalizer_marked);
+        }
+
+        let mut finalizers = Vec::new();
+        for id in weak_nodes.iter().copied() {
+            let finalizer = match self.cold_node_mut(id) {
+                Some(Node::Weak(weak)) if weak.value.is_none() => {
+                    weak.key = None;
+                    weak.finalizer.take()
+                }
+                _ => None,
+            };
+            if let Some(finalizer) = finalizer {
+                Self::mark_node_id(marked, work, finalizer);
+                finalizers.push(finalizer);
+            }
+        }
+        if !work.is_empty() {
+            self.mark_reachable(marked, work, foreign_finalizer_marked);
+        }
+        self.weak_nodes = weak_nodes;
+        finalizers
     }
 
     fn run_foreign_finalizer(
@@ -4012,6 +4138,8 @@ impl Program {
             machine_stack,
         );
         self.mark_reachable(&mut marked, &mut work, &mut foreign_finalizer_marked);
+        let weak_finalizers =
+            self.sweep_weaks_after_mark(&mut marked, &mut work, &mut foreign_finalizer_marked);
         #[cfg(feature = "gc-phase-profile")]
         let mark_nanos = mark_started.elapsed().as_nanos();
         work.clear();
@@ -4107,6 +4235,10 @@ impl Program {
         });
         #[cfg(feature = "gc-phase-profile")]
         self.gc_young_profile_allocated_slots.clear();
+        self.pending_weak_finalizers.extend(weak_finalizers);
+        while let Some(finalizer) = self.pending_weak_finalizers.pop() {
+            self.reduce_node_whnf(finalizer, FORCE_REDUCTION_LIMIT)?;
+        }
         Ok(freed)
     }
 
@@ -9732,19 +9864,19 @@ impl Program {
     ) -> Result<Option<(usize, NodeId)>, EvalError> {
         let rewrite = match name {
             "Wknewfin" if args.len() >= 4 => {
-                let weak = self.new_weak_ptr(args[1], Some(args[2]));
+                let weak = self.new_weak_ptr(args[0], args[1], Some(args[2]));
                 Some((4, self.pair(weak, args[3])))
             }
             "Wknewfin" if args.len() >= 3 => {
-                let weak = self.new_weak_ptr(args[1], Some(args[2]));
+                let weak = self.new_weak_ptr(args[0], args[1], Some(args[2]));
                 Some((3, weak))
             }
             "Wknew" if args.len() >= 3 => {
-                let weak = self.new_weak_ptr(args[1], None);
+                let weak = self.new_weak_ptr(args[0], args[1], None);
                 Some((3, self.pair(weak, args[2])))
             }
             "Wknew" if args.len() >= 2 => {
-                let weak = self.new_weak_ptr(args[1], None);
+                let weak = self.new_weak_ptr(args[0], args[1], None);
                 Some((2, weak))
             }
             "Wkderef" if args.len() >= 2 => {
@@ -14018,6 +14150,10 @@ impl Program {
                 Node::Weak(weak) => {
                     let weak = *weak;
                     Node::Weak(Box::new(WeakNode {
+                        key: weak
+                            .key
+                            .map(|id| Self::remap_parsed_id(&remap, id))
+                            .transpose()?,
                         value: weak
                             .value
                             .map(|id| Self::remap_parsed_id(&remap, id))
@@ -14037,7 +14173,11 @@ impl Program {
                 Node::Free(_) => return Err(EvalError::InvalidByteString),
                 _ => continue,
             };
+            let is_weak = matches!(&node, Node::Weak(_));
             self.set_node_at(target.index(), node);
+            if is_weak {
+                self.weak_nodes.push(target);
+            }
         }
 
         Self::remap_parsed_id(&remap, root)
@@ -14868,11 +15008,18 @@ impl Program {
         }
     }
 
-    fn new_weak_ptr(&mut self, value: NodeId, finalizer: Option<NodeId>) -> NodeId {
-        self.push_node(Node::Weak(Box::new(WeakNode {
+    fn new_weak_ptr(&mut self, key: NodeId, value: NodeId, finalizer: Option<NodeId>) -> NodeId {
+        let finalizer = finalizer.map(|finalizer| {
+            let world = self.world();
+            self.app(finalizer, world)
+        });
+        let weak = self.push_node(Node::Weak(Box::new(WeakNode {
+            key: Some(key),
             value: Some(value),
             finalizer,
-        })))
+        })));
+        self.weak_nodes.push(weak);
+        weak
     }
 
     fn eval_weak_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
@@ -14905,9 +15052,7 @@ impl Program {
             _ => unreachable!(),
         };
         if let Some(finalizer) = finalizer {
-            let world = self.world();
-            let action = self.app(finalizer, world);
-            self.reduce_node_whnf(action, FORCE_REDUCTION_LIMIT)?;
+            self.reduce_node_whnf(finalizer, FORCE_REDUCTION_LIMIT)?;
         }
         Ok(())
     }
@@ -18603,9 +18748,10 @@ fn nibble(n: u8) -> char {
 #[cfg(test)]
 mod tests {
     use super::{
-        BFile, BFileKind, FORCE_REDUCTION_LIMIT, IGNORED_IO_SHORTCUT_RECURSION_LIMIT, MpzValue,
-        bwt_decode, bwt_encode, lz77_compress, lz77_decompress, lzma_compress_payload,
-        lzma_decompress_payload, serialize_bytes_quoted,
+        BFile, BFileKind, EvalFrameStack, EvalSpine, FORCE_REDUCTION_LIMIT,
+        IGNORED_IO_SHORTCUT_RECURSION_LIMIT, MpzValue, PersistentSpine, bwt_decode, bwt_encode,
+        lz77_compress, lz77_decompress, lzma_compress_payload, lzma_decompress_payload,
+        serialize_bytes_quoted,
     };
     use crate::{EvalError, KnownPrim, Node, NodeId, ParseError, Prim, Program, parse_program};
 
@@ -18613,6 +18759,20 @@ mod tests {
         let mut program = parse_program(input).unwrap();
         let (root, _) = program.reduce_whnf(100).unwrap();
         program.render(root)
+    }
+
+    fn collect_for_test(program: &mut Program, root: NodeId) {
+        program
+            .collect_garbage_between_steps(
+                root,
+                &EvalFrameStack::default(),
+                &EvalSpine::default(),
+                &PersistentSpine::default(),
+                &[],
+                &[],
+                None,
+            )
+            .unwrap();
     }
 
     fn deserialize_memory(program: &mut Program, bytes: Vec<u8>) -> (NodeId, i64) {
@@ -19080,6 +19240,50 @@ mod tests {
         assert_eq!(
             whnf(b"v8.4\n1\nseq Wkfinal Wknew #0 @ #42 @ :0 @ @ IO.performIO Wkderef _0 @ @ #0 @ I @ @ }"),
             "42"
+        );
+    }
+
+    #[test]
+    fn weak_gc_clears_value_when_key_unreachable() {
+        let mut program = parse_program(b"v8.4\n0\nI }\n").unwrap();
+        let key = program.push_node(Node::Int(123_456));
+        let value = program.push_node(Node::Int(42));
+        let weak = program.new_weak_ptr(key, value, None);
+
+        collect_for_test(&mut program, weak);
+
+        match program.cold_node(weak) {
+            Some(Node::Weak(weak)) => {
+                assert_eq!(weak.key, None);
+                assert_eq!(weak.value, None);
+            }
+            other => panic!("expected weak node, got {other:?}"),
+        }
+        let deref = program.deref_weak_ptr(weak).unwrap();
+        assert_eq!(program.render(deref), "K");
+    }
+
+    #[test]
+    fn weak_gc_keeps_value_when_key_reachable() {
+        let mut program = parse_program(b"v8.4\n0\nI }\n").unwrap();
+        let key = program.push_node(Node::Int(123_456));
+        let value = program.push_node(Node::Int(42));
+        let weak = program.new_weak_ptr(key, value, None);
+        let root = program.app(weak, key);
+
+        collect_for_test(&mut program, root);
+
+        match program.cold_node(weak) {
+            Some(Node::Weak(weak)) => {
+                assert_eq!(weak.key, Some(key));
+                assert_eq!(weak.value, Some(value));
+            }
+            other => panic!("expected weak node, got {other:?}"),
+        }
+        let deref = program.deref_weak_ptr(weak).unwrap();
+        assert_eq!(
+            program.cell(deref).app_fields().map(|(_, arg)| arg),
+            Some(value)
         );
     }
 
