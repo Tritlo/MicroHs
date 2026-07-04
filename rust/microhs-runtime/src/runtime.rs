@@ -1623,6 +1623,14 @@ pub struct EvalProfile {
     pub stack_continue_next_heads: HashMap<String, usize>,
     #[cfg(feature = "eval-phase-profile")]
     pub app_allocation_site_shapes: HashMap<String, usize>,
+    #[cfg(feature = "eval-phase-profile")]
+    pub app_allocation_resolved_site_shapes: HashMap<String, usize>,
+    #[cfg(feature = "eval-phase-profile")]
+    pub eval_whnf_value_calls: HashMap<String, usize>,
+    #[cfg(feature = "eval-phase-profile")]
+    pub eval_whnf_value_slow: HashMap<String, usize>,
+    #[cfg(feature = "eval-phase-profile")]
+    pub reduce_node_whnf_entry_shapes: HashMap<String, usize>,
     pub persistent_forces: usize,
     pub persistent_fallbacks: usize,
     pub fallback_eval_loop_steps: usize,
@@ -1752,6 +1760,26 @@ impl EvalProfile {
     #[cfg(feature = "eval-phase-profile")]
     pub fn top_app_allocation_site_shapes(&self, limit: usize) -> Vec<(&str, usize)> {
         sorted_profile_counts(&self.app_allocation_site_shapes, limit)
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_app_allocation_resolved_site_shapes(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.app_allocation_resolved_site_shapes, limit)
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_eval_whnf_value_calls(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.eval_whnf_value_calls, limit)
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_eval_whnf_value_slow(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.eval_whnf_value_slow, limit)
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_reduce_node_whnf_entry_shapes(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.reduce_node_whnf_entry_shapes, limit)
     }
 }
 
@@ -4926,6 +4954,61 @@ impl Program {
     }
 
     #[cfg(feature = "eval-phase-profile")]
+    fn profile_resolved_node_shape_key(&self, id: NodeId) -> String {
+        let Some(id) = self.gc_profile_resolved_id(id) else {
+            return "Free".to_owned();
+        };
+        let cell = self.cell(id);
+        match cell.tag() {
+            CellTag::App => {
+                let fun = cell.id_payload();
+                let fun = self.gc_profile_resolved_id(fun).unwrap_or(fun);
+                match self.cell(fun).prim() {
+                    Some(prim) => format!("App({})", prim.name()),
+                    None => format!("App({})", self.profile_cell_shape_key(self.cell(fun))),
+                }
+            }
+            CellTag::Cold => self
+                .cold_node(id)
+                .map(cold_profile_key)
+                .unwrap_or("Cold")
+                .to_owned(),
+            _ => self.profile_cell_shape_key(cell).to_owned(),
+        }
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    fn profile_eval_whnf_value(&mut self, kind: &'static str, immediate: bool) {
+        let Some(profile) = self.profile.as_mut() else {
+            return;
+        };
+        *profile
+            .eval_whnf_value_calls
+            .entry(kind.to_owned())
+            .or_default() += 1;
+        if !immediate {
+            *profile
+                .eval_whnf_value_slow
+                .entry(kind.to_owned())
+                .or_default() += 1;
+        }
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    fn profile_reduce_node_whnf_entry(&mut self, root: NodeId) {
+        if self.profile.is_none() {
+            return;
+        }
+        let shape = self.profile_resolved_node_shape_key(root);
+        if let Some(profile) = self.profile.as_mut() {
+            *profile
+                .reduce_node_whnf_entry_shapes
+                .entry(shape)
+                .or_default() += 1;
+        }
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
     fn profile_cell_shape_key(&self, cell: Cell) -> &'static str {
         match cell.tag() {
             CellTag::App => "App",
@@ -8037,6 +8120,19 @@ impl Program {
             shape.push_str(&arg_shape);
             shape
         });
+        #[cfg(feature = "eval-phase-profile")]
+        let resolved_site_shape = self.profile.is_some().then(|| {
+            let fun_shape = self.profile_resolved_node_shape_key(fun);
+            let arg_shape = self.profile_resolved_node_shape_key(arg);
+            let mut shape =
+                String::with_capacity(key.len() + fun_shape.len() + arg_shape.len() + 6);
+            shape.push_str(key);
+            shape.push_str(": ");
+            shape.push_str(&fun_shape);
+            shape.push(' ');
+            shape.push_str(&arg_shape);
+            shape
+        });
         if let Some(profile) = self.profile.as_mut() {
             profile.app_allocations += 1;
             *profile
@@ -8052,6 +8148,13 @@ impl Program {
                 *profile
                     .app_allocation_site_shapes
                     .entry(site_shape)
+                    .or_default() += 1;
+            }
+            #[cfg(feature = "eval-phase-profile")]
+            if let Some(resolved_site_shape) = resolved_site_shape {
+                *profile
+                    .app_allocation_resolved_site_shapes
+                    .entry(resolved_site_shape)
                     .or_default() += 1;
             }
         }
@@ -11829,14 +11932,19 @@ impl Program {
     #[inline]
     fn eval_whnf_value<T>(
         &mut self,
+        _kind: &'static str,
         id: NodeId,
         extract: impl Fn(&Self, NodeId) -> Option<T>,
         expected: impl Fn(NodeId) -> EvalError,
     ) -> Result<T, EvalError> {
         let root = self.resolve(id)?;
         if let Some(value) = extract(self, root) {
+            #[cfg(feature = "eval-phase-profile")]
+            self.profile_eval_whnf_value(_kind, true);
             return Ok(value);
         }
+        #[cfg(feature = "eval-phase-profile")]
+        self.profile_eval_whnf_value(_kind, false);
         let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
         let root = self.resolve(root)?;
         extract(self, root).ok_or_else(|| expected(root))
@@ -11844,6 +11952,7 @@ impl Program {
 
     fn eval_int(&mut self, id: NodeId) -> Result<i64, EvalError> {
         self.eval_whnf_value(
+            "Int",
             id,
             |program, root| program.cell(root).int_value(),
             EvalError::ExpectedInt,
@@ -11852,6 +11961,7 @@ impl Program {
 
     fn eval_int64(&mut self, id: NodeId) -> Result<i64, EvalError> {
         self.eval_whnf_value(
+            "Int64",
             id,
             |program, root| program.cell(root).int64_value(),
             EvalError::ExpectedInt64,
@@ -11860,6 +11970,7 @@ impl Program {
 
     fn eval_float64(&mut self, id: NodeId) -> Result<f64, EvalError> {
         self.eval_whnf_value(
+            "Float64",
             id,
             |program, root| program.cell(root).float64_value(),
             EvalError::ExpectedFloat64,
@@ -11868,6 +11979,7 @@ impl Program {
 
     fn eval_float32(&mut self, id: NodeId) -> Result<f32, EvalError> {
         self.eval_whnf_value(
+            "Float32",
             id,
             |program, root| program.cell(root).float32_value(),
             EvalError::ExpectedFloat32,
@@ -11876,6 +11988,7 @@ impl Program {
 
     fn eval_bool(&mut self, id: NodeId) -> Result<bool, EvalError> {
         self.eval_whnf_value(
+            "Bool",
             id,
             |program, root| match program.cell(root).prim() {
                 Some(Prim::Known(KnownPrim::A)) => Some(true),
@@ -11888,6 +12001,7 @@ impl Program {
 
     fn eval_thread_id(&mut self, id: NodeId) -> Result<i64, EvalError> {
         self.eval_whnf_value(
+            "ThreadId",
             id,
             |program, root| program.cell(root).thread_id_value(),
             EvalError::ExpectedThreadId,
@@ -11897,9 +12011,13 @@ impl Program {
     fn eval_pointer_value(&mut self, id: NodeId) -> Result<i64, EvalError> {
         let root = self.resolve(id)?;
         if let Some(value) = self.pointer_value_from_whnf(root) {
+            #[cfg(feature = "eval-phase-profile")]
+            self.profile_eval_whnf_value("Pointer", true);
             self.trace_suspicious_pointer_value(root, value);
             return Ok(value);
         }
+        #[cfg(feature = "eval-phase-profile")]
+        self.profile_eval_whnf_value("Pointer", false);
         let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
         let root = self.resolve(root)?;
         let value = self
@@ -11981,6 +12099,7 @@ impl Program {
 
     fn eval_foreign_ptr_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
+            "ForeignPtr",
             id,
             |program, root| {
                 if matches!(program.cold_node(root), Some(Node::ForeignPtr(_))) {
@@ -12002,6 +12121,7 @@ impl Program {
 
     fn eval_bytes_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
+            "Bytes",
             id,
             |program, root| match program.cold_node(root) {
                 Some(Node::Bytes(_) | Node::BytesView(_) | Node::MutableBytes(_)) => Some(root),
@@ -12013,6 +12133,7 @@ impl Program {
 
     fn eval_array_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
+            "Array",
             id,
             |program, root| match program.cold_node(root) {
                 Some(Node::Array(_)) => Some(root),
@@ -15713,6 +15834,7 @@ impl Program {
 
     fn eval_weak_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
+            "Weak",
             id,
             |program, root| match program.cold_node(root) {
                 Some(Node::Weak(_)) => Some(root),
@@ -15748,6 +15870,7 @@ impl Program {
 
     fn eval_mvar_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
+            "MVar",
             id,
             |program, root| match program.cold_node(root) {
                 Some(Node::MVar(_)) => Some(root),
@@ -15818,6 +15941,8 @@ impl Program {
     }
 
     fn reduce_node_whnf(&mut self, root: NodeId, limit: usize) -> Result<NodeId, EvalError> {
+        #[cfg(feature = "eval-phase-profile")]
+        self.profile_reduce_node_whnf_entry(root);
         self.reduce_whnf_from(root, limit, false, false)
             .map(|(root, _)| root)
     }
