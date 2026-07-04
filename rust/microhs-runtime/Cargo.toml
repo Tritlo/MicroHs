@@ -11,7 +11,7 @@ gc-phase-profile = []
 
 [dependencies]
 libc = "0.2.186"
-lzma-sdk-rs = { version = "0.2301.1", features = ["decode"] }
+lzma-sdk-rs = "0.2301.1"
 
 [lib]
 name = "microhs_runtime"

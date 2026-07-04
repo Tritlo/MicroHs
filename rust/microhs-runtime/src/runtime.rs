@@ -16501,8 +16501,8 @@ fn lzma_decompress_payload(input: &[u8]) -> Result<Vec<u8>, EvalError> {
             .map_err(|_| EvalError::InvalidByteString)?,
     );
     let out_len = usize::try_from(out_len).map_err(|_| EvalError::Overflow)?;
-    std::panic::catch_unwind(|| lzma_sdk_rs::decode_raw(&input[13..], &props, out_len))
-        .map_err(|_| EvalError::InvalidByteString)
+    crate::lzma_decode::decode_raw_checked(&input[13..], &props, out_len)
+        .ok_or(EvalError::InvalidByteString)
 }
 
 fn bwt_encode(data: &[u8]) -> Result<(usize, Vec<u8>), EvalError> {

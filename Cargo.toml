@@ -1,3 +1,6 @@
 [workspace]
 members = ["rust/microhs-runtime"]
 resolver = "3"
+
+[profile.release]
+panic = "abort"
