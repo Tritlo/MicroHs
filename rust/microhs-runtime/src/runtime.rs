@@ -3171,6 +3171,12 @@ impl Program {
     }
 
     #[inline]
+    fn cell_trusted(&self, id: NodeId) -> Cell {
+        debug_assert!(id.index() < self.nodes.len());
+        unsafe { *self.nodes.get_unchecked(id.index()) }
+    }
+
+    #[inline]
     fn app_fun(&self, id: NodeId) -> Option<NodeId> {
         let word0 = self.nodes[id.index()].word0;
         ((word0 & CELL_TAG_BITS) == CellTag::App.bits())
@@ -4389,6 +4395,23 @@ impl Program {
                     return Err(EvalError::DanglingIndirection(id));
                 }
                 _ => return Ok(id),
+            }
+        }
+    }
+
+    #[inline]
+    fn resolve_whnf_trusted(&self, mut id: NodeId) -> NodeId {
+        loop {
+            let cell = self.cell_trusted(id);
+            match cell.tag_bits() {
+                tag if tag == CellTag::Indir.bits() => {
+                    debug_assert_ne!(cell.word1, CELL_NONE_ID);
+                    id = NodeId(cell.word1 as u32);
+                }
+                tag => {
+                    debug_assert_ne!(tag, CellTag::Free.bits());
+                    return id;
+                }
             }
         }
     }
@@ -9113,7 +9136,7 @@ impl Program {
         if profile_resolve {
             self.resolve_profiled(root)
         } else {
-            self.resolve(root)
+            Ok(self.resolve_whnf_trusted(root))
         }
     }
 
