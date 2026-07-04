@@ -49,6 +49,37 @@ export async function instantiateMicroHsRuntime(wasm) {
     reduce(handle, limit = 100000) {
       return state.exports.mhs_rust_program_reduce(handle, limit) === 0;
     },
+    setArgs(handle, args) {
+      const bytes = nulSeparated(args);
+      const ptr = allocBytes(state, bytes);
+      try {
+        const status = state.exports.mhs_rust_program_set_args(handle, ptr, bytes.length);
+        if (status !== 0) {
+          throw new Error("MicroHs set args failed");
+        }
+      } finally {
+        state.exports.mhs_rust_dealloc(ptr, bytes.length);
+      }
+    },
+    setExecutablePath(handle, path) {
+      const bytes = path == null ? new Uint8Array() : encoder.encode(path);
+      const ptr = allocBytes(state, bytes);
+      try {
+        const status = state.exports.mhs_rust_program_set_executable_path(
+          handle,
+          ptr,
+          bytes.length
+        );
+        if (status !== 0) {
+          throw new Error("MicroHs set executable path failed");
+        }
+      } finally {
+        state.exports.mhs_rust_dealloc(ptr, bytes.length);
+      }
+    },
+    reduceMain(handle, limit = Number.MAX_SAFE_INTEGER) {
+      return state.exports.mhs_rust_program_reduce_main(handle, limit);
+    },
     render(handle) {
       const ptr = state.exports.mhs_rust_program_render(handle);
       const len = state.exports.mhs_rust_result_len();
@@ -56,6 +87,25 @@ export async function instantiateMicroHsRuntime(wasm) {
         throw new Error("MicroHs render failed");
       }
       return readUtf8(state, ptr, len);
+    },
+    serialize(handle) {
+      const ptr = state.exports.mhs_rust_program_serialize(handle);
+      const len = state.exports.mhs_rust_result_len();
+      if (ptr === 0) {
+        throw new Error("MicroHs serialize failed");
+      }
+      return readBytes(state, ptr, len);
+    },
+    resultBytes() {
+      const ptr = state.exports.mhs_rust_result_ptr();
+      const len = state.exports.mhs_rust_result_len();
+      if (ptr === 0) {
+        return new Uint8Array();
+      }
+      return readBytes(state, ptr, len);
+    },
+    resultText() {
+      return decoder.decode(this.resultBytes());
     },
     freeProgram(handle) {
       state.exports.mhs_rust_program_free(handle);
@@ -296,6 +346,18 @@ function allocBytes(state, bytes) {
   return ptr;
 }
 
+function nulSeparated(values) {
+  const encoded = values.map((value) => encoder.encode(String(value)));
+  const total = encoded.reduce((acc, bytes) => acc + bytes.length + 1, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const bytes of encoded) {
+    out.set(bytes, offset);
+    offset += bytes.length + 1;
+  }
+  return out;
+}
+
 function writeHostString(state, value, nulTerminated) {
   const bytes = encoder.encode(value);
   state.slen = bytes.length;
@@ -312,5 +374,9 @@ function readCString(state, ptr) {
 }
 
 function readUtf8(state, ptr, len) {
-  return decoder.decode(new Uint8Array(state.memory.buffer, ptr, len));
+  return decoder.decode(readBytes(state, ptr, len));
+}
+
+function readBytes(state, ptr, len) {
+  return new Uint8Array(state.memory.buffer, ptr, len).slice();
 }

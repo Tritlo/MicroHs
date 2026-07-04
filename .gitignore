@@ -22,6 +22,7 @@ Interactive.hs
 .mhscache
 *.js
 *.wasm
+rust/microhs-runtime/js/browser-bench-c.mjs
 /tags
 .hpc/*
 *.pkg
