@@ -1089,6 +1089,7 @@ const SMALL_INT_MAX: i64 = 255;
 const SMALL_INT_COUNT: usize = (SMALL_INT_MAX - SMALL_INT_MIN + 1) as usize;
 const IGNORED_IO_SHORTCUT_RECURSION_LIMIT: usize = 256;
 const UTF8_ASCII_REFILL: usize = 1024;
+const READ_ONLY_MEMORY_VIEW_MIN_LEN: usize = 8;
 const GC_NODE_INTERVAL: usize = 32 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
@@ -1102,6 +1103,12 @@ struct BFile {
 enum BFileKind {
     Memory {
         bytes: Vec<u8>,
+        pos: usize,
+    },
+    ReadOnlyMemoryView {
+        base: NodeId,
+        offset: usize,
+        len: usize,
         pos: usize,
     },
     #[cfg(not(target_arch = "wasm32"))]
@@ -1571,6 +1578,14 @@ pub struct EvalProfile {
     pub stack_rewrite_arg_patterns: HashMap<String, usize>,
     #[cfg(feature = "eval-phase-profile")]
     pub stack_rewrite_opportunities: HashMap<String, usize>,
+    #[cfg(feature = "eval-phase-profile")]
+    pub stack_head_arities: HashMap<String, usize>,
+    #[cfg(feature = "eval-phase-profile")]
+    pub stack_head_arity_classes: HashMap<String, usize>,
+    #[cfg(feature = "eval-phase-profile")]
+    pub stack_continue_next_heads: HashMap<String, usize>,
+    #[cfg(feature = "eval-phase-profile")]
+    pub app_allocation_site_shapes: HashMap<String, usize>,
     pub persistent_forces: usize,
     pub persistent_fallbacks: usize,
     pub fallback_eval_loop_steps: usize,
@@ -1681,6 +1696,42 @@ impl EvalProfile {
     pub fn top_stack_rewrite_opportunities(&self, limit: usize) -> Vec<(&str, usize)> {
         sorted_profile_counts(&self.stack_rewrite_opportunities, limit)
     }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_stack_head_arities(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.stack_head_arities, limit)
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_stack_head_arity_classes(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.stack_head_arity_classes, limit)
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_stack_continue_next_heads(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.stack_continue_next_heads, limit)
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_app_allocation_site_shapes(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.app_allocation_site_shapes, limit)
+    }
+}
+
+#[cfg(feature = "eval-phase-profile")]
+fn profile_known_reducing_arity(known: KnownPrim) -> Option<usize> {
+    use KnownPrim::*;
+    Some(match known {
+        I | Ord | Chr | Y | IoPerformIo | Raise | Rnf | IsInt => 1,
+        A | K | U | BPrime | Z | R | K2 | K3 | K4 | Tag(_) | Seq | IoStrict | IoThen => 2,
+        S | B | C | P | J | L | KK | KA | CPrimeB | IoBind | IoReturn | IoLazyBind => 3,
+        SPrime | CPrime | O | IoAtomic | IoPp | IoPrint | IoSerialize | IoDeserialize => 4,
+        Tuple(fields) => usize::from(fields) + 1,
+        Catch | CatchR | Dynsym | Thnum | IoGc | IoGetArgRef | IoGetMaskingState | IoNewMVar
+        | IoPutMVar | IoReadMVar | IoSetMaskingState | IoStderr | IoStdin | IoStdout | IoStats
+        | IoTakeMVar | IoThid | IoThreadStatus | IoTryPutMVar | IoTryReadMVar | IoTryTakeMVar
+        | IoYield => return None,
+    })
 }
 
 fn sorted_profile_counts(map: &HashMap<String, usize>, limit: usize) -> Vec<(&str, usize)> {
@@ -3681,6 +3732,11 @@ impl Program {
         for id in &self.pending_weak_finalizers {
             Self::mark_node_id(marked, work, *id);
         }
+        for bfile in self.bfiles.iter().flatten() {
+            if let BFileKind::ReadOnlyMemoryView { base, .. } = &bfile.kind {
+                Self::mark_node_id(marked, work, *base);
+            }
+        }
         if let Some(id) = self.arg_ref_array {
             Self::mark_node_id(marked, work, id);
         }
@@ -4462,9 +4518,36 @@ impl Program {
         #[cfg(feature = "eval-phase-profile")]
         let started = Instant::now();
         let key = self.profile_head_key(head);
+        #[cfg(feature = "eval-phase-profile")]
+        let known_head = self.cell(head).prim();
         let profile = self.profile.as_mut().expect("profile checked");
         profile.step_attempts += 1;
         *profile.head_attempts.entry(key.clone()).or_default() += 1;
+        #[cfg(feature = "eval-phase-profile")]
+        {
+            let mut arity_key = String::with_capacity(key.len() + 8);
+            arity_key.push_str(&key);
+            arity_key.push('@');
+            arity_key.push_str(&arity.to_string());
+            *profile.stack_head_arities.entry(arity_key).or_default() += 1;
+            if let Some(Prim::Known(known)) = known_head {
+                if let Some(required) = profile_known_reducing_arity(known) {
+                    let class = match arity.cmp(&required) {
+                        std::cmp::Ordering::Less => "under",
+                        std::cmp::Ordering::Equal => "exact",
+                        std::cmp::Ordering::Greater => "extra",
+                    };
+                    let mut class_key = String::with_capacity(key.len() + class.len() + 1);
+                    class_key.push_str(&key);
+                    class_key.push('@');
+                    class_key.push_str(class);
+                    *profile
+                        .stack_head_arity_classes
+                        .entry(class_key)
+                        .or_default() += 1;
+                }
+            }
+        }
         *profile.spine_arity.entry(arity).or_default() += 1;
         if heap_spine {
             profile.heap_spines += 1;
@@ -4620,6 +4703,30 @@ impl Program {
             .stack_inner_descent_head_nanos
             .entry(key)
             .or_default() += nanos;
+        profile.profile_stack_head_time_nanos = profile
+            .profile_stack_head_time_nanos
+            .saturating_add(started.elapsed().as_nanos());
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_continue_next_head(&mut self, from: ProfileHead, next: NodeId, arity: usize) {
+        let Some(from) = from else {
+            return;
+        };
+        let started = Instant::now();
+        let from_key = self.profile_head_key(from);
+        let next_key = self.profile_head_key(next);
+        let mut key = String::with_capacity(from_key.len() + next_key.len() + 16);
+        key.push_str(&from_key);
+        key.push_str("->");
+        key.push_str(&next_key);
+        key.push('@');
+        key.push_str(&arity.to_string());
+        let Some(profile) = self.profile.as_mut() else {
+            return;
+        };
+        *profile.stack_continue_next_heads.entry(key).or_default() += 1;
         profile.profile_stack_head_time_nanos = profile
             .profile_stack_head_time_nanos
             .saturating_add(started.elapsed().as_nanos());
@@ -6725,6 +6832,10 @@ impl Program {
                         self.profile_stack_inner_descent_time(nanos);
                         self.profile_stack_inner_descent_head_time(profile_head, nanos);
                     }
+                    #[cfg(feature = "eval-phase-profile")]
+                    if profiling {
+                        self.profile_stack_continue_next_head(profile_head, head, stack.app_len());
+                    }
                     continue 'eval;
                 }};
             }
@@ -6805,6 +6916,10 @@ impl Program {
                         self.profile_stack_inner_descent_time(nanos);
                         self.profile_stack_inner_descent_head_time(profile_head, nanos);
                     }
+                    #[cfg(feature = "eval-phase-profile")]
+                    if profiling {
+                        self.profile_stack_continue_next_head(profile_head, head, stack.app_len());
+                    }
                     continue 'eval;
                 }};
             }
@@ -6854,6 +6969,10 @@ impl Program {
                         let nanos = started.elapsed().as_nanos();
                         self.profile_stack_inner_descent_time(nanos);
                         self.profile_stack_inner_descent_head_time(profile_head, nanos);
+                    }
+                    #[cfg(feature = "eval-phase-profile")]
+                    if profiling {
+                        self.profile_stack_continue_next_head(profile_head, head, stack.app_len());
                     }
                     continue 'eval;
                 }};
@@ -7835,6 +7954,19 @@ impl Program {
     fn app_alloc_bookkeeping_cold(&mut self, key: &'static str, fun: NodeId, arg: NodeId) {
         #[cfg(feature = "eval-phase-profile")]
         let profile_started = self.profile.is_some().then(Instant::now);
+        #[cfg(feature = "eval-phase-profile")]
+        let site_shape = self.profile.is_some().then(|| {
+            let fun_shape = self.profile_node_shape_key(fun);
+            let arg_shape = self.profile_node_shape_key(arg);
+            let mut shape =
+                String::with_capacity(key.len() + fun_shape.len() + arg_shape.len() + 6);
+            shape.push_str(key);
+            shape.push_str(": ");
+            shape.push_str(&fun_shape);
+            shape.push(' ');
+            shape.push_str(&arg_shape);
+            shape
+        });
         if let Some(profile) = self.profile.as_mut() {
             profile.app_allocations += 1;
             *profile
@@ -7845,6 +7977,13 @@ impl Program {
                 .app_allocation_sites
                 .entry(key.to_owned())
                 .or_default() += 1;
+            #[cfg(feature = "eval-phase-profile")]
+            if let Some(site_shape) = site_shape {
+                *profile
+                    .app_allocation_site_shapes
+                    .entry(site_shape)
+                    .or_default() += 1;
+            }
         }
         #[cfg(feature = "eval-phase-profile")]
         if let Some(started) = profile_started {
@@ -10943,9 +11082,9 @@ impl Program {
             "openb_rd_mem" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let len = int_to_usize(self.eval_int(args[1])?)?;
-                let bytes = self.read_pointer_bytes(ptr, len)?;
+                let kind = self.memory_read_bfile_kind(ptr, len)?;
                 Node::Ptr(self.alloc_bfile(BFile {
-                    kind: BFileKind::Memory { bytes, pos: 0 },
+                    kind,
                     readable: true,
                     writable: false,
                 })?)
@@ -12355,6 +12494,47 @@ impl Program {
         self.pointer_for_bfile(slot)
     }
 
+    fn read_only_memory_view(&self, ptr: i64, len: usize) -> Result<Option<BFileKind>, EvalError> {
+        if len <= READ_ONLY_MEMORY_VIEW_MIN_LEN {
+            return Ok(None);
+        }
+        if ptr <= 0 {
+            return Ok(None);
+        }
+        let Ok((base, offset)) = self.decode_pointer(ptr) else {
+            return Ok(None);
+        };
+        let base = NodeId::from_index(base);
+        match self.cold_node(base) {
+            Some(Node::Bytes(_) | Node::BytesView(_)) => {
+                let bytes = self.bytes(base)?;
+                let end = offset.checked_add(len).ok_or(EvalError::Overflow)?;
+                if end > bytes.len() {
+                    return Err(trace_invalid_bytes!(
+                        self,
+                        "read pointer too short ptr={ptr} len={len} available={}",
+                        bytes.len().saturating_sub(offset)
+                    ));
+                }
+                Ok(Some(BFileKind::ReadOnlyMemoryView {
+                    base,
+                    offset,
+                    len,
+                    pos: 0,
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn memory_read_bfile_kind(&self, ptr: i64, len: usize) -> Result<BFileKind, EvalError> {
+        if let Some(kind) = self.read_only_memory_view(ptr, len)? {
+            return Ok(kind);
+        }
+        let bytes = self.read_pointer_bytes(ptr, len)?;
+        Ok(BFileKind::Memory { bytes, pos: 0 })
+    }
+
     fn alloc_dir(&mut self, entries: Vec<Vec<u8>>) -> Result<i64, EvalError> {
         let dir = DirHandle { entries, pos: 0 };
         let slot = if let Some(slot) = self.dirs.iter().position(Option::is_none) {
@@ -13025,6 +13205,92 @@ impl Program {
             .ok_or(EvalError::InvalidHandle)
     }
 
+    fn read_only_memory_view_state(
+        &self,
+        ptr: i64,
+    ) -> Result<(NodeId, usize, usize, usize), EvalError> {
+        let bfile = self.bfile(ptr)?;
+        if !bfile.readable {
+            return Err(EvalError::InvalidHandle);
+        }
+        match &bfile.kind {
+            BFileKind::ReadOnlyMemoryView {
+                base,
+                offset,
+                len,
+                pos,
+            } => Ok((*base, *offset, *len, *pos)),
+            _ => Err(EvalError::InvalidHandle),
+        }
+    }
+
+    fn get_read_only_memory_view_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
+        let (base, offset, len, pos) = self.read_only_memory_view_state(ptr)?;
+        if pos >= len {
+            return Ok(-1);
+        }
+        let index = offset.checked_add(pos).ok_or(EvalError::Overflow)?;
+        let byte = self
+            .bytes(base)?
+            .get(index)
+            .copied()
+            .ok_or(EvalError::InvalidByteString)?;
+        let bfile = self.bfile_mut(ptr)?;
+        match &mut bfile.kind {
+            BFileKind::ReadOnlyMemoryView { pos, .. } => {
+                *pos += 1;
+                Ok(i64::from(byte))
+            }
+            _ => Err(EvalError::InvalidHandle),
+        }
+    }
+
+    fn read_only_memory_view_bytes(&mut self, ptr: i64, len: usize) -> Result<Vec<u8>, EvalError> {
+        let (base, offset, view_len, current_pos) = self.read_only_memory_view_state(ptr)?;
+        let read_len = len.min(view_len.saturating_sub(current_pos));
+        let start = offset.checked_add(current_pos).ok_or(EvalError::Overflow)?;
+        let end = start.checked_add(read_len).ok_or(EvalError::Overflow)?;
+        let bytes = self
+            .bytes(base)?
+            .get(start..end)
+            .ok_or(EvalError::InvalidByteString)?
+            .to_vec();
+        let bfile = self.bfile_mut(ptr)?;
+        match &mut bfile.kind {
+            BFileKind::ReadOnlyMemoryView { pos, .. } => {
+                *pos = current_pos
+                    .checked_add(read_len)
+                    .ok_or(EvalError::Overflow)?;
+                Ok(bytes)
+            }
+            _ => Err(EvalError::InvalidHandle),
+        }
+    }
+
+    fn unget_read_only_memory_view_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
+        let (base, offset, _len, pos) = self.read_only_memory_view_state(ptr)?;
+        if pos == 0 {
+            return Err(EvalError::InvalidHandle);
+        }
+        let index = offset.checked_add(pos - 1).ok_or(EvalError::Overflow)?;
+        let expected = self
+            .bytes(base)?
+            .get(index)
+            .copied()
+            .ok_or(EvalError::InvalidByteString)?;
+        if expected != byte as u8 {
+            return Err(EvalError::InvalidHandle);
+        }
+        let bfile = self.bfile_mut(ptr)?;
+        match &mut bfile.kind {
+            BFileKind::ReadOnlyMemoryView { pos, .. } => {
+                *pos -= 1;
+                Ok(())
+            }
+            _ => Err(EvalError::InvalidHandle),
+        }
+    }
+
     fn close_bfile(&mut self, ptr: i64) -> Result<(), EvalError> {
         if let Some(handle) = handle_from_ptr(ptr) {
             return self.flush_io_handle(handle);
@@ -13304,6 +13570,7 @@ impl Program {
             return self.read_stdin_byte();
         }
         enum SpecialBFileRead {
+            ReadOnlyMemoryView,
             Utf8(i64, i64),
             Crlf(i64),
             Rle,
@@ -13316,6 +13583,7 @@ impl Program {
                 return Err(EvalError::InvalidHandle);
             }
             match &mut bfile.kind {
+                BFileKind::ReadOnlyMemoryView { .. } => Some(SpecialBFileRead::ReadOnlyMemoryView),
                 BFileKind::Utf8 {
                     inner,
                     unget,
@@ -13346,6 +13614,9 @@ impl Program {
             }
         };
         match special {
+            Some(SpecialBFileRead::ReadOnlyMemoryView) => {
+                return self.get_read_only_memory_view_byte(ptr);
+            }
             Some(SpecialBFileRead::Utf8(ptr, inner)) => {
                 return self.get_utf8_bfile_byte(ptr, inner);
             }
@@ -13365,6 +13636,7 @@ impl Program {
                 *pos += 1;
                 Ok(i64::from(byte))
             }
+            BFileKind::ReadOnlyMemoryView { .. } => unreachable!("handled above"),
             #[cfg(not(target_arch = "wasm32"))]
             BFileKind::NativeFile { file, ungot } => {
                 if let Some(byte) = ungot.pop() {
@@ -13691,18 +13963,27 @@ impl Program {
     }
 
     fn unget_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
-        let crlf_inner = {
+        enum SpecialBFileUnget {
+            Crlf(i64),
+            ReadOnlyMemoryView,
+        }
+        let special = {
             let bfile = self.bfile_mut(ptr)?;
             if !bfile.readable {
                 return Err(EvalError::InvalidHandle);
             }
             match &bfile.kind {
-                BFileKind::Crlf { inner } => Some(*inner),
+                BFileKind::Crlf { inner } => Some(SpecialBFileUnget::Crlf(*inner)),
+                BFileKind::ReadOnlyMemoryView { .. } => Some(SpecialBFileUnget::ReadOnlyMemoryView),
                 _ => None,
             }
         };
-        if let Some(inner) = crlf_inner {
-            return self.unget_bfile_byte(inner, byte);
+        match special {
+            Some(SpecialBFileUnget::Crlf(inner)) => return self.unget_bfile_byte(inner, byte),
+            Some(SpecialBFileUnget::ReadOnlyMemoryView) => {
+                return self.unget_read_only_memory_view_byte(ptr, byte);
+            }
+            None => {}
         }
         let bfile = self.bfile_mut(ptr)?;
         match &mut bfile.kind {
@@ -13717,6 +13998,7 @@ impl Program {
                 *pos -= 1;
                 Ok(())
             }
+            BFileKind::ReadOnlyMemoryView { .. } => unreachable!("handled above"),
             #[cfg(not(target_arch = "wasm32"))]
             BFileKind::NativeFile { ungot, .. } => {
                 ungot.push(byte as u8);
@@ -13820,6 +14102,9 @@ impl Program {
                 }
                 *pos += 1;
                 Ok(())
+            }
+            BFileKind::ReadOnlyMemoryView { .. } => {
+                unreachable!("read-only handle is not writable")
             }
             #[cfg(not(target_arch = "wasm32"))]
             BFileKind::NativeFile { file, .. } => {
@@ -14081,18 +14366,21 @@ impl Program {
                 return Ok(Vec::new());
             }
         }
-        let uses_getb_fallback = {
+        let (uses_getb_fallback, uses_memory_view) = {
             let bfile = self.bfile(ptr)?;
             if !bfile.readable {
                 return Err(EvalError::InvalidHandle);
             }
-            matches!(
-                &bfile.kind,
-                BFileKind::Utf8 { .. }
-                    | BFileKind::Crlf { .. }
-                    | BFileKind::Rle { .. }
-                    | BFileKind::Base64 { .. }
-                    | BFileKind::Buf { .. }
+            (
+                matches!(
+                    &bfile.kind,
+                    BFileKind::Utf8 { .. }
+                        | BFileKind::Crlf { .. }
+                        | BFileKind::Rle { .. }
+                        | BFileKind::Base64 { .. }
+                        | BFileKind::Buf { .. }
+                ),
+                matches!(&bfile.kind, BFileKind::ReadOnlyMemoryView { .. }),
             )
         };
         if uses_getb_fallback {
@@ -14106,6 +14394,9 @@ impl Program {
             }
             return Ok(bytes);
         }
+        if uses_memory_view {
+            return self.read_only_memory_view_bytes(ptr, len);
+        }
         let bfile = self.bfile_mut(ptr)?;
         match &mut bfile.kind {
             BFileKind::Memory { bytes, pos } => {
@@ -14117,6 +14408,7 @@ impl Program {
                 *pos = end;
                 Ok(out)
             }
+            BFileKind::ReadOnlyMemoryView { .. } => unreachable!("handled above"),
             #[cfg(not(target_arch = "wasm32"))]
             BFileKind::NativeFile { file, ungot } => {
                 use std::io::Read as _;
@@ -14232,6 +14524,9 @@ impl Program {
                 buffer[*pos..end].copy_from_slice(&bytes);
                 *pos = end;
             }
+            BFileKind::ReadOnlyMemoryView { .. } => {
+                unreachable!("read-only handle is not writable")
+            }
             #[cfg(not(target_arch = "wasm32"))]
             BFileKind::NativeFile { file, .. } => {
                 use std::io::Write as _;
@@ -14298,6 +14593,7 @@ impl Program {
         }
         match &bfile.kind {
             BFileKind::Memory { bytes, pos } => Ok(bytes[..*pos].to_vec()),
+            BFileKind::ReadOnlyMemoryView { .. } => Err(EvalError::InvalidHandle),
             #[cfg(not(target_arch = "wasm32"))]
             BFileKind::NativeFile { .. } => Err(EvalError::InvalidHandle),
             BFileKind::Utf8 { .. } => Err(EvalError::InvalidHandle),
@@ -14518,7 +14814,7 @@ impl Program {
 
         let inner = self.bfile(inner)?;
         match &inner.kind {
-            BFileKind::Memory { .. } => Ok(true),
+            BFileKind::Memory { .. } | BFileKind::ReadOnlyMemoryView { .. } => Ok(true),
             #[cfg(not(target_arch = "wasm32"))]
             BFileKind::NativeFile { .. } => Ok(true),
             _ => Ok(false),
