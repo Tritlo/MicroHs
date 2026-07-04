@@ -205,4 +205,15 @@ fn print_profile(profile: &EvalProfile, top: usize) {
     for (shortcut, count) in profile.top_shortcut_hits(top) {
         eprintln!("  {shortcut}: {count}");
     }
+    #[cfg(feature = "eval-phase-profile")]
+    {
+        eprintln!("profile_stack_rewrite_arg_patterns:");
+        for (pattern, count) in profile.top_stack_rewrite_arg_patterns(top) {
+            eprintln!("  {pattern}: {count}");
+        }
+        eprintln!("profile_stack_rewrite_opportunities:");
+        for (opportunity, count) in profile.top_stack_rewrite_opportunities(top) {
+            eprintln!("  {opportunity}: {count}");
+        }
+    }
 }

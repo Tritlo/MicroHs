@@ -1565,6 +1565,10 @@ pub struct EvalProfile {
     pub stack_force_frame_head_nanos: HashMap<String, u128>,
     #[cfg(feature = "eval-phase-profile")]
     pub stack_inner_descent_head_nanos: HashMap<String, u128>,
+    #[cfg(feature = "eval-phase-profile")]
+    pub stack_rewrite_arg_patterns: HashMap<String, usize>,
+    #[cfg(feature = "eval-phase-profile")]
+    pub stack_rewrite_opportunities: HashMap<String, usize>,
     pub persistent_forces: usize,
     pub persistent_fallbacks: usize,
     pub fallback_eval_loop_steps: usize,
@@ -1665,6 +1669,16 @@ impl EvalProfile {
     pub fn top_stack_inner_descent_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
         sorted_profile_times(&self.stack_inner_descent_head_nanos, limit)
     }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_stack_rewrite_arg_patterns(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.stack_rewrite_arg_patterns, limit)
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    pub fn top_stack_rewrite_opportunities(&self, limit: usize) -> Vec<(&str, usize)> {
+        sorted_profile_counts(&self.stack_rewrite_opportunities, limit)
+    }
 }
 
 fn sorted_profile_counts(map: &HashMap<String, usize>, limit: usize) -> Vec<(&str, usize)> {
@@ -1713,6 +1727,36 @@ fn node_allocation_key(node: &Node) -> &'static str {
         Node::JsWrap { .. } => "JsWrap",
         Node::FunPtr(_) => "FunPtr",
         Node::Tick(_) => "Tick",
+    }
+}
+
+#[cfg(feature = "eval-phase-profile")]
+fn cold_profile_key(node: &Node) -> &'static str {
+    match node {
+        Node::ForeignPtr(_) => "ForeignPtr",
+        Node::Weak(_) => "Weak",
+        Node::MVar(_) => "MVar",
+        Node::BigInt(_) => "BigInt",
+        Node::Bytes(_) => "Bytes",
+        Node::BytesView(_) => "BytesView",
+        Node::MutableBytes(_) => "MutableBytes",
+        Node::Array(_) => "Array",
+        Node::Ffi(_) => "Ffi",
+        Node::JsCall(_) => "JsCall",
+        Node::JsWrap { .. } => "JsWrap",
+        Node::FunPtr(_) => "FunPtr",
+        Node::Tick(_) => "Tick",
+        Node::App(_, _)
+        | Node::Indir(_)
+        | Node::Free(_)
+        | Node::Prim(_)
+        | Node::Int(_)
+        | Node::Int64(_)
+        | Node::Float64(_)
+        | Node::Float32(_)
+        | Node::ThreadId(_)
+        | Node::Ptr(_)
+        | Node::RawFunPtr(_) => "Hot",
     }
 }
 
@@ -3738,7 +3782,7 @@ impl Program {
         target
     }
 
-    #[cfg(feature = "gc-phase-profile")]
+    #[cfg(any(feature = "gc-phase-profile", feature = "eval-phase-profile"))]
     fn gc_profile_resolved_id(&self, id: NodeId) -> Option<NodeId> {
         let mut current = id;
         for _ in 0..self.nodes.len() {
@@ -3751,19 +3795,19 @@ impl Program {
         None
     }
 
-    #[cfg(feature = "gc-phase-profile")]
+    #[cfg(any(feature = "gc-phase-profile", feature = "eval-phase-profile"))]
     fn gc_profile_prim(&self, id: NodeId) -> Option<Prim> {
         let id = self.gc_profile_resolved_id(id)?;
         self.nodes.get(id.index())?.prim()
     }
 
-    #[cfg(feature = "gc-phase-profile")]
+    #[cfg(any(feature = "gc-phase-profile", feature = "eval-phase-profile"))]
     fn gc_profile_app_fields(&self, id: NodeId) -> Option<(NodeId, NodeId)> {
         let id = self.gc_profile_resolved_id(id)?;
         self.nodes.get(id.index())?.app_fields()
     }
 
-    #[cfg(feature = "gc-phase-profile")]
+    #[cfg(any(feature = "gc-phase-profile", feature = "eval-phase-profile"))]
     fn gc_profile_flipped_prim(prim: Prim) -> Option<Prim> {
         match prim {
             Prim::Known(KnownPrim::K) => Some(Prim::Known(KnownPrim::A)),
@@ -4577,6 +4621,135 @@ impl Program {
         profile.profile_stack_head_time_nanos = profile
             .profile_stack_head_time_nanos
             .saturating_add(started.elapsed().as_nanos());
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_rewrite_arg_pattern(
+        &mut self,
+        head: &'static str,
+        args: &[(&'static str, NodeId)],
+    ) {
+        if self.profile.is_none() {
+            return;
+        }
+        let mut key = String::with_capacity(head.len() + args.len() * 12);
+        key.push_str(head);
+        for (label, node) in args {
+            key.push(' ');
+            key.push_str(label);
+            key.push('=');
+            key.push_str(&self.profile_node_shape_key(*node));
+        }
+        if let Some(profile) = self.profile.as_mut() {
+            *profile.stack_rewrite_arg_patterns.entry(key).or_default() += 1;
+        }
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_rewrite_opportunity(&mut self, key: &'static str) {
+        if let Some(profile) = self.profile.as_mut() {
+            *profile
+                .stack_rewrite_opportunities
+                .entry(key.to_owned())
+                .or_default() += 1;
+        }
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    #[cold]
+    fn profile_stack_app_opportunities(&mut self, fun: NodeId, arg: NodeId) {
+        use KnownPrim::*;
+
+        let funt = self.gc_profile_prim(fun);
+        let argt = self.gc_profile_prim(arg);
+        let fun_app = self.gc_profile_app_fields(fun);
+        let funfunt = fun_app.and_then(|(fun_fun, _)| self.gc_profile_prim(fun_fun));
+        let arg_app = self.gc_profile_app_fields(arg);
+        let arg_fun_t = arg_app.and_then(|(arg_fun, _)| self.gc_profile_prim(arg_fun));
+
+        if funt == Some(Prim::Known(I)) {
+            self.profile_stack_rewrite_opportunity("red_i");
+        }
+        if funfunt == Some(Prim::Known(K)) {
+            self.profile_stack_rewrite_opportunity("red_k");
+        }
+        if funfunt == Some(Prim::Known(A)) {
+            self.profile_stack_rewrite_opportunity("red_a");
+        }
+        if funt == Some(Prim::Known(B)) && argt == Some(Prim::Known(I)) {
+            self.profile_stack_rewrite_opportunity("red_bi");
+        }
+        if funfunt == Some(Prim::Known(B)) && argt == Some(Prim::Known(I)) {
+            self.profile_stack_rewrite_opportunity("red_bxi");
+        }
+        if funfunt == Some(Prim::Known(CPrimeB)) && argt == Some(Prim::Known(I)) {
+            self.profile_stack_rewrite_opportunity("red_ccbi");
+        }
+        if funt == Some(Prim::Known(C)) && arg_fun_t == Some(Prim::Known(C)) {
+            self.profile_stack_rewrite_opportunity("red_cc");
+        }
+        if funt == Some(Prim::Known(CPrime)) && argt == Some(Prim::Known(I)) {
+            self.profile_stack_rewrite_opportunity("red_cci");
+        }
+        if funt == Some(Prim::Known(CPrimeB)) {
+            if let Some((arg_fun, arg_arg)) = arg_app {
+                let fun_arg_is_p = self.gc_profile_prim(arg_arg) == Some(Prim::Known(P));
+                let fun_arg_is_bc = self
+                    .gc_profile_app_fields(arg_fun)
+                    .map(|(bc_fun, bc_arg)| {
+                        self.gc_profile_prim(bc_fun) == Some(Prim::Known(B))
+                            && self.gc_profile_prim(bc_arg) == Some(Prim::Known(C))
+                    })
+                    .unwrap_or(false);
+                if fun_arg_is_p && fun_arg_is_bc {
+                    self.profile_stack_rewrite_opportunity("red_ccbbcp");
+                }
+            }
+        }
+        if funt == Some(Prim::Known(C)) && argt.and_then(Self::gc_profile_flipped_prim).is_some() {
+            self.profile_stack_rewrite_opportunity("red_flip");
+        }
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    fn profile_node_shape_key(&self, id: NodeId) -> String {
+        let cell = self.cell(id);
+        match cell.tag() {
+            CellTag::App => {
+                let fun = cell.id_payload();
+                match self.cell(fun).prim() {
+                    Some(prim) => format!("App({})", prim.name()),
+                    None => format!("App({})", self.profile_cell_shape_key(self.cell(fun))),
+                }
+            }
+            CellTag::Cold => self
+                .cold_node(id)
+                .map(cold_profile_key)
+                .unwrap_or("Cold")
+                .to_owned(),
+            _ => self.profile_cell_shape_key(cell).to_owned(),
+        }
+    }
+
+    #[cfg(feature = "eval-phase-profile")]
+    fn profile_cell_shape_key(&self, cell: Cell) -> &'static str {
+        match cell.tag() {
+            CellTag::App => "App",
+            CellTag::Indir => "Indir",
+            CellTag::Free => "Free",
+            CellTag::KnownPrim => decode_known_prim(cell.word1 as u16).name(),
+            CellTag::RuntimePrim => RuntimePrim(cell.word1 as u16).name(),
+            CellTag::Int => "Int",
+            CellTag::Int64 => "Int64",
+            CellTag::Float64 => "Float64",
+            CellTag::Float32 => "Float32",
+            CellTag::ThreadId => "ThreadId",
+            CellTag::Ptr => "Ptr",
+            CellTag::RawFunPtr => "RawFunPtr",
+            CellTag::Cold => "Cold",
+        }
     }
 
     #[cfg(feature = "eval-phase-profile")]
@@ -6437,9 +6610,27 @@ impl Program {
                 }};
             }
             macro_rules! app_site {
-                ($key:literal, $fun:expr, $arg:expr) => {
-                    self.app_with_site($key, $fun, $arg)
-                };
+                ($key:literal, $fun:expr, $arg:expr) => {{
+                    let fun = $fun;
+                    let arg = $arg;
+                    #[cfg(feature = "eval-phase-profile")]
+                    {
+                        if profiling {
+                            self.profile_stack_app_opportunities(fun, arg);
+                        }
+                    }
+                    self.app_with_site($key, fun, arg)
+                }};
+            }
+            macro_rules! profile_rewrite_args {
+                ($head:literal, $(($label:literal, $node:expr)),+ $(,)?) => {{
+                    #[cfg(feature = "eval-phase-profile")]
+                    {
+                        if profiling {
+                            self.profile_stack_rewrite_arg_pattern($head, &[$(($label, $node)),+]);
+                        }
+                    }
+                }};
             }
             macro_rules! record_stack_head_time {
                 () => {{
@@ -6560,6 +6751,12 @@ impl Program {
                     let fun = $fun;
                     let arg = $arg;
                     #[cfg(feature = "eval-phase-profile")]
+                    {
+                        if profiling {
+                            self.profile_stack_app_opportunities(fun, arg);
+                        }
+                    }
+                    #[cfg(feature = "eval-phase-profile")]
                     let update_started = profiling.then(Instant::now);
                     let node = self.apply_stack_app(stack, $used, fun, arg);
                     #[cfg(feature = "eval-phase-profile")]
@@ -6601,6 +6798,12 @@ impl Program {
                     let redex = $redex;
                     let fun = $fun;
                     let arg = $arg;
+                    #[cfg(feature = "eval-phase-profile")]
+                    {
+                        if profiling {
+                            self.profile_stack_app_opportunities(fun, arg);
+                        }
+                    }
                     #[cfg(feature = "eval-phase-profile")]
                     let started = profiling.then(Instant::now);
                     if profiling {
@@ -7081,12 +7284,14 @@ impl Program {
                 }
                 S if args_len >= 3 => {
                     let (redex, x, y, z) = take_args!(3, take_args3);
+                    profile_rewrite_args!("S", ("x", x), ("y", y), ("z", z));
                     let left = app_site!("S.left", x, z);
                     let right = app_site!("S.right", y, z);
                     app_taken!(redex, 3, left, right);
                 }
                 SPrime if args_len >= 4 => {
                     let (redex, x, y, z, w) = take_args!(4, take_args4);
+                    profile_rewrite_args!("S'", ("x", x), ("y", y), ("z", z), ("w", w));
                     let yw = app_site!("S'.yw", y, w);
                     let zw = app_site!("S'.zw", z, w);
                     let left = app_site!("S'.left", x, yw);
@@ -7094,17 +7299,20 @@ impl Program {
                 }
                 B if args_len >= 3 => {
                     let (redex, x, y, z) = take_args!(3, take_args3);
+                    profile_rewrite_args!("B", ("x", x), ("y", y), ("z", z));
                     let yz = app_site!("B.yz", y, z);
                     app_taken!(redex, 3, x, yz);
                 }
                 BPrime if args_len >= 4 => {
                     let (redex, x, y, z, w) = take_args!(4, take_args4);
+                    profile_rewrite_args!("B'", ("x", x), ("y", y), ("z", z), ("w", w));
                     let zw = app_site!("B'.zw", z, w);
                     let xy = app_site!("B'.xy", x, y);
                     app_taken!(redex, 4, xy, zw);
                 }
                 BPrime if args_len >= 2 => {
                     let (redex, x, y) = take_args!(2, take_args2);
+                    profile_rewrite_args!("B'_under", ("x", x), ("y", y));
                     let xy = app_site!("B'.xy_under", x, y);
                     let b = self.prim("B");
                     app_taken!(redex, 2, b, xy);
@@ -7137,17 +7345,20 @@ impl Program {
                 }
                 C if args_len >= 3 => {
                     let (redex, x, y, z) = take_args!(3, take_args3);
+                    profile_rewrite_args!("C", ("x", x), ("y", y), ("z", z));
                     let xz = app_site!("C.xz", x, z);
                     app_taken!(redex, 3, xz, y);
                 }
                 CPrime if args_len >= 4 => {
                     let (redex, x, y, z, w) = take_args!(4, take_args4);
+                    profile_rewrite_args!("C'", ("x", x), ("y", y), ("z", z), ("w", w));
                     let yw = app_site!("C'.yw", y, w);
                     let xyw = app_site!("C'.xyw", x, yw);
                     app_taken!(redex, 4, xyw, z);
                 }
                 P if args_len >= 3 => {
                     let (redex, x, y, z) = take_args!(3, take_args3);
+                    profile_rewrite_args!("P", ("x", x), ("y", y), ("z", z));
                     let zx = app_site!("P.zx", z, x);
                     app_taken!(redex, 3, zx, y);
                 }
@@ -7196,12 +7407,14 @@ impl Program {
                 }
                 CPrimeB if args_len >= 4 => {
                     let (redex, x, y, z, w) = take_args!(4, take_args4);
+                    profile_rewrite_args!("C'B", ("x", x), ("y", y), ("z", z), ("w", w));
                     let yw = app_site!("C'B.yw", y, w);
                     let xz = app_site!("C'B.xz", x, z);
                     app_taken!(redex, 4, xz, yw);
                 }
                 CPrimeB if args_len >= 3 => {
                     let (redex, x, y, z) = take_args!(3, take_args3);
+                    profile_rewrite_args!("C'B_under", ("x", x), ("y", y), ("z", z));
                     let xz = app_site!("C'B.xz_under", x, z);
                     let b = self.prim("B");
                     let bxz = app_site!("C'B.bxz_under", b, xz);
