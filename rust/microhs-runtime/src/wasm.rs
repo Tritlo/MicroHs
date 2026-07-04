@@ -1,7 +1,7 @@
 use std::alloc::{Layout, alloc, dealloc};
 use std::cell::RefCell;
 
-use crate::{JsValue, Program, parse_program};
+use crate::{EvalError, JsValue, Program, parse_program};
 
 const CALLBACK_LIMIT: usize = 100_000;
 
@@ -63,9 +63,92 @@ pub extern "C" fn mhs_rust_program_free(handle: u32) {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mhs_rust_program_set_args(handle: u32, ptr: *const u8, len: usize) -> i32 {
+    if ptr.is_null() && len != 0 {
+        return 1;
+    }
+    let input = if len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(ptr, len) }
+    };
+    let mut args: Vec<Vec<u8>> = input.split(|byte| *byte == 0).map(Vec::from).collect();
+    if args.last().is_some_and(Vec::is_empty) {
+        args.pop();
+    }
+    match with_program_mut(handle, |program| {
+        program.set_program_args(args);
+        Ok(())
+    }) {
+        Ok(()) => 0,
+        Err(()) => 1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mhs_rust_program_set_executable_path(
+    handle: u32,
+    ptr: *const u8,
+    len: usize,
+) -> i32 {
+    if ptr.is_null() && len != 0 {
+        return 1;
+    }
+    let path = if len == 0 {
+        None
+    } else {
+        Some(unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec())
+    };
+    match with_program_mut(handle, |program| {
+        program.set_executable_path(path);
+        Ok(())
+    }) {
+        Ok(()) => 0,
+        Err(()) => 1,
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn mhs_rust_program_reduce(handle: u32, limit: usize) -> i32 {
     match with_program_mut(handle, |program| program.reduce_whnf(limit).map(|_| ())) {
         Ok(()) => 0,
+        Err(()) => 1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mhs_rust_program_reduce_main(handle: u32, limit: usize) -> i32 {
+    enum MainOutcome {
+        Success,
+        StepLimit,
+        Raised(Vec<u8>),
+        Error(Vec<u8>),
+    }
+
+    let outcome = with_program_mut(handle, |program| match program.reduce_main(limit) {
+        Ok(_) => Ok(MainOutcome::Success),
+        Err(EvalError::Raised(exn)) => {
+            let message = program
+                .uncaught_exception_message_bytes(exn)
+                .unwrap_or_else(|err| err.to_string().into_bytes());
+            Ok(MainOutcome::Raised(message))
+        }
+        Err(EvalError::StepLimit { .. }) => Ok(MainOutcome::StepLimit),
+        Err(err) => Ok(MainOutcome::Error(err.to_string().into_bytes())),
+    });
+
+    match outcome {
+        Ok(MainOutcome::Success) => 0,
+        Ok(MainOutcome::StepLimit) => 2,
+        Ok(MainOutcome::Raised(message)) if message == b"ExitSuccess" => 0,
+        Ok(MainOutcome::Raised(message)) => {
+            store_result_bytes(message);
+            3
+        }
+        Ok(MainOutcome::Error(message)) => {
+            store_result_bytes(message);
+            1
+        }
         Err(()) => 1,
     }
 }
@@ -78,6 +161,20 @@ pub extern "C" fn mhs_rust_program_render(handle: u32) -> *const u8 {
         clear_result_bytes();
         return std::ptr::null();
     };
+    store_result_bytes(bytes)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mhs_rust_program_serialize(handle: u32) -> *const u8 {
+    let Ok(bytes) = with_program_mut(handle, |program| program.serialize_program(program.root()))
+    else {
+        clear_result_bytes();
+        return std::ptr::null();
+    };
+    store_result_bytes(bytes)
+}
+
+fn store_result_bytes(bytes: Vec<u8>) -> *const u8 {
     RESULT_BYTES
         .try_with(|result| {
             let mut result = result.try_borrow_mut().map_err(|_| ())?;
@@ -93,6 +190,18 @@ pub extern "C" fn mhs_rust_result_len() -> usize {
     RESULT_BYTES
         .try_with(|result| result.try_borrow().map(|result| result.len()).unwrap_or(0))
         .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mhs_rust_result_ptr() -> *const u8 {
+    RESULT_BYTES
+        .try_with(|result| {
+            result
+                .try_borrow()
+                .map(|result| result.as_ptr())
+                .unwrap_or(std::ptr::null())
+        })
+        .unwrap_or(std::ptr::null())
 }
 
 #[unsafe(no_mangle)]
