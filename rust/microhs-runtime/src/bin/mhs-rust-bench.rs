@@ -156,6 +156,31 @@ fn main() -> ExitCode {
             "gc_total_sweep_ms: {:.3}",
             nanos_millis(eval.gc.total_sweep_nanos)
         );
+        println!("gc_red_i_opportunities: {}", eval.gc.red_i_opportunities);
+        println!("gc_red_k_opportunities: {}", eval.gc.red_k_opportunities);
+        println!("gc_red_a_opportunities: {}", eval.gc.red_a_opportunities);
+        println!("gc_red_bi_opportunities: {}", eval.gc.red_bi_opportunities);
+        println!(
+            "gc_red_bxi_opportunities: {}",
+            eval.gc.red_bxi_opportunities
+        );
+        println!(
+            "gc_red_ccbi_opportunities: {}",
+            eval.gc.red_ccbi_opportunities
+        );
+        println!("gc_red_cc_opportunities: {}", eval.gc.red_cc_opportunities);
+        println!(
+            "gc_red_cci_opportunities: {}",
+            eval.gc.red_cci_opportunities
+        );
+        println!(
+            "gc_red_ccbbcp_opportunities: {}",
+            eval.gc.red_ccbbcp_opportunities
+        );
+        println!(
+            "gc_red_flip_opportunities: {}",
+            eval.gc.red_flip_opportunities
+        );
     }
     println!(
         "gc_last_allocations_since_collect: {}",
@@ -1250,6 +1275,46 @@ fn print_profile(profile: &ProfileBench, top: usize) {
             "profile_gc_total_sweep_ms: {:.3}",
             nanos_millis(profile.gc.total_sweep_nanos)
         );
+        println!(
+            "profile_gc_red_i_opportunities: {}",
+            profile.gc.red_i_opportunities
+        );
+        println!(
+            "profile_gc_red_k_opportunities: {}",
+            profile.gc.red_k_opportunities
+        );
+        println!(
+            "profile_gc_red_a_opportunities: {}",
+            profile.gc.red_a_opportunities
+        );
+        println!(
+            "profile_gc_red_bi_opportunities: {}",
+            profile.gc.red_bi_opportunities
+        );
+        println!(
+            "profile_gc_red_bxi_opportunities: {}",
+            profile.gc.red_bxi_opportunities
+        );
+        println!(
+            "profile_gc_red_ccbi_opportunities: {}",
+            profile.gc.red_ccbi_opportunities
+        );
+        println!(
+            "profile_gc_red_cc_opportunities: {}",
+            profile.gc.red_cc_opportunities
+        );
+        println!(
+            "profile_gc_red_cci_opportunities: {}",
+            profile.gc.red_cci_opportunities
+        );
+        println!(
+            "profile_gc_red_ccbbcp_opportunities: {}",
+            profile.gc.red_ccbbcp_opportunities
+        );
+        println!(
+            "profile_gc_red_flip_opportunities: {}",
+            profile.gc.red_flip_opportunities
+        );
     }
     println!(
         "profile_gc_last_allocations_since_collect: {}",
@@ -1511,6 +1576,26 @@ fn print_phase_profile(profile: &ProfileBench, top: usize) {
     println!(
         "profile_stack_app_alloc_ms: {:.3}",
         nanos_millis(profile.profile.stack_app_alloc_nanos)
+    );
+    println!(
+        "profile_app_alloc_reused: {}",
+        profile.profile.app_alloc_reused
+    );
+    println!(
+        "profile_app_alloc_fresh: {}",
+        profile.profile.app_alloc_fresh
+    );
+    println!(
+        "profile_app_alloc_free_pop_ms: {:.3}",
+        nanos_millis(profile.profile.app_alloc_free_pop_nanos)
+    );
+    println!(
+        "profile_app_alloc_reused_write_ms: {:.3}",
+        nanos_millis(profile.profile.app_alloc_reused_write_nanos)
+    );
+    println!(
+        "profile_app_alloc_fresh_push_ms: {:.3}",
+        nanos_millis(profile.profile.app_alloc_fresh_push_nanos)
     );
     println!(
         "profile_stack_apply_rewrite_ms: {:.3}",

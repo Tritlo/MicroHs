@@ -1325,6 +1325,26 @@ pub struct Program {
     gc_last_sweep_nanos: u128,
     #[cfg(feature = "gc-phase-profile")]
     gc_total_sweep_nanos: u128,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_red_i_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_red_k_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_red_a_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_red_bi_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_red_bxi_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_red_ccbi_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_red_cc_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_red_cci_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_red_ccbbcp_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    gc_red_flip_opportunities: usize,
     gc_marked: Vec<bool>,
     gc_mark_work: Vec<NodeId>,
     gc_foreign_finalizer_marked: Vec<bool>,
@@ -1372,6 +1392,26 @@ pub struct GcStats {
     pub last_sweep_nanos: u128,
     #[cfg(feature = "gc-phase-profile")]
     pub total_sweep_nanos: u128,
+    #[cfg(feature = "gc-phase-profile")]
+    pub red_i_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub red_k_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub red_a_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub red_bi_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub red_bxi_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub red_ccbi_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub red_cc_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub red_cci_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub red_ccbbcp_opportunities: usize,
+    #[cfg(feature = "gc-phase-profile")]
+    pub red_flip_opportunities: usize,
     pub last_allocations_since_collect: usize,
     pub current_allocations_since_collect: usize,
     pub events: Vec<GcEventStats>,
@@ -1435,6 +1475,16 @@ pub struct EvalProfile {
     pub stack_apply_app_nanos: u128,
     pub stack_force_frame_nanos: u128,
     pub stack_inner_descent_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
+    pub app_alloc_reused: usize,
+    #[cfg(feature = "eval-phase-profile")]
+    pub app_alloc_fresh: usize,
+    #[cfg(feature = "eval-phase-profile")]
+    pub app_alloc_free_pop_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
+    pub app_alloc_reused_write_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
+    pub app_alloc_fresh_push_nanos: u128,
     #[cfg(feature = "eval-phase-profile")]
     pub profile_step_nanos: u128,
     #[cfg(feature = "eval-phase-profile")]
@@ -2848,6 +2898,26 @@ impl Program {
             gc_last_sweep_nanos: 0,
             #[cfg(feature = "gc-phase-profile")]
             gc_total_sweep_nanos: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_red_i_opportunities: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_red_k_opportunities: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_red_a_opportunities: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_red_bi_opportunities: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_red_bxi_opportunities: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_red_ccbi_opportunities: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_red_cc_opportunities: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_red_cci_opportunities: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_red_ccbbcp_opportunities: 0,
+            #[cfg(feature = "gc-phase-profile")]
+            gc_red_flip_opportunities: 0,
             gc_marked: Vec::new(),
             gc_mark_work: Vec::new(),
             gc_foreign_finalizer_marked: Vec::new(),
@@ -3043,11 +3113,53 @@ impl Program {
     #[inline]
     fn push_app_node(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
         self.gc_allocations_since_collect = self.gc_allocations_since_collect.saturating_add(1);
-        if let Some(index) = self.pop_free_node() {
+        #[cfg(feature = "eval-phase-profile")]
+        let profiling = self.profile.is_some();
+        #[cfg(feature = "eval-phase-profile")]
+        let pop_started = profiling.then(Instant::now);
+        let free_index = self.pop_free_node();
+        #[cfg(feature = "eval-phase-profile")]
+        if let Some(started) = pop_started {
+            if let Some(profile) = self.profile.as_mut() {
+                profile.app_alloc_free_pop_nanos = profile
+                    .app_alloc_free_pop_nanos
+                    .saturating_add(started.elapsed().as_nanos());
+            }
+        }
+        if let Some(index) = free_index {
+            #[cfg(feature = "eval-phase-profile")]
+            if let Some(profile) = self.profile.as_mut() {
+                profile.app_alloc_reused = profile.app_alloc_reused.saturating_add(1);
+            }
+            #[cfg(feature = "eval-phase-profile")]
+            let write_started = profiling.then(Instant::now);
             self.set_free_cell_at(index, Cell::app(fun, arg));
+            #[cfg(feature = "eval-phase-profile")]
+            if let Some(started) = write_started {
+                if let Some(profile) = self.profile.as_mut() {
+                    profile.app_alloc_reused_write_nanos = profile
+                        .app_alloc_reused_write_nanos
+                        .saturating_add(started.elapsed().as_nanos());
+                }
+            }
             NodeId::from_index(index)
         } else {
-            self.push_cell(Cell::app(fun, arg))
+            #[cfg(feature = "eval-phase-profile")]
+            if let Some(profile) = self.profile.as_mut() {
+                profile.app_alloc_fresh = profile.app_alloc_fresh.saturating_add(1);
+            }
+            #[cfg(feature = "eval-phase-profile")]
+            let push_started = profiling.then(Instant::now);
+            let id = self.push_cell(Cell::app(fun, arg));
+            #[cfg(feature = "eval-phase-profile")]
+            if let Some(started) = push_started {
+                if let Some(profile) = self.profile.as_mut() {
+                    profile.app_alloc_fresh_push_nanos = profile
+                        .app_alloc_fresh_push_nanos
+                        .saturating_add(started.elapsed().as_nanos());
+                }
+            }
+            id
         }
     }
 
@@ -3070,6 +3182,26 @@ impl Program {
             last_sweep_nanos: self.gc_last_sweep_nanos,
             #[cfg(feature = "gc-phase-profile")]
             total_sweep_nanos: self.gc_total_sweep_nanos,
+            #[cfg(feature = "gc-phase-profile")]
+            red_i_opportunities: self.gc_red_i_opportunities,
+            #[cfg(feature = "gc-phase-profile")]
+            red_k_opportunities: self.gc_red_k_opportunities,
+            #[cfg(feature = "gc-phase-profile")]
+            red_a_opportunities: self.gc_red_a_opportunities,
+            #[cfg(feature = "gc-phase-profile")]
+            red_bi_opportunities: self.gc_red_bi_opportunities,
+            #[cfg(feature = "gc-phase-profile")]
+            red_bxi_opportunities: self.gc_red_bxi_opportunities,
+            #[cfg(feature = "gc-phase-profile")]
+            red_ccbi_opportunities: self.gc_red_ccbi_opportunities,
+            #[cfg(feature = "gc-phase-profile")]
+            red_cc_opportunities: self.gc_red_cc_opportunities,
+            #[cfg(feature = "gc-phase-profile")]
+            red_cci_opportunities: self.gc_red_cci_opportunities,
+            #[cfg(feature = "gc-phase-profile")]
+            red_ccbbcp_opportunities: self.gc_red_ccbbcp_opportunities,
+            #[cfg(feature = "gc-phase-profile")]
+            red_flip_opportunities: self.gc_red_flip_opportunities,
             last_allocations_since_collect: self.gc_last_allocations_since_collect,
             current_allocations_since_collect: self.gc_allocations_since_collect,
             events: self.gc_events.clone(),
@@ -3367,6 +3499,165 @@ impl Program {
         target
     }
 
+    #[cfg(feature = "gc-phase-profile")]
+    fn gc_profile_resolved_id(&self, id: NodeId) -> Option<NodeId> {
+        let mut current = id;
+        for _ in 0..self.nodes.len() {
+            let cell = *self.nodes.get(current.index())?;
+            if !cell.has_tag(CellTag::Indir) {
+                return (!cell.has_tag(CellTag::Free)).then_some(current);
+            }
+            current = cell.option_id_word1()?;
+        }
+        None
+    }
+
+    #[cfg(feature = "gc-phase-profile")]
+    fn gc_profile_prim(&self, id: NodeId) -> Option<Prim> {
+        let id = self.gc_profile_resolved_id(id)?;
+        self.nodes.get(id.index())?.prim()
+    }
+
+    #[cfg(feature = "gc-phase-profile")]
+    fn gc_profile_app_fields(&self, id: NodeId) -> Option<(NodeId, NodeId)> {
+        let id = self.gc_profile_resolved_id(id)?;
+        self.nodes.get(id.index())?.app_fields()
+    }
+
+    #[cfg(feature = "gc-phase-profile")]
+    fn gc_profile_flipped_prim(prim: Prim) -> Option<Prim> {
+        match prim {
+            Prim::Known(KnownPrim::K) => Some(Prim::Known(KnownPrim::A)),
+            Prim::Known(KnownPrim::A) => Some(Prim::Known(KnownPrim::K)),
+            Prim::Runtime(runtime) => {
+                let flipped = match runtime.name() {
+                    "+" => "+",
+                    "-" => "subtract",
+                    "*" => "*",
+                    "u+" => "u+",
+                    "u-" => "usubtract",
+                    "u*" => "u*",
+                    "subtract" => "-",
+                    "usubtract" => "u-",
+                    "and" => "and",
+                    "or" => "or",
+                    "xor" => "xor",
+                    "d+" => "d+",
+                    "d*" => "d*",
+                    "d==" => "d==",
+                    "d/=" => "d/=",
+                    "d<" => "d>",
+                    "d<=" => "d>=",
+                    "d>" => "d<",
+                    "d>=" => "d<=",
+                    "f+" => "f+",
+                    "f*" => "f*",
+                    "f==" => "f==",
+                    "f/=" => "f/=",
+                    "f<" => "f>",
+                    "f<=" => "f>=",
+                    "f>" => "f<",
+                    "f>=" => "f<=",
+                    "bs==" => "bs==",
+                    "bs/=" => "bs/=",
+                    "bs<" => "bs>",
+                    "bs<=" => "bs>=",
+                    "bs>" => "bs<",
+                    "bs>=" => "bs<=",
+                    "==" => "==",
+                    "/=" => "/=",
+                    "<" => ">",
+                    "u<" => "u>",
+                    "u<=" => "u>=",
+                    "u>" => "u<",
+                    "u>=" => "u<=",
+                    "<=" => ">=",
+                    ">" => "<",
+                    ">=" => "<=",
+                    "I+" => "I+",
+                    "I-" => "Isubtract",
+                    "I*" => "I*",
+                    "Iu+" => "Iu+",
+                    "Iu-" => "Iusubtract",
+                    "Iu*" => "Iu*",
+                    "Isubtract" => "I-",
+                    "Iusubtract" => "Iu-",
+                    "Iand" => "Iand",
+                    "Ior" => "Ior",
+                    "Ixor" => "Ixor",
+                    "I==" => "I==",
+                    "I/=" => "I/=",
+                    "I<" => "I>",
+                    "Iu<" => "Iu>",
+                    "Iu<=" => "Iu>=",
+                    "Iu>" => "Iu<",
+                    "Iu>=" => "Iu<=",
+                    "I<=" => "I>=",
+                    "I>" => "I<",
+                    "I>=" => "I<=",
+                    _ => return None,
+                };
+                Prim::from_name(flipped)
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "gc-phase-profile")]
+    fn profile_gc_red_opportunities(&mut self, fun: NodeId, arg: NodeId) {
+        use KnownPrim::*;
+
+        let funt = self.gc_profile_prim(fun);
+        let argt = self.gc_profile_prim(arg);
+        let fun_app = self.gc_profile_app_fields(fun);
+        let funfunt = fun_app.and_then(|(fun_fun, _)| self.gc_profile_prim(fun_fun));
+        let arg_app = self.gc_profile_app_fields(arg);
+        let arg_fun_t = arg_app.and_then(|(arg_fun, _)| self.gc_profile_prim(arg_fun));
+
+        if funt == Some(Prim::Known(I)) {
+            self.gc_red_i_opportunities += 1;
+        }
+        if funfunt == Some(Prim::Known(K)) {
+            self.gc_red_k_opportunities += 1;
+        }
+        if funfunt == Some(Prim::Known(A)) {
+            self.gc_red_a_opportunities += 1;
+        }
+        if funt == Some(Prim::Known(B)) && argt == Some(Prim::Known(I)) {
+            self.gc_red_bi_opportunities += 1;
+        }
+        if funfunt == Some(Prim::Known(B)) && argt == Some(Prim::Known(I)) {
+            self.gc_red_bxi_opportunities += 1;
+        }
+        if funfunt == Some(Prim::Known(CPrimeB)) && argt == Some(Prim::Known(I)) {
+            self.gc_red_ccbi_opportunities += 1;
+        }
+        if funt == Some(Prim::Known(C)) && arg_fun_t == Some(Prim::Known(C)) {
+            self.gc_red_cc_opportunities += 1;
+        }
+        if funt == Some(Prim::Known(CPrime)) && argt == Some(Prim::Known(I)) {
+            self.gc_red_cci_opportunities += 1;
+        }
+        if funt == Some(Prim::Known(CPrimeB)) {
+            if let Some((arg_fun, arg_arg)) = arg_app {
+                let fun_arg_is_p = self.gc_profile_prim(arg_arg) == Some(Prim::Known(P));
+                let fun_arg_is_bc = self
+                    .gc_profile_app_fields(arg_fun)
+                    .map(|(bc_fun, bc_arg)| {
+                        self.gc_profile_prim(bc_fun) == Some(Prim::Known(B))
+                            && self.gc_profile_prim(bc_arg) == Some(Prim::Known(C))
+                    })
+                    .unwrap_or(false);
+                if fun_arg_is_p && fun_arg_is_bc {
+                    self.gc_red_ccbbcp_opportunities += 1;
+                }
+            }
+        }
+        if funt == Some(Prim::Known(C)) && argt.and_then(Self::gc_profile_flipped_prim).is_some() {
+            self.gc_red_flip_opportunities += 1;
+        }
+    }
+
     fn mark_reachable(
         &mut self,
         marked: &mut [bool],
@@ -3389,6 +3680,8 @@ impl Program {
             if let Some((fun, arg)) = cell.app_fields() {
                 let fun = self.mark_canonical_child(marked, work, fun);
                 let arg = self.mark_canonical_child(marked, work, arg);
+                #[cfg(feature = "gc-phase-profile")]
+                self.profile_gc_red_opportunities(fun, arg);
                 if fun != cell.id_payload() || arg != cell.id_word1() {
                     self.set_app_cell_at(id.index(), Cell::app(fun, arg));
                 }
@@ -4758,18 +5051,18 @@ impl Program {
                 Some((2, self.pair(unit, arg!(1))))
             }
             Some(IoPrint) if args_len >= 3 => {
-                let handle = self.eval_io_handle(arg!(0))?;
+                let ptr = self.eval_pointer_value(arg!(0))?;
                 let value = self.reduce_node_whnf(arg!(1), FORCE_REDUCTION_LIMIT)?;
-                let rendered = self.render(value);
-                self.write_io_handle(handle, &format!("{rendered}\n"))?;
+                let printed = self.print_program(value)?;
+                self.write_bfile_bytes(ptr, &printed)?;
                 let unit = self.prim("I");
                 Some((3, self.pair(unit, arg!(2))))
             }
             Some(IoSerialize) if args_len >= 3 => {
-                let handle = self.eval_io_handle(arg!(0))?;
+                let ptr = self.eval_pointer_value(arg!(0))?;
                 let value = self.reduce_node_whnf(arg!(1), FORCE_REDUCTION_LIMIT)?;
                 let serialized = self.serialize_program(value)?;
-                self.write_io_handle_bytes(handle, &serialized)?;
+                self.write_bfile_bytes(ptr, &serialized)?;
                 let unit = self.prim("I");
                 Some((3, self.pair(unit, arg!(2))))
             }
@@ -13523,15 +13816,6 @@ impl Program {
         Ok(())
     }
 
-    fn eval_io_handle(&mut self, id: NodeId) -> Result<StdHandle, EvalError> {
-        let ptr = self.eval_pointer_value(id)?;
-        handle_from_ptr(ptr).ok_or(EvalError::InvalidHandle)
-    }
-
-    fn write_io_handle(&self, handle: StdHandle, text: &str) -> Result<(), EvalError> {
-        self.write_io_handle_bytes(handle, text.as_bytes())
-    }
-
     fn write_io_handle_bytes(&self, handle: StdHandle, bytes: &[u8]) -> Result<(), EvalError> {
         if handle == StdHandle::Stdin {
             return Err(EvalError::InvalidHandle);
@@ -13604,6 +13888,8 @@ impl Program {
         }
     }
 
+    #[cold]
+    #[inline(never)]
     pub fn serialize_program(&self, root: NodeId) -> Result<Vec<u8>, EvalError> {
         let mut labels = self.find_serialization_labels(root)?;
         let mut out = b"v8.4\n".to_vec();
@@ -13611,6 +13897,16 @@ impl Program {
         out.push(b'\n');
         self.serialize_comb_into(root, &mut labels, &mut out)?;
         out.extend_from_slice(b"}\n");
+        Ok(out)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn print_program(&self, root: NodeId) -> Result<Vec<u8>, EvalError> {
+        let mut labels = self.find_serialization_labels(root)?;
+        let mut out = Vec::new();
+        self.print_comb_into(root, &mut labels, &mut out)?;
+        out.push(b'\n');
         Ok(out)
     }
 
@@ -13642,6 +13938,153 @@ impl Program {
         Ok(labels)
     }
 
+    #[cold]
+    #[inline(never)]
+    fn print_comb_into(
+        &self,
+        root: NodeId,
+        labels: &mut SerializationLabels,
+        out: &mut Vec<u8>,
+    ) -> Result<(), EvalError> {
+        enum PrintTask {
+            Node(NodeId),
+            Byte(u8),
+        }
+
+        let mut work = vec![PrintTask::Node(root)];
+        while let Some(task) = work.pop() {
+            match task {
+                PrintTask::Byte(byte) => out.push(byte),
+                PrintTask::Node(id) => {
+                    let id = self.resolve(id)?;
+                    if labels.shared.contains(&id) {
+                        if !labels.printed.insert(id) {
+                            out.push(b'_');
+                            push_display(out, id.index());
+                            continue;
+                        }
+                        out.push(b':');
+                        push_display(out, id.index());
+                        out.push(b' ');
+                    }
+
+                    match self.node_for_debug(id) {
+                        Node::App(fun, arg) => {
+                            out.push(b'(');
+                            work.push(PrintTask::Byte(b')'));
+                            work.push(PrintTask::Node(arg));
+                            work.push(PrintTask::Byte(b' '));
+                            work.push(PrintTask::Node(fun));
+                        }
+                        Node::Indir(_) | Node::Free(_) => {
+                            return Err(EvalError::DanglingIndirection(id));
+                        }
+                        Node::Prim(name) => {
+                            out.extend_from_slice(name.name().as_bytes());
+                        }
+                        Node::Int(n) => {
+                            out.push(b'#');
+                            push_display(out, n);
+                        }
+                        Node::Int64(n) => {
+                            out.extend_from_slice(b"##");
+                            push_display(out, n);
+                        }
+                        Node::Float64(n) => {
+                            out.push(b'&');
+                            out.extend_from_slice(format_float(n).as_bytes());
+                        }
+                        Node::Float32(n) => {
+                            out.extend_from_slice(b"&&");
+                            out.extend_from_slice(format_float(f64::from(n)).as_bytes());
+                        }
+                        Node::ThreadId(n) => {
+                            out.extend_from_slice(b"ThreadId#");
+                            push_display(out, n);
+                        }
+                        Node::Ptr(ptr) => {
+                            if ptr == 0 {
+                                out.extend_from_slice(b"(toPtr #0)");
+                            } else if let Some(handle) = handle_name_from_ptr(ptr) {
+                                out.extend_from_slice(handle.as_bytes());
+                            } else {
+                                out.extend_from_slice(b"Ptr#");
+                                push_display(out, ptr);
+                            }
+                        }
+                        Node::RawFunPtr(ptr) => {
+                            out.push(b';');
+                            push_display(out, ptr);
+                        }
+                        Node::ForeignPtr(foreign_ptr) => {
+                            if let Some(mpz) = self.mpz_decimal_bytes_for_ptr(foreign_ptr.ptr) {
+                                out.push(b'%');
+                                out.extend_from_slice(mpz);
+                                out.push(b'"');
+                            } else if let Some(bytes) = &foreign_ptr.bytes {
+                                serialize_bytes_comb(bytes, out);
+                            } else if let Some(handle) = handle_name_from_ptr(foreign_ptr.ptr) {
+                                out.extend_from_slice(handle.as_bytes());
+                            } else {
+                                out.extend_from_slice(b"ForeignPtr#");
+                                push_display(out, foreign_ptr.ptr);
+                            }
+                        }
+                        Node::Weak(_) | Node::MVar(_) => {
+                            return Err(EvalError::UnsupportedSerialization(id));
+                        }
+                        Node::BigInt(bytes) => {
+                            serialize_bigint_decimal(&bytes, out);
+                        }
+                        Node::Bytes(bytes) => {
+                            serialize_bytes_comb(&bytes, out);
+                        }
+                        Node::BytesView(_) => {
+                            serialize_bytes_comb(self.bytes(id)?, out);
+                        }
+                        Node::MutableBytes(bytes) => {
+                            serialize_bytes_comb(bytes.visible(), out);
+                        }
+                        Node::Array(items) => {
+                            out.push(b'[');
+                            push_display(out, items.len());
+                            out.push(b']');
+                            for item in items.iter().rev() {
+                                work.push(PrintTask::Node(*item));
+                                work.push(PrintTask::Byte(b' '));
+                            }
+                        }
+                        Node::Ffi(name) => {
+                            out.push(b'^');
+                            out.extend_from_slice(name.as_bytes());
+                        }
+                        Node::JsCall(call) => {
+                            out.push(b'~');
+                            out.extend_from_slice(call.tags.as_bytes());
+                            out.push(b' ');
+                            serialize_bytes_quoted(&call.body, out);
+                        }
+                        Node::JsWrap { tags } => {
+                            out.push(b'`');
+                            out.extend_from_slice(tags.as_bytes());
+                        }
+                        Node::FunPtr(name) => {
+                            out.push(b';');
+                            out.extend_from_slice(name.as_bytes());
+                        }
+                        Node::Tick(name) => {
+                            out.push(b'!');
+                            serialize_bytes_quoted(&name, out);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
     fn serialize_comb_into(
         &self,
         root: NodeId,
@@ -17581,6 +18024,14 @@ fn handle_from_ptr(ptr: i64) -> Option<StdHandle> {
         -2 => StdHandle::Stdout,
         -3 => StdHandle::Stderr,
         _ => return None,
+    })
+}
+
+fn handle_name_from_ptr(ptr: i64) -> Option<&'static str> {
+    Some(match handle_from_ptr(ptr)? {
+        StdHandle::Stdin => "IO.stdin",
+        StdHandle::Stdout => "IO.stdout",
+        StdHandle::Stderr => "IO.stderr",
     })
 }
 
