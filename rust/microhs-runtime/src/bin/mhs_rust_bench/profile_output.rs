@@ -192,18 +192,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
         profile.profile.eval_frame_pushes
     );
     println!(
-        "profile_small_int_cache_hits: {}",
-        profile.profile.small_int_cache_hits
-    );
-    println!(
-        "profile_small_int_cache_misses: {}",
-        profile.profile.small_int_cache_misses
-    );
-    println!(
-        "profile_non_small_int_allocations: {}",
-        profile.profile.non_small_int_allocations
-    );
-    println!(
         "profile_max_spine_arity: {}",
         profile.profile.max_spine_arity
     );

@@ -165,18 +165,6 @@ fn print_profile(profile: &EvalProfile, top: usize) {
         "profile_app_rewrite_extra_args: {}",
         profile.app_rewrite_extra_args
     );
-    eprintln!(
-        "profile_small_int_cache_hits: {}",
-        profile.small_int_cache_hits
-    );
-    eprintln!(
-        "profile_small_int_cache_misses: {}",
-        profile.small_int_cache_misses
-    );
-    eprintln!(
-        "profile_non_small_int_allocations: {}",
-        profile.non_small_int_allocations
-    );
     eprintln!("profile_max_spine_arity: {}", profile.max_spine_arity);
     eprintln!("profile_resolve_calls: {}", profile.resolve_calls);
     eprintln!(
