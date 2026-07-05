@@ -3,7 +3,7 @@ use super::*;
 
 mod bfile;
 mod core;
-#[cfg(any(test, feature = "moving-gc"))]
+#[cfg(feature = "moving-gc")]
 mod evacuate;
 mod eval;
 mod gc;
