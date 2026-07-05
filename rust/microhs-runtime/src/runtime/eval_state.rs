@@ -591,18 +591,6 @@ impl ProfileHead {
         Self(Some(id))
     }
 
-    #[inline]
-    pub(in crate::runtime) fn is_some(&self) -> bool {
-        #[cfg(feature = "profile")]
-        {
-            self.0.is_some()
-        }
-        #[cfg(not(feature = "profile"))]
-        {
-            false
-        }
-    }
-
     #[cfg(feature = "profile")]
     #[inline]
     pub(in crate::runtime) fn node(self) -> Option<NodeId> {
