@@ -5,10 +5,9 @@ edition = "2024"
 license = "BSD-3-Clause"
 
 [features]
-default = ["packed-cell"]
+default = []
 eval-phase-profile = []
 gc-phase-profile = []
-packed-cell = []
 
 [dependencies]
 libc = "0.2.186"
