@@ -256,71 +256,76 @@ impl RuntimePrim {
     pub(in crate::runtime) fn strict_action(self, args_len: usize) -> StrictPrimitiveAction {
         let index = self.0;
 
-        if args_len >= 2 {
-            if let Some(op) = runtime_prim_op(index, INT_BIN_RUNTIME_START, &INT_BIN_RUNTIME_OPS) {
-                return StrictPrimitiveAction::IntBin(op);
-            }
+        macro_rules! try_action {
+            ($arity:literal, $start:expr, $ops:expr, $variant:path) => {
+                if args_len >= $arity {
+                    if let Some(op) = runtime_prim_op(index, $start, $ops) {
+                        return $variant(op);
+                    }
+                }
+            };
         }
-        if args_len >= 1 {
-            if let Some(op) = runtime_prim_op(index, INT_UN_RUNTIME_START, &INT_UN_RUNTIME_OPS) {
-                return StrictPrimitiveAction::IntUn(op);
-            }
-        }
-        if args_len >= 2 {
-            if let Some(op) =
-                runtime_prim_op(index, INT64_BIN_RUNTIME_START, &INT64_BIN_RUNTIME_OPS)
-            {
-                return StrictPrimitiveAction::Int64Bin(op);
-            }
-        }
-        if args_len >= 1 {
-            if let Some(op) = runtime_prim_op(index, INT64_UN_RUNTIME_START, &INT64_UN_RUNTIME_OPS)
-            {
-                return StrictPrimitiveAction::Int64Un(op);
-            }
-        }
-        if args_len >= 2 {
-            if let Some(op) =
-                runtime_prim_op(index, FLOAT64_BIN_RUNTIME_START, &FLOAT64_BIN_RUNTIME_OPS)
-            {
-                return StrictPrimitiveAction::Float64Bin(op);
-            }
-        }
-        if args_len >= 1 {
-            if let Some(op) =
-                runtime_prim_op(index, FLOAT64_UN_RUNTIME_START, &FLOAT64_UN_RUNTIME_OPS)
-            {
-                return StrictPrimitiveAction::Float64Un(op);
-            }
-        }
-        if args_len >= 2 {
-            if let Some(op) =
-                runtime_prim_op(index, FLOAT32_BIN_RUNTIME_START, &FLOAT32_BIN_RUNTIME_OPS)
-            {
-                return StrictPrimitiveAction::Float32Bin(op);
-            }
-        }
-        if args_len >= 1 {
-            if let Some(op) =
-                runtime_prim_op(index, FLOAT32_UN_RUNTIME_START, &FLOAT32_UN_RUNTIME_OPS)
-            {
-                return StrictPrimitiveAction::Float32Un(op);
-            }
-        }
-        if args_len >= 2 {
-            if let Some(op) =
-                runtime_prim_op(index, BYTES_BIN_RUNTIME_START, &BYTES_BIN_RUNTIME_OPS)
-            {
-                return StrictPrimitiveAction::BytesBin(op);
-            }
-        }
-        if args_len >= 1 {
-            if let Some(kind) =
-                runtime_prim_op(index, CONVERSION_RUNTIME_START, &CONVERSION_RUNTIME_OPS)
-            {
-                return StrictPrimitiveAction::Conversion(kind);
-            }
-        }
+
+        try_action!(
+            2,
+            INT_BIN_RUNTIME_START,
+            &INT_BIN_RUNTIME_OPS,
+            StrictPrimitiveAction::IntBin
+        );
+        try_action!(
+            1,
+            INT_UN_RUNTIME_START,
+            &INT_UN_RUNTIME_OPS,
+            StrictPrimitiveAction::IntUn
+        );
+        try_action!(
+            2,
+            INT64_BIN_RUNTIME_START,
+            &INT64_BIN_RUNTIME_OPS,
+            StrictPrimitiveAction::Int64Bin
+        );
+        try_action!(
+            1,
+            INT64_UN_RUNTIME_START,
+            &INT64_UN_RUNTIME_OPS,
+            StrictPrimitiveAction::Int64Un
+        );
+        try_action!(
+            2,
+            FLOAT64_BIN_RUNTIME_START,
+            &FLOAT64_BIN_RUNTIME_OPS,
+            StrictPrimitiveAction::Float64Bin
+        );
+        try_action!(
+            1,
+            FLOAT64_UN_RUNTIME_START,
+            &FLOAT64_UN_RUNTIME_OPS,
+            StrictPrimitiveAction::Float64Un
+        );
+        try_action!(
+            2,
+            FLOAT32_BIN_RUNTIME_START,
+            &FLOAT32_BIN_RUNTIME_OPS,
+            StrictPrimitiveAction::Float32Bin
+        );
+        try_action!(
+            1,
+            FLOAT32_UN_RUNTIME_START,
+            &FLOAT32_UN_RUNTIME_OPS,
+            StrictPrimitiveAction::Float32Un
+        );
+        try_action!(
+            2,
+            BYTES_BIN_RUNTIME_START,
+            &BYTES_BIN_RUNTIME_OPS,
+            StrictPrimitiveAction::BytesBin
+        );
+        try_action!(
+            1,
+            CONVERSION_RUNTIME_START,
+            &CONVERSION_RUNTIME_OPS,
+            StrictPrimitiveAction::Conversion
+        );
 
         StrictPrimitiveAction::None
     }
