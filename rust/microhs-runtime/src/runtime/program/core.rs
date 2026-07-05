@@ -153,10 +153,6 @@ impl Program {
         self.nodes[id.index()]
     }
 
-    pub(in crate::runtime) fn cell_at(&self, index: usize) -> Cell {
-        self.nodes[index]
-    }
-
     #[inline]
     pub(in crate::runtime) fn cell_trusted(&self, id: NodeId) -> Cell {
         debug_assert!(id.index() < self.nodes.len());
@@ -243,11 +239,6 @@ impl Program {
         self.nodes[index] = cell;
     }
 
-    pub(in crate::runtime) fn set_free_cell_at(&mut self, index: usize, cell: Cell) {
-        debug_assert_eq!(self.nodes[index].tag(), CellTag::Free);
-        self.nodes[index] = cell;
-    }
-
     pub(in crate::runtime) fn set_app_node_at(&mut self, index: usize, node: Node) {
         debug_assert_eq!(self.nodes[index].tag(), CellTag::App);
         self.nodes[index] = Cell::from_node(node, &mut self.cold_nodes);
@@ -268,11 +259,6 @@ impl Program {
     #[cfg(feature = "gc-phase-profile")]
     pub(in crate::runtime) fn gc_profile_record_allocated_slot(&mut self, id: NodeId) {
         self.gc_young_profile_allocated_slots.push(id);
-    }
-
-    pub(in crate::runtime) fn push_node_fresh(&mut self, node: Node) -> NodeId {
-        let cell = Cell::from_node(node, &mut self.cold_nodes);
-        self.push_cell(cell)
     }
 
     pub(in crate::runtime) fn cold_node(&self, id: NodeId) -> Option<&Node> {
@@ -327,7 +313,7 @@ impl Program {
             },
         };
         let index = head.index();
-        let cell = self.cell_at(index);
+        let cell = self.nodes[index];
         debug_assert_eq!(
             cell.tag(),
             CellTag::Free,
@@ -353,13 +339,15 @@ impl Program {
         }
         self.gc_allocations_since_collect = self.gc_allocations_since_collect.saturating_add(1);
         if let Some(index) = self.pop_free_node() {
-            self.set_node_at(index, node);
+            debug_assert_eq!(self.nodes[index].tag(), CellTag::Free);
+            self.nodes[index] = Cell::from_node(node, &mut self.cold_nodes);
             let id = NodeId::from_index(index);
             #[cfg(feature = "gc-phase-profile")]
             self.gc_profile_record_allocated_slot(id);
             id
         } else {
-            let id = self.push_node_fresh(node);
+            let cell = Cell::from_node(node, &mut self.cold_nodes);
+            let id = self.push_cell(cell);
             #[cfg(feature = "gc-phase-profile")]
             self.gc_profile_record_allocated_slot(id);
             id
@@ -389,7 +377,8 @@ impl Program {
             }
             #[cfg(feature = "eval-phase-profile")]
             let write_started = profiling.then(Instant::now);
-            self.set_free_cell_at(index, Cell::app(fun, arg));
+            debug_assert_eq!(self.nodes[index].tag(), CellTag::Free);
+            self.nodes[index] = Cell::app(fun, arg);
             let id = NodeId::from_index(index);
             #[cfg(feature = "gc-phase-profile")]
             self.gc_profile_record_allocated_slot(id);
