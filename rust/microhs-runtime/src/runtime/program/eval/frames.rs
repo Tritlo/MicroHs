@@ -131,7 +131,7 @@ impl Program {
         if self.profiling_enabled() {
             self.profile_stack_app_update(used);
         }
-        let node = if used == 0 {
+        if used == 0 {
             self.app(fun, arg)
         } else {
             let app_end = stack.apps.len();
@@ -141,8 +141,7 @@ impl Program {
             self.set_app_cell_at(redex.index(), Cell::app(fun, arg));
             stack.apps.truncate(redex_index);
             redex
-        };
-        node
+        }
     }
 
     pub(in crate::runtime) fn rethread_stack_app_segment(
