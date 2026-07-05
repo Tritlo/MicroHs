@@ -225,6 +225,8 @@ impl Program {
         Ok((node, 1))
     }
 
+    #[cold]
+    #[inline(never)]
     pub(in crate::runtime) fn finish_ready_stack_frame(
         &mut self,
         stack: &mut EvalStack,
@@ -460,6 +462,8 @@ impl Program {
         Ok(Some(result))
     }
 
+    #[cold]
+    #[inline(never)]
     pub(in crate::runtime) fn finish_whnf_stack_frame(
         &mut self,
         stack: &mut EvalStack,
