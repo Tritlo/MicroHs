@@ -2,7 +2,7 @@
 use super::*;
 
 impl Program {
-    pub fn resolve(&self, mut id: NodeId) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn resolve(&self, mut id: NodeId) -> Result<NodeId, EvalError> {
         loop {
             let Some(cell) = self.nodes.get(id.index()).copied() else {
                 return Err(EvalError::DanglingIndirection(id));
