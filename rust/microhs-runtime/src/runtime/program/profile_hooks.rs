@@ -507,14 +507,4 @@ impl Program {
                 .or_default() += 1;
         }
     }
-
-    #[cold]
-    pub(in crate::runtime) fn profile_node_allocation(&mut self, node: &Node) {
-        if let Some(profile) = self.profile.as_mut() {
-            *profile
-                .node_allocations
-                .entry(node_allocation_key(node).to_owned())
-                .or_default() += 1;
-        }
-    }
 }

@@ -314,9 +314,6 @@ impl Program {
     }
 
     pub(in crate::runtime) fn push_node(&mut self, node: Node) -> NodeId {
-        if self.profile.is_some() {
-            self.profile_node_allocation(&node);
-        }
         self.gc_allocations_since_collect = self.gc_allocations_since_collect.saturating_add(1);
         if let Some(index) = self.pop_free_node() {
             debug_assert_eq!(self.nodes[index].tag(), CellTag::Free);

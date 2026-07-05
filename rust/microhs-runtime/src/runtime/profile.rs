@@ -176,7 +176,6 @@ pub struct EvalProfile {
     pub head_reductions: HashMap<String, usize>,
     pub resolve_chain: BTreeMap<usize, usize>,
     pub shortcut_hits: HashMap<String, usize>,
-    pub node_allocations: HashMap<String, usize>,
     pub app_allocation_sites: HashMap<String, usize>,
     pub eval_frame_push_kinds: HashMap<String, usize>,
     pub stack_fallback_heads: HashMap<String, usize>,
@@ -195,10 +194,6 @@ impl EvalProfile {
 
     pub fn top_shortcut_hits(&self, limit: usize) -> Vec<(&str, usize)> {
         sorted_profile_counts(&self.shortcut_hits, limit)
-    }
-
-    pub fn top_node_allocations(&self, limit: usize) -> Vec<(&str, usize)> {
-        sorted_profile_counts(&self.node_allocations, limit)
     }
 
     pub fn top_app_allocation_sites(&self, limit: usize) -> Vec<(&str, usize)> {
@@ -310,35 +305,6 @@ pub(in crate::runtime) fn sorted_profile_times(
     counts.sort_unstable_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
     counts.truncate(limit);
     counts
-}
-
-pub(in crate::runtime) fn node_allocation_key(node: &Node) -> &'static str {
-    match node {
-        Node::App(_, _) => "App",
-        Node::Indir(_) => "Indir",
-        Node::Free(_) => "Free",
-        Node::Prim(_) => "Prim",
-        Node::Int(_) => "Int",
-        Node::Int64(_) => "Int64",
-        Node::Float64(_) => "Float64",
-        Node::Float32(_) => "Float32",
-        Node::ThreadId(_) => "ThreadId",
-        Node::Ptr(_) => "Ptr",
-        Node::RawFunPtr(_) => "RawFunPtr",
-        Node::ForeignPtr(_) => "ForeignPtr",
-        Node::Weak(_) => "Weak",
-        Node::MVar(_) => "MVar",
-        Node::BigInt(_) => "BigInt",
-        Node::Bytes(_) => "Bytes",
-        Node::BytesView(_) => "BytesView",
-        Node::MutableBytes(_) => "MutableBytes",
-        Node::Array(_) => "Array",
-        Node::Ffi(_) => "Ffi",
-        Node::JsCall(_) => "JsCall",
-        Node::JsWrap { .. } => "JsWrap",
-        Node::FunPtr(_) => "FunPtr",
-        Node::Tick(_) => "Tick",
-    }
 }
 
 #[cfg(feature = "eval-phase-profile")]

@@ -206,10 +206,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
     for (shortcut, count) in profile.profile.top_shortcut_hits(top) {
         println!("  {shortcut}: {count}");
     }
-    println!("profile_node_allocations:");
-    for (kind, count) in profile.profile.top_node_allocations(top) {
-        println!("  {kind}: {count}");
-    }
     println!("profile_app_allocation_sites:");
     for (site, count) in profile.profile.top_app_allocation_sites(top) {
         println!("  {site}: {count}");

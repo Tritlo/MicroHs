@@ -369,15 +369,15 @@ impl Program {
     pub(in crate::runtime) fn app_alloc_bookkeeping_cold(
         &mut self,
         key: &'static str,
-        fun: NodeId,
-        arg: NodeId,
+        _fun: NodeId,
+        _arg: NodeId,
     ) {
         #[cfg(feature = "eval-phase-profile")]
         let profile_started = self.profile.is_some().then(Instant::now);
         #[cfg(feature = "eval-phase-profile")]
         let resolved_site_shape = self.profile.is_some().then(|| {
-            let fun_shape = self.profile_resolved_node_shape_key(fun);
-            let arg_shape = self.profile_resolved_node_shape_key(arg);
+            let fun_shape = self.profile_resolved_node_shape_key(_fun);
+            let arg_shape = self.profile_resolved_node_shape_key(_arg);
             let mut shape =
                 String::with_capacity(key.len() + fun_shape.len() + arg_shape.len() + 6);
             shape.push_str(key);
@@ -389,10 +389,6 @@ impl Program {
         });
         if let Some(profile) = self.profile.as_mut() {
             profile.app_allocations += 1;
-            *profile
-                .node_allocations
-                .entry(node_allocation_key(&Node::App(fun, arg)).to_owned())
-                .or_default() += 1;
             *profile
                 .app_allocation_sites
                 .entry(key.to_owned())
