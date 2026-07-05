@@ -81,8 +81,6 @@ impl Program {
                 }
                 use std::io::Read as _;
 
-                #[cfg(target_os = "wasi")]
-                wasi_trace_every("getb_native", 8192);
                 let mut byte = [0];
                 match file.borrow_mut().read(&mut byte) {
                     Ok(0) => Ok(-1),
