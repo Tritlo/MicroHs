@@ -166,8 +166,6 @@ pub struct EvalProfile {
     pub head_reductions: HashMap<String, usize>,
     pub resolve_chain: BTreeMap<usize, usize>,
     pub shortcut_hits: HashMap<String, usize>,
-    pub primitive_dispatch_probes: HashMap<String, usize>,
-    pub primitive_dispatch_hits: HashMap<String, usize>,
     pub node_allocations: HashMap<String, usize>,
     pub app_allocation_sites: HashMap<String, usize>,
     pub eval_frame_push_kinds: HashMap<String, usize>,
@@ -186,14 +184,6 @@ impl EvalProfile {
 
     pub fn top_shortcut_hits(&self, limit: usize) -> Vec<(&str, usize)> {
         sorted_profile_counts(&self.shortcut_hits, limit)
-    }
-
-    pub fn top_primitive_dispatch_probes(&self, limit: usize) -> Vec<(&str, usize)> {
-        sorted_profile_counts(&self.primitive_dispatch_probes, limit)
-    }
-
-    pub fn top_primitive_dispatch_hits(&self, limit: usize) -> Vec<(&str, usize)> {
-        sorted_profile_counts(&self.primitive_dispatch_hits, limit)
     }
 
     pub fn top_node_allocations(&self, limit: usize) -> Vec<(&str, usize)> {

@@ -232,14 +232,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
     for (shortcut, count) in profile.profile.top_shortcut_hits(top) {
         println!("  {shortcut}: {count}");
     }
-    println!("profile_primitive_dispatch_probes:");
-    for (probe, count) in profile.profile.top_primitive_dispatch_probes(top) {
-        println!("  {probe}: {count}");
-    }
-    println!("profile_primitive_dispatch_hits:");
-    for (hit, count) in profile.profile.top_primitive_dispatch_hits(top) {
-        println!("  {hit}: {count}");
-    }
     println!("profile_node_allocations:");
     for (kind, count) in profile.profile.top_node_allocations(top) {
         println!("  {kind}: {count}");

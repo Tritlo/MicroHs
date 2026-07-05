@@ -244,9 +244,6 @@ impl Program {
         }
 
         if strict_markers && known.is_none() {
-            if self.profile.is_some() {
-                self.profile_strict_primitive_dispatch(args_len, strict_action);
-            }
             match strict_action {
                 StrictPrimitiveAction::IntBin(op) => {
                     let x = arg!(0);
