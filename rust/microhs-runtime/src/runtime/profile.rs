@@ -88,24 +88,43 @@ pub struct EvalProfile {
     pub stack_descent_pushes: usize,
     pub stack_arg_reads: usize,
     pub stack_arg_batches: usize,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_loop_iterations: usize,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_ready_checks: usize,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_ready_successes: usize,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_eval_step_calls: usize,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_step_reduced: usize,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_step_whnf: usize,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_step_fallback: usize,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_gc_check_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_resolve_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_ready_frame_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_descent_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_eval_step_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_whnf_finish_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_arg_read_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_app_alloc_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_apply_rewrite_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_apply_app_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_force_frame_nanos: u128,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_inner_descent_nanos: u128,
     #[cfg(feature = "eval-phase-profile")]
     pub app_alloc_reused: usize,
@@ -161,6 +180,7 @@ pub struct EvalProfile {
     pub app_allocation_sites: HashMap<String, usize>,
     pub eval_frame_push_kinds: HashMap<String, usize>,
     pub stack_fallback_heads: HashMap<String, usize>,
+    #[cfg(feature = "eval-phase-profile")]
     pub stack_eval_step_head_nanos: HashMap<String, u128>,
 }
 
@@ -193,6 +213,7 @@ impl EvalProfile {
         sorted_profile_counts(&self.stack_fallback_heads, limit)
     }
 
+    #[cfg(feature = "eval-phase-profile")]
     pub fn top_stack_eval_step_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
         sorted_profile_times(&self.stack_eval_step_head_nanos, limit)
     }
@@ -277,6 +298,7 @@ pub(in crate::runtime) fn sorted_profile_counts(
     counts
 }
 
+#[cfg(feature = "eval-phase-profile")]
 pub(in crate::runtime) fn sorted_profile_times(
     map: &HashMap<String, u128>,
     limit: usize,
