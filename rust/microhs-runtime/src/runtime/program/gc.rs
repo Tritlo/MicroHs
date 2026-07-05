@@ -46,11 +46,12 @@ impl Program {
         work: &mut Vec<NodeId>,
         nursery_start: usize,
         id: NodeId,
-    ) {
-        if id.index() < nursery_start {
-            return;
+    ) -> bool {
+        if id.index() < nursery_start || id.index() >= marked.len() {
+            return false;
         }
         Self::mark_node_id(marked, work, id);
+        true
     }
 
     #[cfg(feature = "moving-gc")]
@@ -60,10 +61,11 @@ impl Program {
         work: &mut Vec<NodeId>,
         nursery_start: usize,
         ptr: i64,
-    ) {
+    ) -> bool {
         if let Some(id) = self.node_pointer_target(ptr) {
-            Self::mark_young_node_id(marked, work, nursery_start, id);
+            return Self::mark_young_node_id(marked, work, nursery_start, id);
         }
+        false
     }
 
     #[cfg(feature = "moving-gc")]
@@ -74,45 +76,53 @@ impl Program {
         nursery_start: usize,
         index: usize,
         cell: Cell,
-    ) {
+    ) -> bool {
+        let mut found_young = false;
         if let Some((fun, arg)) = cell.app_fields() {
-            Self::mark_young_node_id(marked, work, nursery_start, fun);
-            Self::mark_young_node_id(marked, work, nursery_start, arg);
-            return;
+            found_young |= Self::mark_young_node_id(marked, work, nursery_start, fun);
+            found_young |= Self::mark_young_node_id(marked, work, nursery_start, arg);
+            return found_young;
         }
         match cell.tag() {
             CellTag::Indir => {
                 if let Some(target) = cell.option_id_word1() {
-                    Self::mark_young_node_id(marked, work, nursery_start, target);
+                    found_young |= Self::mark_young_node_id(marked, work, nursery_start, target);
                 }
             }
             CellTag::Cold => match self.cold_node(NodeId::from_index(index)) {
                 Some(Node::App(fun, arg)) => {
-                    Self::mark_young_node_id(marked, work, nursery_start, *fun);
-                    Self::mark_young_node_id(marked, work, nursery_start, *arg);
+                    found_young |= Self::mark_young_node_id(marked, work, nursery_start, *fun);
+                    found_young |= Self::mark_young_node_id(marked, work, nursery_start, *arg);
                 }
                 Some(Node::Indir(target) | Node::MVar(target)) => {
                     if let Some(target) = *target {
-                        Self::mark_young_node_id(marked, work, nursery_start, target);
+                        found_young |=
+                            Self::mark_young_node_id(marked, work, nursery_start, target);
                     }
                 }
                 Some(Node::Ptr(ptr) | Node::RawFunPtr(ptr)) => {
-                    self.mark_young_pointer_target(marked, work, nursery_start, *ptr);
+                    found_young |=
+                        self.mark_young_pointer_target(marked, work, nursery_start, *ptr);
                 }
                 Some(Node::ForeignPtr(foreign_ptr)) => {
-                    self.mark_young_pointer_target(marked, work, nursery_start, foreign_ptr.ptr);
+                    found_young |= self.mark_young_pointer_target(
+                        marked,
+                        work,
+                        nursery_start,
+                        foreign_ptr.ptr,
+                    );
                 }
                 Some(Node::Weak(weak)) => {
                     for id in [weak.key, weak.value, weak.finalizer].into_iter().flatten() {
-                        Self::mark_young_node_id(marked, work, nursery_start, id);
+                        found_young |= Self::mark_young_node_id(marked, work, nursery_start, id);
                     }
                 }
                 Some(Node::BytesView(view)) => {
-                    Self::mark_young_node_id(marked, work, nursery_start, view.base);
+                    found_young |= Self::mark_young_node_id(marked, work, nursery_start, view.base);
                 }
                 Some(Node::Array(items)) => {
                     for id in items.iter() {
-                        Self::mark_young_node_id(marked, work, nursery_start, *id);
+                        found_young |= Self::mark_young_node_id(marked, work, nursery_start, *id);
                     }
                 }
                 Some(
@@ -142,6 +152,7 @@ impl Program {
             | CellTag::Float32
             | CellTag::ThreadId => {}
         }
+        found_young
     }
 
     #[cfg(feature = "moving-gc")]
@@ -150,6 +161,7 @@ impl Program {
         marked: &mut [bool],
         work: &mut Vec<NodeId>,
         nursery_start: usize,
+        old_young_sources: &mut Vec<usize>,
     ) {
         for (index, cell) in self
             .nodes
@@ -158,7 +170,9 @@ impl Program {
             .enumerate()
             .take(nursery_start.min(self.nodes.len()))
         {
-            self.mark_young_edges_from_cell(marked, work, nursery_start, index, cell);
+            if self.mark_young_edges_from_cell(marked, work, nursery_start, index, cell) {
+                old_young_sources.push(index);
+            }
         }
     }
 
@@ -842,6 +856,7 @@ impl Program {
         let mut foreign_finalizer_marked = std::mem::take(&mut self.gc_foreign_finalizer_marked);
         foreign_finalizer_marked.clear();
         foreign_finalizer_marked.resize(self.foreign_finalizers.len(), false);
+        let mut old_young_sources = Vec::new();
         #[cfg(feature = "gc-phase-profile")]
         let mark_started = Instant::now();
         self.mark_program_roots(
@@ -858,7 +873,12 @@ impl Program {
         for id in self.node_pointers.iter().copied() {
             Self::mark_young_node_id(&mut marked, &mut work, nursery_start, id);
         }
-        self.mark_young_edges_from_old_space(&mut marked, &mut work, nursery_start);
+        self.mark_young_edges_from_old_space(
+            &mut marked,
+            &mut work,
+            nursery_start,
+            &mut old_young_sources,
+        );
         self.mark_young_reachable(&mut marked, &mut work, nursery_start);
         #[cfg(feature = "gc-phase-profile")]
         let mark_nanos = mark_started.elapsed().as_nanos();
@@ -877,6 +897,7 @@ impl Program {
             scratch_args,
             scratch_apps,
             machine_stack,
+            &old_young_sources,
         );
         let live = self.nodes.len();
         debug_assert_eq!(old_len.saturating_sub(freed), live);
