@@ -906,15 +906,6 @@ impl Program {
                 self.write_pointer_bytes(ptr, &value.to_ne_bytes())?;
                 Node::prim("I")
             }
-            "acos" => Node::Float64(self.eval_float64(args[0])?.acos()),
-            "asin" => Node::Float64(self.eval_float64(args[0])?.asin()),
-            "atan" => Node::Float64(self.eval_float64(args[0])?.atan()),
-            "cos" => Node::Float64(self.eval_float64(args[0])?.cos()),
-            "exp" => Node::Float64(self.eval_float64(args[0])?.exp()),
-            "log" => Node::Float64(self.eval_float64(args[0])?.ln()),
-            "sin" => Node::Float64(self.eval_float64(args[0])?.sin()),
-            "sqrt" => Node::Float64(self.eval_float64(args[0])?.sqrt()),
-            "tan" => Node::Float64(self.eval_float64(args[0])?.tan()),
             "atan2" => {
                 let x = self.eval_float64(args[0])?;
                 let y = self.eval_float64(args[1])?;
@@ -930,15 +921,6 @@ impl Program {
                 let n = int_to_i32(self.eval_int(args[1])?)?;
                 Node::Float64(x * 2.0f64.powi(n))
             }
-            "acosf" => Node::Float32(self.eval_float32(args[0])?.acos()),
-            "asinf" => Node::Float32(self.eval_float32(args[0])?.asin()),
-            "atanf" => Node::Float32(self.eval_float32(args[0])?.atan()),
-            "cosf" => Node::Float32(self.eval_float32(args[0])?.cos()),
-            "expf" => Node::Float32(self.eval_float32(args[0])?.exp()),
-            "logf" => Node::Float32(self.eval_float32(args[0])?.ln()),
-            "sinf" => Node::Float32(self.eval_float32(args[0])?.sin()),
-            "sqrtf" => Node::Float32(self.eval_float32(args[0])?.sqrt()),
-            "tanf" => Node::Float32(self.eval_float32(args[0])?.tan()),
             "atan2f" => {
                 let x = self.eval_float32(args[0])?;
                 let y = self.eval_float32(args[1])?;
