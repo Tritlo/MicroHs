@@ -32,13 +32,9 @@ impl Program {
         }
 
         let old_nodes = std::mem::take(&mut self.nodes);
-        let mut remap_table = vec![None; old_len];
+        let mut young_remap = HashMap::new();
         let mut new_nodes = Vec::with_capacity(old_len);
         new_nodes.extend_from_slice(&old_nodes[..nursery_start]);
-
-        for (index, slot) in remap_table.iter_mut().take(nursery_start).enumerate() {
-            *slot = Some(NodeId::from_index(index));
-        }
 
         for (index, cell) in old_nodes.iter().copied().enumerate().skip(nursery_start) {
             if !marked[index] {
@@ -55,7 +51,7 @@ impl Program {
                 "moving GC cannot evacuate a free cell as live"
             );
             let new_id = NodeId::from_index(new_nodes.len());
-            remap_table[index] = Some(new_id);
+            young_remap.insert(index, new_id);
             new_nodes.push(cell);
         }
 
@@ -64,9 +60,9 @@ impl Program {
         self.free_nodes = 0;
 
         self.labels
-            .retain(|_, id| remap_table.get(id.index()).is_some_and(Option::is_some));
+            .retain(|_, id| id.index() < nursery_start || young_remap.contains_key(&id.index()));
         self.weak_nodes
-            .retain(|id| remap_table.get(id.index()).is_some_and(Option::is_some));
+            .retain(|id| id.index() < nursery_start || young_remap.contains_key(&id.index()));
         self.gc_mark_work.clear();
 
         self.remap_node_ids_for_moving_gc(
@@ -78,10 +74,14 @@ impl Program {
             scratch_apps,
             machine_stack,
             |id| {
-                remap_table
-                    .get(id.index())
-                    .and_then(|id| *id)
-                    .unwrap_or_else(|| panic!("moving GC missing nursery remap for {id:?}"))
+                if id.index() < nursery_start {
+                    id
+                } else {
+                    young_remap
+                        .get(&id.index())
+                        .copied()
+                        .unwrap_or_else(|| panic!("moving GC missing nursery remap for {id:?}"))
+                }
             },
         );
 
