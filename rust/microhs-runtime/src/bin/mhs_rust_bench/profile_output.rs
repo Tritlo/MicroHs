@@ -1,4 +1,7 @@
-fn print_profile(profile: &ProfileBench, top: usize) {
+use super::metrics::{millis, nanos_millis, print_gc_events};
+use super::runner::ProfileBench;
+
+pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
     println!("profile_total_ms: {:.3}", millis(profile.elapsed));
     println!("profile_steps: {}", profile.steps);
     println!("profile_sink: {}", profile.serialize_sink);

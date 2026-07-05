@@ -1,4 +1,7 @@
-fn bytes_sink(bytes: &[u8]) -> usize {
+use super::runner::RunOnce;
+use super::*;
+
+pub(super) fn bytes_sink(bytes: &[u8]) -> usize {
     let mut sink = bytes.len();
     if let Some(first) = bytes.first() {
         sink = sink.wrapping_add(*first as usize);
@@ -6,11 +9,11 @@ fn bytes_sink(bytes: &[u8]) -> usize {
     sink
 }
 
-fn main_input_sink(input: &[u8]) -> usize {
+pub(super) fn main_input_sink(input: &[u8]) -> usize {
     bytes_sink(input)
 }
 
-fn reduce_main_or_panic(
+pub(super) fn reduce_main_or_panic(
     program: &mut Program,
     limit: usize,
     context: &str,

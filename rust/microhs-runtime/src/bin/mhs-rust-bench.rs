@@ -10,16 +10,27 @@ use microhs_runtime::{
     EvalError, EvalProfile, GcStats, Node, NodeId, Prim, Program, parse_program,
 };
 
-include!("mhs_rust_bench/config.rs");
+#[path = "mhs_rust_bench/c_compare.rs"]
+mod c_compare;
 
-include!("mhs_rust_bench/scenarios.rs");
+#[path = "mhs_rust_bench/config.rs"]
+mod config;
 
-include!("mhs_rust_bench/runner.rs");
+#[path = "mhs_rust_bench/metrics.rs"]
+mod metrics;
 
-include!("mhs_rust_bench/profile_output.rs");
+#[path = "mhs_rust_bench/profile_output.rs"]
+mod profile_output;
 
-include!("mhs_rust_bench/runtime_helpers.rs");
+#[path = "mhs_rust_bench/runner.rs"]
+mod runner;
 
-include!("mhs_rust_bench/c_compare.rs");
+#[path = "mhs_rust_bench/runtime_helpers.rs"]
+mod runtime_helpers;
 
-include!("mhs_rust_bench/metrics.rs");
+#[path = "mhs_rust_bench/scenarios.rs"]
+mod scenarios;
+
+fn main() -> ExitCode {
+    config::main()
+}

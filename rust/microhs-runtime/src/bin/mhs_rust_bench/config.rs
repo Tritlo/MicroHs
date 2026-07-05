@@ -1,3 +1,10 @@
+use super::c_compare::bench_c_mhsbench;
+use super::metrics::{mib_per_s, millis, nanos_millis, nanos_per_iter, print_gc_events};
+use super::profile_output::print_profile;
+use super::runner::{bench_eval, bench_parse, profile_eval};
+use super::scenarios::make_scenario;
+use super::*;
+
 const DEFAULT_ITERS: usize = 1_000;
 const DEFAULT_WARMUP_ITERS: usize = 0;
 const DEFAULT_SCENARIO: &str = "identity-chain:1000";
@@ -18,13 +25,13 @@ struct Config {
 }
 
 #[derive(Clone, Copy)]
-enum BenchMode {
+pub(super) enum BenchMode {
     Whnf,
     Main,
 }
 
 impl BenchMode {
-    fn parse(text: &str) -> Result<Self, String> {
+    pub(super) fn parse(text: &str) -> Result<Self, String> {
         match text {
             "whnf" => Ok(Self::Whnf),
             "main" => Ok(Self::Main),
@@ -32,7 +39,7 @@ impl BenchMode {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Whnf => "whnf",
             Self::Main => "main",
@@ -52,7 +59,7 @@ fn usage() {
     );
 }
 
-fn main() -> ExitCode {
+pub(super) fn main() -> ExitCode {
     let config = match parse_args(env::args().skip(1)) {
         Ok(config) => config,
         Err(message) => {

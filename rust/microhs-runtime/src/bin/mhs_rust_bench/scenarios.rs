@@ -1,4 +1,4 @@
-fn make_scenario(scenario: &str) -> Result<Vec<u8>, String> {
+pub(super) fn make_scenario(scenario: &str) -> Result<Vec<u8>, String> {
     if let Some(size) = scenario.strip_prefix("identity-chain:") {
         let size = parse_scenario_size("identity-chain", size)?;
         let mut out = String::from("v8.4\n0\nI");

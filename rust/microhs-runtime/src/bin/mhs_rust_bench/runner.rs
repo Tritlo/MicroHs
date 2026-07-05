@@ -1,8 +1,12 @@
-struct ParseBench {
-    elapsed: Duration,
+use super::config::BenchMode;
+use super::runtime_helpers::{bytes_sink, main_input_sink, reduce_main_or_panic};
+use super::*;
+
+pub(super) struct ParseBench {
+    pub(super) elapsed: Duration,
 }
 
-fn bench_parse(input: &[u8], warmup_iters: usize, iters: usize) -> ParseBench {
+pub(super) fn bench_parse(input: &[u8], warmup_iters: usize, iters: usize) -> ParseBench {
     for _ in 0..warmup_iters {
         black_box(parse_once(input));
     }
@@ -21,26 +25,26 @@ fn parse_once(input: &[u8]) -> usize {
     program.node_count()
 }
 
-struct EvalBench {
-    elapsed: Duration,
-    steps: usize,
-    serialize_sink: usize,
-    step_limited_iters: usize,
-    gc: GcStats,
+pub(super) struct EvalBench {
+    pub(super) elapsed: Duration,
+    pub(super) steps: usize,
+    pub(super) serialize_sink: usize,
+    pub(super) step_limited_iters: usize,
+    pub(super) gc: GcStats,
 }
 
-struct ProfileBench {
-    elapsed: Duration,
-    steps: usize,
-    serialize_sink: usize,
-    step_limited: bool,
-    nodes_before: usize,
-    nodes_after: usize,
-    gc: GcStats,
-    profile: EvalProfile,
+pub(super) struct ProfileBench {
+    pub(super) elapsed: Duration,
+    pub(super) steps: usize,
+    pub(super) serialize_sink: usize,
+    pub(super) step_limited: bool,
+    pub(super) nodes_before: usize,
+    pub(super) nodes_after: usize,
+    pub(super) gc: GcStats,
+    pub(super) profile: EvalProfile,
 }
 
-fn bench_eval(
+pub(super) fn bench_eval(
     input: &[u8],
     mode: BenchMode,
     program_args: &[Vec<u8>],
@@ -129,11 +133,11 @@ fn bench_eval(
     }
 }
 
-struct RunOnce {
-    steps: usize,
-    serialize_sink: usize,
-    step_limited: bool,
-    gc: GcStats,
+pub(super) struct RunOnce {
+    pub(super) steps: usize,
+    pub(super) serialize_sink: usize,
+    pub(super) step_limited: bool,
+    pub(super) gc: GcStats,
 }
 
 fn eval_once(
@@ -179,7 +183,7 @@ fn eval_once(
     run
 }
 
-fn profile_eval(
+pub(super) fn profile_eval(
     input: &[u8],
     mode: BenchMode,
     program_args: &[Vec<u8>],
