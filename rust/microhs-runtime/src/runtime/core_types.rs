@@ -773,6 +773,5 @@ pub struct Program {
     pub(in crate::runtime) small_ints: [Option<NodeId>; SMALL_INT_COUNT],
     pub(in crate::runtime) world: Option<NodeId>,
     pub(in crate::runtime) profile: Option<EvalProfile>,
-    pub(in crate::runtime) trace_expected_bytes: bool,
     pub(in crate::runtime) reduce_depth: usize,
 }

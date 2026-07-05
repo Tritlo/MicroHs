@@ -189,19 +189,6 @@ impl Program {
     }
 
     pub(in crate::runtime) fn expected_bytes_error(&self, id: NodeId) -> EvalError {
-        if self.trace_expected_bytes {
-            eprintln!("expected bytes: reductions={}", self.reductions);
-            eprintln!(
-                "  gc_collections={} gc_last_live_nodes={} gc_last_free_nodes={} gc_current_nodes={} gc_current_free_nodes={} gc_allocations_since_collect={}",
-                self.gc_collections,
-                self.gc_last_live_nodes,
-                self.gc_last_free_nodes,
-                self.nodes.len(),
-                self.free_nodes,
-                self.gc_allocations_since_collect
-            );
-            eprintln!("  node={}", self.node_trace_summary(id));
-        }
         EvalError::ExpectedBytes(id)
     }
 

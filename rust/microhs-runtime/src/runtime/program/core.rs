@@ -112,7 +112,6 @@ impl Program {
             small_ints,
             world: None,
             profile: None,
-            trace_expected_bytes: std::env::var_os("MHS_TRACE_EXPECTED_BYTES").is_some(),
             reduce_depth: 0,
         }
     }
