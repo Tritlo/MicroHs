@@ -4529,6 +4529,17 @@ This is a no-code audit for the next structural heap step. Current GC can mark r
 | 100M/32M bounded A/B | base ms: `1592.369`, `1556.297`, `1531.004`, `1555.399`, `1547.157`, `1548.650`, `1575.255`, `1546.823` (avg `1556.619`); candidate ms: `1641.718`, `1665.714`, `1571.967`, `1575.690`, `1641.022`, `1605.393`, `1618.300`, `1577.045` (avg `1612.106`, `+3.565%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,836`, sink `661902`, and `cell_size_bytes=8` |
 | reading | Clear reject: `0/8` favorable. Like the broader accessor/resolver probes, forcing lower-level cell reads bloats or perturbs the hot code; keep these helpers ordinary `#[inline]` |
 
+## 2026-07-06 Frame Completion Cold-Layout Bundle
+
+| item | result |
+|---|---|
+| probe | accepted source layout bundle: kept the `apply_stack_frame_value` keeper, then marked both frame-completion dispatchers `Program::finish_ready_stack_frame` and `Program::finish_whnf_stack_frame` as `#[cold] #[inline(never)]`. This treats frame completion as a side path from the hot stack reducer without inlining the medium WHNF dispatcher |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, `cargo test --manifest-path rust/microhs-runtime/Cargo.toml --lib` (41/41), and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1711.199`, `1547.549`, `1547.534`, `1555.025`, `1556.535`, `1596.280`, `1550.936`, `2009.266`, `1614.757`, `1551.934`, `1567.464`, `1537.580`, `1591.483`, `1568.029`, `1611.353`, `1567.137` (avg `1605.254`); candidate ms: `1559.047`, `1577.886`, `1562.143`, `1549.792`, `1542.319`, `1572.360`, `1542.055`, `1526.002`, `1522.538`, `1526.967`, `1559.246`, `1545.206`, `1591.611`, `1516.558`, `1513.997`, `1551.211` (avg `1547.434`, `-3.602%`). Pair direction was `12/16` favorable; second half alone stayed favorable at base avg `1576.217` vs candidate avg `1540.917` (`-2.240%`, `6/8` favorable). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,840`/`33,949,856`, sink `661902`, and `cell_size_bytes=8` |
+| 128M full gate | accepted. Same-session baseline was byte-identical at `51.233259s`, `51.186869s`, `50.641603s` (median `51.186869s`, avg `51.020577s`), `3,659,454,895` steps, `31` GCs, high-water `138,057,546`, SHA `29b8c5a55e0952bd25a9a06d5723033e0367ebaf53cfd598fa00f8e65a80d98a`. Candidate 3x was byte-identical at `49.917325s`, `50.111951s`, `50.038950s` (median `50.038950s`, avg `50.022742s`, `-2.243%` median vs same-session baseline), same steps/GCs/high-water/sink, same SHA and `cmp=0` |
+| 80Mi fair-memory gate | same-session baseline was byte-identical at `53.876516s`, `54.674004s`, `53.817361s` (median `53.876516s`, avg `54.122627s`), `3,659,454,876` steps, `50` GCs, high-water `88,207,717`, same SHA. Candidate 3x was byte-identical at `52.718458s`, `52.811665s`, `52.822633s` (median `52.811665s`, avg `52.784252s`, `-1.976%` median), same steps/GCs/high-water/sink, same SHA and `cmp=0` |
+| reading | Keeper: unlike inlining the WHNF dispatcher, cold/out-of-line layout for the two frame-completion dispatchers survives both full gates. Current Rust default is now around `50.04s` at 128M and `52.81s` at 80Mi, still above non-PGO C default (`46.40s`), so keep churning |
+
 ## Active Tradeoffs
 
 | item | reading |
