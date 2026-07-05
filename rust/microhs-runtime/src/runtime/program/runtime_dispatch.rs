@@ -6,4 +6,3 @@ mod bytes;
 mod ffi;
 mod js;
 mod pointers;
-mod trace;
