@@ -177,7 +177,7 @@ impl Program {
         let Some(Node::Ffi(name)) = self.cold_node(cont) else {
             return Ok(false);
         };
-        let Some(arity) = ffi_arity(&name) else {
+        let Some(arity) = ffi_arity(name) else {
             return Err(EvalError::UnknownFfi(name.to_string()));
         };
         Ok(arity == 1)

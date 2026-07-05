@@ -1,5 +1,4 @@
 //! Feature-gated heap evacuation scaffold for moving GC.
-#![allow(dead_code)]
 
 use super::*;
 
