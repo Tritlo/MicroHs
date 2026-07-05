@@ -4420,6 +4420,32 @@ This is a no-code audit for the next structural heap step. Current GC can mark r
 | 80Mi fair-memory gate | candidate 3x was byte-identical at `53.668268s`, `54.005517s`, `53.650358s` (median `53.668268s`, avg `53.774714s`), `3,659,455,047` steps, `50` GCs, high-water `88,207,772`, sink `661902`, same SHA and `cmp=0` |
 | reading | Real keeper: it beats the previous current-source 128M best (`53.636s`) by about `4.0%` and the latest 80Mi fair-memory median (`55.926s`) by about `4.0%`. It still does not beat non-PGO C (`46.40s` default heap), so continue codegen churn from this worktree state |
 
+## 2026-07-05 EvalStack Accessor Inline-Control Probe
+
+| item | result |
+|---|---|
+| probe | rejected sibling inline-control bundle: added `#[inline(always)]` to `EvalStack` app/arg accessors and fixed-arity `take_argsN` methods. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1606.942`, `1749.057`, `1578.102`, `1686.693` (avg `1655.198`); candidate ms: `1666.935`, `1694.745`, `1799.910`, `1638.311` (avg `1699.975`, `+2.71%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,836`, sink `661902`, and `cell_size_bytes=8` |
+| reading | The accepted keeper wants the `Program` stack/app helpers inlined, but forcing the lower-level `EvalStack` accessors over-inlines or perturbs layout enough to lose. Keep this boundary compiler-chosen unless a later bundle changes the stack representation |
+
+## 2026-07-05 Trusted Resolver Inline-Control Probe
+
+| item | result |
+|---|---|
+| probe | rejected inline-control sibling: changed `cell_trusted`, `app_fun_trusted`, `resolve_whnf_trusted`, and `resolve_for_whnf` to `#[inline(always)]`. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1860.568`, `1646.470`, `1521.951`, `1886.195` (avg `1728.796`); candidate ms: `1634.898`, `1750.410`, `1642.937`, `1972.957` (avg `1750.301`, `+1.24%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,836`, sink `661902`, and `cell_size_bytes=8` |
+| reading | No standalone win from forcing resolver/read inlining after the hot-stack helper keeper. Leave these as ordinary `#[inline]`; the remaining gap is not exposed by simply forcing more of the trusted descent path into callers |
+
+## 2026-07-05 Inline-Threshold Retest After Hot-Helper Keeper
+
+| item | result |
+|---|---|
+| probe | rejected build-level retest: rebuilt current accepted hot-helper source with `RUSTFLAGS=-Cllvm-args=-inline-threshold=275` to see whether the accepted inline bundle changed the earlier build-knob result. No source diff |
+| 100M/32M bounded A/B | base ms: `1648.774`, `1557.196`, `1637.945`, `1588.946` (avg `1608.215`); candidate ms: `1836.949`, `1852.534`, `1560.032`, `1547.226` (avg `1699.185`, `+5.66%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,840`, sink `661902`, and `cell_size_bytes=8` |
+| reading | The global inline-threshold knob is even worse after the targeted source inlining keeper. Keep source-local inline decisions; do not ship the LLVM inline-threshold flag |
+
 ## Active Tradeoffs
 
 | item | reading |
