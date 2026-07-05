@@ -705,6 +705,7 @@ impl Program {
         Ok(())
     }
 
+    #[cfg_attr(feature = "moving-gc", allow(dead_code))]
     pub(in crate::runtime) fn collect_garbage_between_steps(
         &mut self,
         current_root: NodeId,
@@ -843,6 +844,149 @@ impl Program {
         Ok(freed)
     }
 
+    #[cfg(feature = "moving-gc")]
+    pub(in crate::runtime) fn collect_moving_garbage_between_steps(
+        &mut self,
+        current_root: &mut NodeId,
+        frame_stack: &mut EvalFrameStack,
+        eval_spine: &mut EvalSpine,
+        persistent_spine: &mut PersistentSpine,
+        scratch_args: &mut [NodeId],
+        scratch_apps: &mut [NodeId],
+        machine_stack: Option<&mut EvalStack>,
+    ) -> Result<usize, EvalError> {
+        let started = Instant::now();
+        let allocations_since_collect = self.gc_allocations_since_collect;
+        let mut marked = std::mem::take(&mut self.gc_marked);
+        marked.clear();
+        marked.resize(self.nodes.len(), false);
+        let mut work = std::mem::take(&mut self.gc_mark_work);
+        work.clear();
+        let mut foreign_finalizer_marked = std::mem::take(&mut self.gc_foreign_finalizer_marked);
+        foreign_finalizer_marked.clear();
+        foreign_finalizer_marked.resize(self.foreign_finalizers.len(), false);
+        #[cfg(feature = "gc-phase-profile")]
+        let mark_started = Instant::now();
+        self.mark_program_roots(
+            &mut marked,
+            &mut work,
+            *current_root,
+            frame_stack,
+            eval_spine,
+            persistent_spine,
+            scratch_args,
+            scratch_apps,
+            machine_stack.as_deref(),
+        );
+        for id in self.node_pointers.iter().copied() {
+            Self::mark_node_id(&mut marked, &mut work, id);
+        }
+        self.mark_reachable(&mut marked, &mut work, &mut foreign_finalizer_marked);
+        let weak_finalizers =
+            self.sweep_weaks_after_mark(&mut marked, &mut work, &mut foreign_finalizer_marked);
+        #[cfg(feature = "gc-phase-profile")]
+        let mark_nanos = mark_started.elapsed().as_nanos();
+        work.clear();
+        self.run_dead_foreign_finalizers(&foreign_finalizer_marked)?;
+        #[cfg(feature = "gc-phase-profile")]
+        let (
+            young_profile_slots,
+            young_profile_live,
+            young_profile_dead,
+            young_profile_old_to_young_sources,
+            young_profile_old_to_young_edges,
+        ) = self.gc_profile_young_candidate_stats(&marked);
+
+        #[cfg(feature = "gc-phase-profile")]
+        let sweep_started = Instant::now();
+        self.pending_weak_finalizers.extend(weak_finalizers);
+        let old_len = self.nodes.len();
+        let freed = self.evacuate_marked_heap_for_moving_gc(
+            &marked,
+            current_root,
+            frame_stack,
+            eval_spine,
+            persistent_spine,
+            scratch_args,
+            scratch_apps,
+            machine_stack,
+        );
+        let live = self.nodes.len();
+        debug_assert_eq!(old_len.saturating_sub(freed), live);
+        #[cfg(feature = "gc-phase-profile")]
+        let sweep_nanos = sweep_started.elapsed().as_nanos();
+        marked.clear();
+        self.gc_marked = marked;
+        self.gc_mark_work = work;
+        self.gc_foreign_finalizer_marked = foreign_finalizer_marked;
+        let pause_nanos = started.elapsed().as_nanos();
+        self.gc_collections += 1;
+        self.gc_freed_nodes_total = self.gc_freed_nodes_total.saturating_add(freed);
+        self.gc_last_live_nodes = live;
+        self.gc_last_free_nodes = self.free_nodes;
+        self.gc_last_pause_nanos = pause_nanos;
+        self.gc_total_pause_nanos = self.gc_total_pause_nanos.saturating_add(pause_nanos);
+        #[cfg(feature = "gc-phase-profile")]
+        {
+            self.gc_last_mark_nanos = mark_nanos;
+            self.gc_total_mark_nanos = self.gc_total_mark_nanos.saturating_add(mark_nanos);
+            self.gc_last_sweep_nanos = sweep_nanos;
+            self.gc_total_sweep_nanos = self.gc_total_sweep_nanos.saturating_add(sweep_nanos);
+            self.gc_young_profile_last_slots = young_profile_slots;
+            self.gc_young_profile_last_live = young_profile_live;
+            self.gc_young_profile_last_dead = young_profile_dead;
+            self.gc_young_profile_last_old_to_young_sources = young_profile_old_to_young_sources;
+            self.gc_young_profile_last_old_to_young_edges = young_profile_old_to_young_edges;
+            self.gc_young_profile_total_slots = self
+                .gc_young_profile_total_slots
+                .saturating_add(young_profile_slots);
+            self.gc_young_profile_total_live = self
+                .gc_young_profile_total_live
+                .saturating_add(young_profile_live);
+            self.gc_young_profile_total_dead = self
+                .gc_young_profile_total_dead
+                .saturating_add(young_profile_dead);
+            self.gc_young_profile_total_old_to_young_sources = self
+                .gc_young_profile_total_old_to_young_sources
+                .saturating_add(young_profile_old_to_young_sources);
+            self.gc_young_profile_total_old_to_young_edges = self
+                .gc_young_profile_total_old_to_young_edges
+                .saturating_add(young_profile_old_to_young_edges);
+        }
+        self.gc_last_allocations_since_collect = allocations_since_collect;
+        self.gc_allocations_since_collect = 0;
+        self.gc_events.push(GcEventStats {
+            collection: self.gc_collections,
+            pause_nanos,
+            #[cfg(feature = "gc-phase-profile")]
+            mark_nanos,
+            #[cfg(feature = "gc-phase-profile")]
+            sweep_nanos,
+            live_nodes: live,
+            free_nodes: self.free_nodes,
+            arena_nodes: self.nodes.len(),
+            freed_nodes: freed,
+            allocations_since_collect,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_slots,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_live,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_dead,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_old_to_young_sources,
+            #[cfg(feature = "gc-phase-profile")]
+            young_profile_old_to_young_edges,
+        });
+        #[cfg(feature = "gc-phase-profile")]
+        self.gc_young_profile_allocated_slots.clear();
+        while let Some(finalizer) = self.pending_weak_finalizers.pop() {
+            self.reduce_node_whnf(finalizer, FORCE_REDUCTION_LIMIT)?;
+        }
+        Ok(freed)
+    }
+
+    #[cfg_attr(feature = "moving-gc", allow(dead_code))]
     pub(in crate::runtime) fn maybe_collect_garbage_between_steps(
         &mut self,
         current_root: NodeId,
@@ -863,6 +1007,38 @@ impl Program {
             return Ok(());
         }
         self.collect_garbage_between_steps(
+            current_root,
+            frame_stack,
+            eval_spine,
+            persistent_spine,
+            scratch_args,
+            scratch_apps,
+            machine_stack,
+        )?;
+        Ok(())
+    }
+
+    #[cfg(feature = "moving-gc")]
+    pub(in crate::runtime) fn maybe_collect_moving_garbage_between_steps(
+        &mut self,
+        current_root: &mut NodeId,
+        frame_stack: &mut EvalFrameStack,
+        eval_spine: &mut EvalSpine,
+        persistent_spine: &mut PersistentSpine,
+        scratch_args: &mut [NodeId],
+        scratch_apps: &mut [NodeId],
+        machine_stack: Option<&mut EvalStack>,
+    ) -> Result<(), EvalError> {
+        if self.gc_node_interval == 0 {
+            return Ok(());
+        }
+        if self.reduce_depth != 1 {
+            return Ok(());
+        }
+        if self.gc_allocations_since_collect < self.gc_node_interval {
+            return Ok(());
+        }
+        self.collect_moving_garbage_between_steps(
             current_root,
             frame_stack,
             eval_spine,
