@@ -107,10 +107,6 @@ pub struct EvalProfile {
     #[cfg(feature = "eval-phase-profile")]
     pub app_alloc_fresh_push_nanos: u128,
     #[cfg(feature = "eval-phase-profile")]
-    pub profile_step_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub profile_reduction_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
     pub stack_head_arities: HashMap<String, usize>,
     #[cfg(feature = "eval-phase-profile")]
     pub stack_head_arity_classes: HashMap<String, usize>,

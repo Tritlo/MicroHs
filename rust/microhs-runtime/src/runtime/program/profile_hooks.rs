@@ -34,8 +34,6 @@ impl Program {
 
     #[cold]
     pub(in crate::runtime) fn profile_step(&mut self, head: NodeId, arity: usize) -> ProfileHead {
-        #[cfg(feature = "eval-phase-profile")]
-        let started = Instant::now();
         let key = self.profile_head_key(head);
         #[cfg(feature = "eval-phase-profile")]
         let known_head = self.cell(head).prim();
@@ -68,12 +66,6 @@ impl Program {
             }
         }
         profile.max_spine_arity = profile.max_spine_arity.max(arity);
-        #[cfg(feature = "eval-phase-profile")]
-        {
-            profile.profile_step_nanos = profile
-                .profile_step_nanos
-                .saturating_add(started.elapsed().as_nanos());
-        }
         Some(head)
     }
 
@@ -82,8 +74,6 @@ impl Program {
         let Some(head) = head else {
             return;
         };
-        #[cfg(feature = "eval-phase-profile")]
-        let started = Instant::now();
         let key = self.profile_head_key(head);
         let Some(profile) = self.profile.as_mut() else {
             return;
@@ -91,12 +81,6 @@ impl Program {
         profile.successful_steps += 1;
         profile.reductions += reductions;
         *profile.head_reductions.entry(key).or_default() += reductions;
-        #[cfg(feature = "eval-phase-profile")]
-        {
-            profile.profile_reduction_nanos = profile
-                .profile_reduction_nanos
-                .saturating_add(started.elapsed().as_nanos());
-        }
     }
 
     #[cfg(feature = "eval-phase-profile")]
