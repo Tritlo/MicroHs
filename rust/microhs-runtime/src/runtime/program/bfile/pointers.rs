@@ -1,5 +1,11 @@
+use super::*;
+
 impl Program {
-    fn pointer_for_node(&mut self, id: NodeId, offset: usize) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn pointer_for_node(
+        &mut self,
+        id: NodeId,
+        offset: usize,
+    ) -> Result<i64, EvalError> {
         let offset = i64::try_from(offset).map_err(|_| EvalError::Overflow)?;
         if offset >= NODE_PTR_STRIDE {
             return Err(EvalError::Overflow);
@@ -25,7 +31,11 @@ impl Program {
             .ok_or(EvalError::Overflow)
     }
 
-    fn pointer_for_allocation(&self, slot: usize, offset: usize) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn pointer_for_allocation(
+        &self,
+        slot: usize,
+        offset: usize,
+    ) -> Result<i64, EvalError> {
         let slot = i64::try_from(slot).map_err(|_| EvalError::Overflow)?;
         let offset = i64::try_from(offset).map_err(|_| EvalError::Overflow)?;
         if offset >= ALLOCATION_PTR_STRIDE {
@@ -44,7 +54,7 @@ impl Program {
         Ok(ptr)
     }
 
-    fn pointer_for_bfile(&self, slot: usize) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn pointer_for_bfile(&self, slot: usize) -> Result<i64, EvalError> {
         let slot = i64::try_from(slot).map_err(|_| EvalError::Overflow)?;
         BFILE_PTR_BASE
             .checked_add(
@@ -55,7 +65,7 @@ impl Program {
             .ok_or(EvalError::Overflow)
     }
 
-    fn pointer_for_dir(&self, slot: usize) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn pointer_for_dir(&self, slot: usize) -> Result<i64, EvalError> {
         let slot = i64::try_from(slot).map_err(|_| EvalError::Overflow)?;
         DIR_PTR_BASE
             .checked_add(
@@ -66,7 +76,7 @@ impl Program {
             .ok_or(EvalError::Overflow)
     }
 
-    fn decode_pointer(&self, ptr: i64) -> Result<(usize, usize), EvalError> {
+    pub(in crate::runtime) fn decode_pointer(&self, ptr: i64) -> Result<(usize, usize), EvalError> {
         if ptr <= 0 {
             return Err(trace_invalid_bytes!(self, "decode_pointer ptr={ptr}"));
         }
@@ -91,7 +101,10 @@ impl Program {
         Ok((block.index(), offset))
     }
 
-    fn decode_allocation_pointer(&self, ptr: i64) -> Result<(usize, usize), EvalError> {
+    pub(in crate::runtime) fn decode_allocation_pointer(
+        &self,
+        ptr: i64,
+    ) -> Result<(usize, usize), EvalError> {
         if ptr < ALLOCATION_PTR_BASE || ptr >= 0 {
             return Err(trace_invalid_bytes!(
                 self,
@@ -122,7 +135,7 @@ impl Program {
         Ok((slot, offset))
     }
 
-    fn decode_bfile_pointer(&self, ptr: i64) -> Result<usize, EvalError> {
+    pub(in crate::runtime) fn decode_bfile_pointer(&self, ptr: i64) -> Result<usize, EvalError> {
         if !(BFILE_PTR_BASE..DIR_PTR_BASE).contains(&ptr) {
             return Err(EvalError::InvalidHandle);
         }
@@ -133,7 +146,7 @@ impl Program {
         usize::try_from(raw / BFILE_PTR_STRIDE).map_err(|_| EvalError::InvalidHandle)
     }
 
-    fn decode_dir_pointer(&self, ptr: i64) -> Result<usize, EvalError> {
+    pub(in crate::runtime) fn decode_dir_pointer(&self, ptr: i64) -> Result<usize, EvalError> {
         if !(DIR_PTR_BASE..ALLOCATION_PTR_BASE).contains(&ptr) {
             return Err(EvalError::InvalidHandle);
         }
@@ -144,7 +157,10 @@ impl Program {
         usize::try_from(raw / DIR_PTR_STRIDE).map_err(|_| EvalError::InvalidHandle)
     }
 
-    fn allocation_bytes(&self, ptr: i64) -> Result<Option<&[u8]>, EvalError> {
+    pub(in crate::runtime) fn allocation_bytes(
+        &self,
+        ptr: i64,
+    ) -> Result<Option<&[u8]>, EvalError> {
         if ptr < ALLOCATION_PTR_BASE || ptr >= 0 {
             return Ok(None);
         }
@@ -159,7 +175,7 @@ impl Program {
         Ok(Some(&bytes[offset..]))
     }
 
-    fn pointer_bytes(&self, ptr: i64) -> Result<&[u8], EvalError> {
+    pub(in crate::runtime) fn pointer_bytes(&self, ptr: i64) -> Result<&[u8], EvalError> {
         if let Some(bytes) = self.allocation_bytes(ptr)? {
             return Ok(bytes);
         }
@@ -208,7 +224,11 @@ impl Program {
         Ok(&bytes[offset..])
     }
 
-    fn write_pointer_bytes(&mut self, ptr: i64, bytes: &[u8]) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn write_pointer_bytes(
+        &mut self,
+        ptr: i64,
+        bytes: &[u8],
+    ) -> Result<(), EvalError> {
         if ptr >= ALLOCATION_PTR_BASE && ptr < 0 {
             let (slot, offset) = self.decode_allocation_pointer(ptr)?;
             let write_len = bytes.len();
@@ -297,13 +317,20 @@ impl Program {
         Ok(())
     }
 
-    fn peek_array<const N: usize>(&self, ptr: i64) -> Result<[u8; N], EvalError> {
+    pub(in crate::runtime) fn peek_array<const N: usize>(
+        &self,
+        ptr: i64,
+    ) -> Result<[u8; N], EvalError> {
         self.read_pointer_bytes(ptr, N)?
             .try_into()
             .map_err(|_| EvalError::InvalidByteString)
     }
 
-    fn peek_unsigned(&self, ptr: i64, size: usize) -> Result<u64, EvalError> {
+    pub(in crate::runtime) fn peek_unsigned(
+        &self,
+        ptr: i64,
+        size: usize,
+    ) -> Result<u64, EvalError> {
         if size == 0 || size > 8 {
             return Err(EvalError::Overflow);
         }
@@ -317,7 +344,12 @@ impl Program {
         Ok(u64::from_ne_bytes(wide))
     }
 
-    fn poke_unsigned(&mut self, ptr: i64, size: usize, value: u64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn poke_unsigned(
+        &mut self,
+        ptr: i64,
+        size: usize,
+        value: u64,
+    ) -> Result<(), EvalError> {
         if size == 0 || size > 8 {
             return Err(EvalError::Overflow);
         }
@@ -330,13 +362,18 @@ impl Program {
         self.write_pointer_bytes(ptr, bytes)
     }
 
-    fn peek_signed(&self, ptr: i64, size: usize) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn peek_signed(&self, ptr: i64, size: usize) -> Result<i64, EvalError> {
         let unsigned = self.peek_unsigned(ptr, size)?;
         let shift = (8 - size) * 8;
         Ok(((unsigned << shift) as i64) >> shift)
     }
 
-    fn poke_signed(&mut self, ptr: i64, size: usize, value: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn poke_signed(
+        &mut self,
+        ptr: i64,
+        size: usize,
+        value: i64,
+    ) -> Result<(), EvalError> {
         if size == 0 || size > 8 {
             return Err(EvalError::Overflow);
         }
@@ -349,7 +386,7 @@ impl Program {
         self.write_pointer_bytes(ptr, bytes)
     }
 
-    fn peek_c_char(&self, ptr: i64) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn peek_c_char(&self, ptr: i64) -> Result<i64, EvalError> {
         if std::os::raw::c_char::MIN < 0 {
             self.peek_signed(ptr, size_of::<std::os::raw::c_char>())
         } else {
@@ -357,7 +394,11 @@ impl Program {
         }
     }
 
-    fn poke_c_char(&mut self, ptr: i64, value: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn poke_c_char(
+        &mut self,
+        ptr: i64,
+        value: i64,
+    ) -> Result<(), EvalError> {
         if std::os::raw::c_char::MIN < 0 {
             self.poke_signed(ptr, size_of::<std::os::raw::c_char>(), value)
         } else {
@@ -365,7 +406,11 @@ impl Program {
         }
     }
 
-    fn read_pointer_bytes(&self, ptr: i64, len: usize) -> Result<Vec<u8>, EvalError> {
+    pub(in crate::runtime) fn read_pointer_bytes(
+        &self,
+        ptr: i64,
+        len: usize,
+    ) -> Result<Vec<u8>, EvalError> {
         let bytes = self.pointer_bytes(ptr)?;
         let bytes = bytes.get(..len).ok_or_else(|| {
             trace_invalid_bytes!(
@@ -377,17 +422,17 @@ impl Program {
         Ok(bytes.to_vec())
     }
 
-    fn read_c_string(&self, ptr: i64) -> Result<Vec<u8>, EvalError> {
+    pub(in crate::runtime) fn read_c_string(&self, ptr: i64) -> Result<Vec<u8>, EvalError> {
         let bytes = self.pointer_bytes(ptr)?;
         let len = c_string_len(bytes);
         Ok(bytes[..len].to_vec())
     }
 
-    fn c_string_len(&self, ptr: i64) -> Result<usize, EvalError> {
+    pub(in crate::runtime) fn c_string_len(&self, ptr: i64) -> Result<usize, EvalError> {
         Ok(c_string_len(self.pointer_bytes(ptr)?))
     }
 
-    fn bfile(&self, ptr: i64) -> Result<&BFile, EvalError> {
+    pub(in crate::runtime) fn bfile(&self, ptr: i64) -> Result<&BFile, EvalError> {
         let slot = self.decode_bfile_pointer(ptr)?;
         self.bfiles
             .get(slot)
@@ -395,7 +440,7 @@ impl Program {
             .ok_or(EvalError::InvalidHandle)
     }
 
-    fn bfile_mut(&mut self, ptr: i64) -> Result<&mut BFile, EvalError> {
+    pub(in crate::runtime) fn bfile_mut(&mut self, ptr: i64) -> Result<&mut BFile, EvalError> {
         let slot = self.decode_bfile_pointer(ptr)?;
         self.bfiles
             .get_mut(slot)
@@ -403,7 +448,7 @@ impl Program {
             .ok_or(EvalError::InvalidHandle)
     }
 
-    fn read_only_memory_view_state(
+    pub(in crate::runtime) fn read_only_memory_view_state(
         &self,
         ptr: i64,
     ) -> Result<(NodeId, usize, usize, usize), EvalError> {
@@ -422,7 +467,10 @@ impl Program {
         }
     }
 
-    fn get_read_only_memory_view_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn get_read_only_memory_view_byte(
+        &mut self,
+        ptr: i64,
+    ) -> Result<i64, EvalError> {
         let (base, offset, len, pos) = self.read_only_memory_view_state(ptr)?;
         if pos >= len {
             return Ok(-1);
@@ -443,7 +491,11 @@ impl Program {
         }
     }
 
-    fn read_only_memory_view_bytes(&mut self, ptr: i64, len: usize) -> Result<Vec<u8>, EvalError> {
+    pub(in crate::runtime) fn read_only_memory_view_bytes(
+        &mut self,
+        ptr: i64,
+        len: usize,
+    ) -> Result<Vec<u8>, EvalError> {
         let (base, offset, view_len, current_pos) = self.read_only_memory_view_state(ptr)?;
         let read_len = len.min(view_len.saturating_sub(current_pos));
         let start = offset.checked_add(current_pos).ok_or(EvalError::Overflow)?;
@@ -465,7 +517,11 @@ impl Program {
         }
     }
 
-    fn unget_read_only_memory_view_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn unget_read_only_memory_view_byte(
+        &mut self,
+        ptr: i64,
+        byte: i64,
+    ) -> Result<(), EvalError> {
         let (base, offset, _len, pos) = self.read_only_memory_view_state(ptr)?;
         if pos == 0 {
             return Err(EvalError::InvalidHandle);

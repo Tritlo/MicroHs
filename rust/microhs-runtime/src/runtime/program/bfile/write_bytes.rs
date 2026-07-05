@@ -1,5 +1,11 @@
+use super::*;
+
 impl Program {
-    fn unget_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn unget_bfile_byte(
+        &mut self,
+        ptr: i64,
+        byte: i64,
+    ) -> Result<(), EvalError> {
         enum SpecialBFileUnget {
             Crlf(i64),
             ReadOnlyMemoryView,
@@ -99,7 +105,11 @@ impl Program {
         }
     }
 
-    fn put_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn put_bfile_byte(
+        &mut self,
+        ptr: i64,
+        byte: i64,
+    ) -> Result<(), EvalError> {
         if let Some(handle) = handle_from_ptr(ptr) {
             return self.write_io_handle_bytes(handle, &[byte as u8]);
         }
@@ -224,14 +234,22 @@ impl Program {
         }
     }
 
-    fn put_crlf_bfile_byte(&mut self, inner: i64, byte: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn put_crlf_bfile_byte(
+        &mut self,
+        inner: i64,
+        byte: i64,
+    ) -> Result<(), EvalError> {
         if byte == i64::from(b'\n') {
             self.put_bfile_byte(inner, i64::from(b'\r'))?;
         }
         self.put_bfile_byte(inner, byte)
     }
 
-    fn put_rle_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn put_rle_bfile_byte(
+        &mut self,
+        ptr: i64,
+        byte: i64,
+    ) -> Result<(), EvalError> {
         if byte < 0 {
             return Err(EvalError::InvalidByteString);
         }
@@ -282,7 +300,11 @@ impl Program {
         Ok(())
     }
 
-    fn put_base64_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn put_base64_bfile_byte(
+        &mut self,
+        ptr: i64,
+        byte: i64,
+    ) -> Result<(), EvalError> {
         if byte < 0 {
             return Err(EvalError::InvalidByteString);
         }
@@ -326,7 +348,11 @@ impl Program {
         Ok(())
     }
 
-    fn put_buf_bfile_byte(&mut self, ptr: i64, byte: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn put_buf_bfile_byte(
+        &mut self,
+        ptr: i64,
+        byte: i64,
+    ) -> Result<(), EvalError> {
         if byte < 0 {
             return Err(EvalError::InvalidByteString);
         }

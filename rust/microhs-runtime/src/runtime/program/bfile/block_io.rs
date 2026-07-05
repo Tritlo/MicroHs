@@ -1,11 +1,22 @@
+use super::*;
+
 impl Program {
-    fn read_bfile(&mut self, ptr: i64, dst: i64, len: usize) -> Result<usize, EvalError> {
+    pub(in crate::runtime) fn read_bfile(
+        &mut self,
+        ptr: i64,
+        dst: i64,
+        len: usize,
+    ) -> Result<usize, EvalError> {
         let bytes = self.read_bfile_bytes(ptr, len)?;
         self.write_pointer_bytes(dst, &bytes)?;
         Ok(bytes.len())
     }
 
-    fn read_bfile_bytes(&mut self, ptr: i64, len: usize) -> Result<Vec<u8>, EvalError> {
+    pub(in crate::runtime) fn read_bfile_bytes(
+        &mut self,
+        ptr: i64,
+        len: usize,
+    ) -> Result<Vec<u8>, EvalError> {
         if let Some(handle) = handle_from_ptr(ptr) {
             if handle != StdHandle::Stdin {
                 return Err(EvalError::InvalidHandle);
@@ -170,12 +181,21 @@ impl Program {
         }
     }
 
-    fn write_bfile(&mut self, ptr: i64, src: i64, len: usize) -> Result<usize, EvalError> {
+    pub(in crate::runtime) fn write_bfile(
+        &mut self,
+        ptr: i64,
+        src: i64,
+        len: usize,
+    ) -> Result<usize, EvalError> {
         let bytes = self.read_pointer_bytes(src, len)?;
         self.write_bfile_bytes(ptr, &bytes)
     }
 
-    fn write_bfile_bytes(&mut self, ptr: i64, bytes: &[u8]) -> Result<usize, EvalError> {
+    pub(in crate::runtime) fn write_bfile_bytes(
+        &mut self,
+        ptr: i64,
+        bytes: &[u8],
+    ) -> Result<usize, EvalError> {
         if let Some(handle) = handle_from_ptr(ptr) {
             self.write_io_handle_bytes(handle, bytes)?;
             return Ok(bytes.len());
@@ -281,7 +301,7 @@ impl Program {
         Ok(bytes.len())
     }
 
-    fn bfile_output_bytes(&self, ptr: i64) -> Result<Vec<u8>, EvalError> {
+    pub(in crate::runtime) fn bfile_output_bytes(&self, ptr: i64) -> Result<Vec<u8>, EvalError> {
         let bfile = self.bfile(ptr)?;
         if !bfile.writable {
             return Err(EvalError::InvalidHandle);
@@ -306,7 +326,7 @@ impl Program {
 
     #[cold]
     #[inline(never)]
-    fn deserialize_bfile(&mut self, ptr: i64) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn deserialize_bfile(&mut self, ptr: i64) -> Result<NodeId, EvalError> {
         let mut input = Vec::new();
         let mut last_error = None;
         loop {
@@ -324,7 +344,9 @@ impl Program {
         }
     }
 
-    fn deserialize_parse_error(error: crate::parse::ParseError) -> EvalError {
+    pub(in crate::runtime) fn deserialize_parse_error(
+        error: crate::parse::ParseError,
+    ) -> EvalError {
         match error {
             crate::parse::ParseError::UnknownPrim(name) => EvalError::UnknownPrim(name),
             _ => EvalError::InvalidByteString,
@@ -333,7 +355,10 @@ impl Program {
 
     #[cold]
     #[inline(never)]
-    fn append_parsed_program(&mut self, parsed: Program) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn append_parsed_program(
+        &mut self,
+        parsed: Program,
+    ) -> Result<NodeId, EvalError> {
         let root = parsed.root();
         let nodes = parsed.nodes();
         let mut remap = Vec::with_capacity(nodes.len());
@@ -405,7 +430,10 @@ impl Program {
         Self::remap_parsed_id(&remap, root)
     }
 
-    fn remap_parsed_id(remap: &[NodeId], id: NodeId) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn remap_parsed_id(
+        remap: &[NodeId],
+        id: NodeId,
+    ) -> Result<NodeId, EvalError> {
         remap
             .get(id.index())
             .copied()

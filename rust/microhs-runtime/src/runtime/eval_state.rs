@@ -1,44 +1,46 @@
-#[derive(Clone, Debug, Default)]
-struct PrimCache {
-    a: Option<NodeId>,
-    b: Option<NodeId>,
-    c: Option<NodeId>,
-    i: Option<NodeId>,
-    k: Option<NodeId>,
-    k2: Option<NodeId>,
-    k3: Option<NodeId>,
-    o: Option<NodeId>,
-    p: Option<NodeId>,
-    u: Option<NodeId>,
-    y: Option<NodeId>,
-    z: Option<NodeId>,
-    io_bind: Option<NodeId>,
-    io_perform_io: Option<NodeId>,
-}
+use super::*;
 
 #[derive(Clone, Debug, Default)]
-struct CompoundCache {
-    fst: Option<NodeId>,
-    snd: Option<NodeId>,
-    just: Option<NodeId>,
-    pair_unit: Option<NodeId>,
+pub(in crate::runtime) struct PrimCache {
+    pub(in crate::runtime) a: Option<NodeId>,
+    pub(in crate::runtime) b: Option<NodeId>,
+    pub(in crate::runtime) c: Option<NodeId>,
+    pub(in crate::runtime) i: Option<NodeId>,
+    pub(in crate::runtime) k: Option<NodeId>,
+    pub(in crate::runtime) k2: Option<NodeId>,
+    pub(in crate::runtime) k3: Option<NodeId>,
+    pub(in crate::runtime) o: Option<NodeId>,
+    pub(in crate::runtime) p: Option<NodeId>,
+    pub(in crate::runtime) u: Option<NodeId>,
+    pub(in crate::runtime) y: Option<NodeId>,
+    pub(in crate::runtime) z: Option<NodeId>,
+    pub(in crate::runtime) io_bind: Option<NodeId>,
+    pub(in crate::runtime) io_perform_io: Option<NodeId>,
 }
 
-struct Spine {
-    head: NodeId,
-    storage: SpineStorage,
+#[derive(Clone, Debug, Default)]
+pub(in crate::runtime) struct CompoundCache {
+    pub(in crate::runtime) fst: Option<NodeId>,
+    pub(in crate::runtime) snd: Option<NodeId>,
+    pub(in crate::runtime) just: Option<NodeId>,
+    pub(in crate::runtime) pair_unit: Option<NodeId>,
 }
 
-struct EvalSpine {
-    inline_args: [MaybeUninit<NodeId>; INLINE_SPINE],
-    inline_apps: [MaybeUninit<NodeId>; INLINE_SPINE],
-    inline_len: usize,
-    heap_args: Vec<NodeId>,
-    heap_apps: Vec<NodeId>,
-    heap: bool,
+pub(in crate::runtime) struct Spine {
+    pub(in crate::runtime) head: NodeId,
+    pub(in crate::runtime) storage: SpineStorage,
 }
 
-enum SpineStorage {
+pub(in crate::runtime) struct EvalSpine {
+    pub(in crate::runtime) inline_args: [MaybeUninit<NodeId>; INLINE_SPINE],
+    pub(in crate::runtime) inline_apps: [MaybeUninit<NodeId>; INLINE_SPINE],
+    pub(in crate::runtime) inline_len: usize,
+    pub(in crate::runtime) heap_args: Vec<NodeId>,
+    pub(in crate::runtime) heap_apps: Vec<NodeId>,
+    pub(in crate::runtime) heap: bool,
+}
+
+pub(in crate::runtime) enum SpineStorage {
     Inline {
         args: [MaybeUninit<NodeId>; INLINE_SPINE],
         apps: [MaybeUninit<NodeId>; INLINE_SPINE],
@@ -51,18 +53,18 @@ enum SpineStorage {
 }
 
 #[derive(Default)]
-struct PersistentSpine {
-    apps: VecDeque<NodeId>,
+pub(in crate::runtime) struct PersistentSpine {
+    pub(in crate::runtime) apps: VecDeque<NodeId>,
 }
 
-enum PersistentStep {
+pub(in crate::runtime) enum PersistentStep {
     Reduced { node: NodeId, reductions: usize },
     Force { node: NodeId },
     Whnf { node: NodeId },
     Fallback { root: NodeId },
 }
 
-enum PersistentHead {
+pub(in crate::runtime) enum PersistentHead {
     Ffi(String),
     JsCall { tags: String, body: Vec<u8> },
     JsWrap { tags: String },
@@ -71,7 +73,7 @@ enum PersistentHead {
     Whnf,
 }
 
-enum EvalHead {
+pub(in crate::runtime) enum EvalHead {
     Ffi(String),
     JsCall {
         tags: String,
@@ -89,7 +91,7 @@ enum EvalHead {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum StrictPrimitiveAction {
+pub(in crate::runtime) enum StrictPrimitiveAction {
     None,
     IntBin(IntBinOp),
     IntUn(IntUnOp),
@@ -103,8 +105,8 @@ enum StrictPrimitiveAction {
     Conversion(ConversionFrameKind),
 }
 
-const INT_BIN_RUNTIME_START: u16 = 0;
-const INT_BIN_RUNTIME_OPS: [IntBinOp; 30] = [
+pub(in crate::runtime) const INT_BIN_RUNTIME_START: u16 = 0;
+pub(in crate::runtime) const INT_BIN_RUNTIME_OPS: [IntBinOp; 30] = [
     IntBinOp::Add,
     IntBinOp::Sub,
     IntBinOp::Mul,
@@ -137,8 +139,8 @@ const INT_BIN_RUNTIME_OPS: [IntBinOp; 30] = [
     IntBinOp::UCmp,
 ];
 
-const INT_UN_RUNTIME_START: u16 = 30;
-const INT_UN_RUNTIME_OPS: [IntUnOp; 6] = [
+pub(in crate::runtime) const INT_UN_RUNTIME_START: u16 = 30;
+pub(in crate::runtime) const INT_UN_RUNTIME_OPS: [IntUnOp; 6] = [
     IntUnOp::Neg,
     IntUnOp::UNeg,
     IntUnOp::Inv,
@@ -147,8 +149,8 @@ const INT_UN_RUNTIME_OPS: [IntUnOp; 6] = [
     IntUnOp::Ctz,
 ];
 
-const INT64_BIN_RUNTIME_START: u16 = 36;
-const INT64_BIN_RUNTIME_OPS: [Int64BinOp; 30] = [
+pub(in crate::runtime) const INT64_BIN_RUNTIME_START: u16 = 36;
+pub(in crate::runtime) const INT64_BIN_RUNTIME_OPS: [Int64BinOp; 30] = [
     Int64BinOp::Add,
     Int64BinOp::Sub,
     Int64BinOp::Mul,
@@ -181,8 +183,8 @@ const INT64_BIN_RUNTIME_OPS: [Int64BinOp; 30] = [
     Int64BinOp::UCmp,
 ];
 
-const INT64_UN_RUNTIME_START: u16 = 66;
-const INT64_UN_RUNTIME_OPS: [Int64UnOp; 6] = [
+pub(in crate::runtime) const INT64_UN_RUNTIME_START: u16 = 66;
+pub(in crate::runtime) const INT64_UN_RUNTIME_OPS: [Int64UnOp; 6] = [
     Int64UnOp::Neg,
     Int64UnOp::UNeg,
     Int64UnOp::Inv,
@@ -191,8 +193,8 @@ const INT64_UN_RUNTIME_OPS: [Int64UnOp; 6] = [
     Int64UnOp::Ctz,
 ];
 
-const FLOAT64_BIN_RUNTIME_START: u16 = 72;
-const FLOAT64_BIN_RUNTIME_OPS: [Float64BinOp; 10] = [
+pub(in crate::runtime) const FLOAT64_BIN_RUNTIME_START: u16 = 72;
+pub(in crate::runtime) const FLOAT64_BIN_RUNTIME_OPS: [Float64BinOp; 10] = [
     Float64BinOp::Add,
     Float64BinOp::Sub,
     Float64BinOp::Mul,
@@ -205,11 +207,11 @@ const FLOAT64_BIN_RUNTIME_OPS: [Float64BinOp; 10] = [
     Float64BinOp::Ge,
 ];
 
-const FLOAT64_UN_RUNTIME_START: u16 = 82;
-const FLOAT64_UN_RUNTIME_OPS: [Float64UnOp; 1] = [Float64UnOp::Neg];
+pub(in crate::runtime) const FLOAT64_UN_RUNTIME_START: u16 = 82;
+pub(in crate::runtime) const FLOAT64_UN_RUNTIME_OPS: [Float64UnOp; 1] = [Float64UnOp::Neg];
 
-const FLOAT32_BIN_RUNTIME_START: u16 = 83;
-const FLOAT32_BIN_RUNTIME_OPS: [Float32BinOp; 10] = [
+pub(in crate::runtime) const FLOAT32_BIN_RUNTIME_START: u16 = 83;
+pub(in crate::runtime) const FLOAT32_BIN_RUNTIME_OPS: [Float32BinOp; 10] = [
     Float32BinOp::Add,
     Float32BinOp::Sub,
     Float32BinOp::Mul,
@@ -222,11 +224,11 @@ const FLOAT32_BIN_RUNTIME_OPS: [Float32BinOp; 10] = [
     Float32BinOp::Ge,
 ];
 
-const FLOAT32_UN_RUNTIME_START: u16 = 93;
-const FLOAT32_UN_RUNTIME_OPS: [Float32UnOp; 1] = [Float32UnOp::Neg];
+pub(in crate::runtime) const FLOAT32_UN_RUNTIME_START: u16 = 93;
+pub(in crate::runtime) const FLOAT32_UN_RUNTIME_OPS: [Float32UnOp; 1] = [Float32UnOp::Neg];
 
-const CONVERSION_RUNTIME_START: u16 = 94;
-const CONVERSION_RUNTIME_OPS: [ConversionFrameKind; 18] = [
+pub(in crate::runtime) const CONVERSION_RUNTIME_START: u16 = 94;
+pub(in crate::runtime) const CONVERSION_RUNTIME_OPS: [ConversionFrameKind; 18] = [
     ConversionFrameKind::IntToInt64,
     ConversionFrameKind::IntToInt64,
     ConversionFrameKind::Int64ToInt,
@@ -247,8 +249,8 @@ const CONVERSION_RUNTIME_OPS: [ConversionFrameKind; 18] = [
     ConversionFrameKind::Float32BitsToInt,
 ];
 
-const BYTES_BIN_RUNTIME_START: u16 = 145;
-const BYTES_BIN_RUNTIME_OPS: [BytesBinOp; 9] = [
+pub(in crate::runtime) const BYTES_BIN_RUNTIME_START: u16 = 145;
+pub(in crate::runtime) const BYTES_BIN_RUNTIME_OPS: [BytesBinOp; 9] = [
     BytesBinOp::Append,
     BytesBinOp::AppendDot,
     BytesBinOp::Eq,
@@ -261,14 +263,18 @@ const BYTES_BIN_RUNTIME_OPS: [BytesBinOp; 9] = [
 ];
 
 #[inline(always)]
-fn runtime_prim_op<T: Copy, const N: usize>(index: u16, start: u16, ops: &[T; N]) -> Option<T> {
+pub(in crate::runtime) fn runtime_prim_op<T: Copy, const N: usize>(
+    index: u16,
+    start: u16,
+    ops: &[T; N],
+) -> Option<T> {
     let offset = index.checked_sub(start)? as usize;
     ops.get(offset).copied()
 }
 
 impl RuntimePrim {
     #[inline(always)]
-    fn strict_action(self, args_len: usize) -> StrictPrimitiveAction {
+    pub(in crate::runtime) fn strict_action(self, args_len: usize) -> StrictPrimitiveAction {
         let index = self.0;
 
         if args_len >= 2 {
@@ -355,14 +361,14 @@ impl Default for EvalSpine {
 }
 
 impl EvalSpine {
-    fn clear(&mut self) {
+    pub(in crate::runtime) fn clear(&mut self) {
         self.inline_len = 0;
         self.heap = false;
         self.heap_args.clear();
         self.heap_apps.clear();
     }
 
-    fn len(&self) -> usize {
+    pub(in crate::runtime) fn len(&self) -> usize {
         if self.heap {
             self.heap_args.len()
         } else {
@@ -370,11 +376,11 @@ impl EvalSpine {
         }
     }
 
-    fn is_heap(&self) -> bool {
+    pub(in crate::runtime) fn is_heap(&self) -> bool {
         self.heap
     }
 
-    fn push_desc(&mut self, arg: NodeId, app: NodeId) {
+    pub(in crate::runtime) fn push_desc(&mut self, arg: NodeId, app: NodeId) {
         if self.heap {
             self.heap_args.push(arg);
             self.heap_apps.push(app);
@@ -399,7 +405,7 @@ impl EvalSpine {
         }
     }
 
-    fn desc_arg(&self, desc_idx: usize) -> NodeId {
+    pub(in crate::runtime) fn desc_arg(&self, desc_idx: usize) -> NodeId {
         if self.heap {
             self.heap_args[desc_idx]
         } else {
@@ -409,7 +415,7 @@ impl EvalSpine {
         }
     }
 
-    fn desc_app(&self, desc_idx: usize) -> NodeId {
+    pub(in crate::runtime) fn desc_app(&self, desc_idx: usize) -> NodeId {
         if self.heap {
             self.heap_apps[desc_idx]
         } else {
@@ -419,19 +425,19 @@ impl EvalSpine {
         }
     }
 
-    fn arg(&self, head_idx: usize) -> NodeId {
+    pub(in crate::runtime) fn arg(&self, head_idx: usize) -> NodeId {
         let len = self.len();
         debug_assert!(head_idx < len);
         self.desc_arg(len - head_idx - 1)
     }
 
-    fn app(&self, head_idx: usize) -> NodeId {
+    pub(in crate::runtime) fn app(&self, head_idx: usize) -> NodeId {
         let len = self.len();
         debug_assert!(head_idx < len);
         self.desc_app(len - head_idx - 1)
     }
 
-    fn write_args_head_order(&self, args: &mut Vec<NodeId>) {
+    pub(in crate::runtime) fn write_args_head_order(&self, args: &mut Vec<NodeId>) {
         args.clear();
         let len = self.len();
         args.reserve(len);
@@ -440,7 +446,11 @@ impl EvalSpine {
         }
     }
 
-    fn write_args_head_order_prefix(&self, args: &mut Vec<NodeId>, limit: usize) {
+    pub(in crate::runtime) fn write_args_head_order_prefix(
+        &self,
+        args: &mut Vec<NodeId>,
+        limit: usize,
+    ) {
         args.clear();
         let len = self.len().min(limit);
         args.reserve(len);
@@ -449,7 +459,7 @@ impl EvalSpine {
         }
     }
 
-    fn write_apps_head_order(&self, apps: &mut Vec<NodeId>) {
+    pub(in crate::runtime) fn write_apps_head_order(&self, apps: &mut Vec<NodeId>) {
         apps.clear();
         let len = self.len();
         apps.reserve(len);
@@ -460,26 +470,30 @@ impl EvalSpine {
 }
 
 impl PersistentSpine {
-    fn clear(&mut self) {
+    pub(in crate::runtime) fn clear(&mut self) {
         self.apps.clear();
     }
 
-    fn len(&self) -> usize {
+    pub(in crate::runtime) fn len(&self) -> usize {
         self.apps.len()
     }
 
-    fn push_front(&mut self, app: NodeId) {
+    pub(in crate::runtime) fn push_front(&mut self, app: NodeId) {
         self.apps.push_front(app);
     }
 
-    fn consume(&mut self, used: usize) {
+    pub(in crate::runtime) fn consume(&mut self, used: usize) {
         debug_assert!(used <= self.len());
         for _ in 0..used {
             self.apps.pop_front();
         }
     }
 
-    fn arg(&self, nodes: &[Cell], index: usize) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn arg(
+        &self,
+        nodes: &[Cell],
+        index: usize,
+    ) -> Result<NodeId, EvalError> {
         let app = self.app(index);
         nodes
             .get(app.index())
@@ -488,11 +502,11 @@ impl PersistentSpine {
             .ok_or(EvalError::DanglingIndirection(app))
     }
 
-    fn app(&self, index: usize) -> NodeId {
+    pub(in crate::runtime) fn app(&self, index: usize) -> NodeId {
         self.apps[index]
     }
 
-    fn write_args_head_order(
+    pub(in crate::runtime) fn write_args_head_order(
         &self,
         nodes: &[Cell],
         args: &mut Vec<NodeId>,
@@ -505,24 +519,24 @@ impl PersistentSpine {
         Ok(())
     }
 
-    fn outer_root(&self, head: NodeId) -> NodeId {
+    pub(in crate::runtime) fn outer_root(&self, head: NodeId) -> NodeId {
         self.apps.back().copied().unwrap_or(head)
     }
 
-    fn remaining_apps_contain(&self, start: usize, node: NodeId) -> bool {
+    pub(in crate::runtime) fn remaining_apps_contain(&self, start: usize, node: NodeId) -> bool {
         self.apps.iter().skip(start).any(|app| *app == node)
     }
 }
 
 impl Spine {
-    fn args(&self) -> &[NodeId] {
+    pub(in crate::runtime) fn args(&self) -> &[NodeId] {
         match &self.storage {
             SpineStorage::Inline { args, len, .. } => initialized_node_slice(args, *len),
             SpineStorage::Heap { args, .. } => args,
         }
     }
 
-    fn apps(&self) -> &[NodeId] {
+    pub(in crate::runtime) fn apps(&self) -> &[NodeId] {
         match &self.storage {
             SpineStorage::Inline { apps, len, .. } => initialized_node_slice(apps, *len),
             SpineStorage::Heap { apps, .. } => apps,
@@ -530,14 +544,17 @@ impl Spine {
     }
 }
 
-fn initialized_node_slice(storage: &[MaybeUninit<NodeId>], len: usize) -> &[NodeId] {
+pub(in crate::runtime) fn initialized_node_slice(
+    storage: &[MaybeUninit<NodeId>],
+    len: usize,
+) -> &[NodeId] {
     debug_assert!(len <= storage.len());
     // SAFETY: Spine::spine writes exactly the first `len` elements before storing
     // an Inline spine, and NodeId is Copy with no drop glue.
     unsafe { std::slice::from_raw_parts(storage.as_ptr().cast::<NodeId>(), len) }
 }
 
-fn small_int_index(value: i64) -> Option<usize> {
+pub(in crate::runtime) fn small_int_index(value: i64) -> Option<usize> {
     if (SMALL_INT_MIN..=SMALL_INT_MAX).contains(&value) {
         Some((value - SMALL_INT_MIN) as usize)
     } else {
@@ -545,32 +562,32 @@ fn small_int_index(value: i64) -> Option<usize> {
     }
 }
 
-struct EvalLoopStep {
-    node: NodeId,
-    reductions: usize,
+pub(in crate::runtime) struct EvalLoopStep {
+    pub(in crate::runtime) node: NodeId,
+    pub(in crate::runtime) reductions: usize,
 }
 
-type ProfileHead = Option<NodeId>;
+pub(in crate::runtime) type ProfileHead = Option<NodeId>;
 
-struct WhnfFrame {
-    redex: StrictRedex,
-    profile_head: ProfileHead,
-    kind: WhnfFrameKind,
+pub(in crate::runtime) struct WhnfFrame {
+    pub(in crate::runtime) redex: StrictRedex,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) kind: WhnfFrameKind,
 }
 
-enum WhnfFrameKind {
+pub(in crate::runtime) enum WhnfFrameKind {
     Seq { result: NodeId },
     IoStrict { action: NodeId, value: NodeId },
     IsInt,
 }
 
-struct IntFrame {
-    redex: StrictRedex,
-    profile_head: ProfileHead,
-    kind: IntFrameKind,
+pub(in crate::runtime) struct IntFrame {
+    pub(in crate::runtime) redex: StrictRedex,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) kind: IntFrameKind,
 }
 
-enum StrictRedex {
+pub(in crate::runtime) enum StrictRedex {
     Root(NodeId),
     Spine {
         root: NodeId,
@@ -579,75 +596,75 @@ enum StrictRedex {
     },
 }
 
-enum IntFrameKind {
+pub(in crate::runtime) enum IntFrameKind {
     BinSecond { op: IntBinOp, x: NodeId },
     BinFirst { op: IntBinOp, y: i64 },
     Un { op: IntUnOp },
 }
 
-struct Int64Frame {
-    redex: StrictRedex,
-    profile_head: ProfileHead,
-    kind: Int64FrameKind,
+pub(in crate::runtime) struct Int64Frame {
+    pub(in crate::runtime) redex: StrictRedex,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) kind: Int64FrameKind,
 }
 
-enum Int64FrameKind {
+pub(in crate::runtime) enum Int64FrameKind {
     BinSecond { op: Int64BinOp, x: NodeId },
     BinFirst { op: Int64BinOp, y: i64 },
     ShiftFirst { op: Int64BinOp, y: i64 },
     Un { op: Int64UnOp },
 }
 
-struct Int64ShiftFrame {
-    redex: StrictRedex,
-    profile_head: ProfileHead,
-    op: Int64BinOp,
-    x: NodeId,
+pub(in crate::runtime) struct Int64ShiftFrame {
+    pub(in crate::runtime) redex: StrictRedex,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) op: Int64BinOp,
+    pub(in crate::runtime) x: NodeId,
 }
 
-struct Float64Frame {
-    redex: StrictRedex,
-    profile_head: ProfileHead,
-    kind: Float64FrameKind,
+pub(in crate::runtime) struct Float64Frame {
+    pub(in crate::runtime) redex: StrictRedex,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) kind: Float64FrameKind,
 }
 
-enum Float64FrameKind {
+pub(in crate::runtime) enum Float64FrameKind {
     BinSecond { op: Float64BinOp, x: NodeId },
     BinFirst { op: Float64BinOp, y: f64 },
     Un { op: Float64UnOp },
 }
 
-struct Float32Frame {
-    redex: StrictRedex,
-    profile_head: ProfileHead,
-    kind: Float32FrameKind,
+pub(in crate::runtime) struct Float32Frame {
+    pub(in crate::runtime) redex: StrictRedex,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) kind: Float32FrameKind,
 }
 
-enum Float32FrameKind {
+pub(in crate::runtime) enum Float32FrameKind {
     BinSecond { op: Float32BinOp, x: NodeId },
     BinFirst { op: Float32BinOp, y: f32 },
     Un { op: Float32UnOp },
 }
 
-struct BytesFrame {
-    redex: StrictRedex,
-    profile_head: ProfileHead,
-    kind: BytesFrameKind,
+pub(in crate::runtime) struct BytesFrame {
+    pub(in crate::runtime) redex: StrictRedex,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) kind: BytesFrameKind,
 }
 
-enum BytesFrameKind {
+pub(in crate::runtime) enum BytesFrameKind {
     BinSecond { op: BytesBinOp, x: NodeId },
     BinFirst { op: BytesBinOp, y: NodeId },
 }
 
-struct ConversionFrame {
-    redex: StrictRedex,
-    profile_head: ProfileHead,
-    kind: ConversionFrameKind,
+pub(in crate::runtime) struct ConversionFrame {
+    pub(in crate::runtime) redex: StrictRedex,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) kind: ConversionFrameKind,
 }
 
 #[derive(Clone, Copy, Debug)]
-enum ConversionFrameKind {
+pub(in crate::runtime) enum ConversionFrameKind {
     IntToInt64,
     Int64ToInt,
     IntToFloat64 { unsigned: bool },
@@ -664,14 +681,14 @@ enum ConversionFrameKind {
     Float32BitsToInt,
 }
 
-enum ConversionValue {
+pub(in crate::runtime) enum ConversionValue {
     Int(i64),
     Int64(i64),
     Float64(f64),
     Float32(f32),
 }
 
-enum EvalFrame {
+pub(in crate::runtime) enum EvalFrame {
     Whnf(WhnfFrame),
     Int(IntFrame),
     Int64(Int64Frame),
@@ -682,9 +699,9 @@ enum EvalFrame {
     Conversion(ConversionFrame),
 }
 
-struct FrameStack<T> {
-    top: Option<T>,
-    rest: Vec<T>,
+pub(in crate::runtime) struct FrameStack<T> {
+    pub(in crate::runtime) top: Option<T>,
+    pub(in crate::runtime) rest: Vec<T>,
 }
 
 impl<T> Default for FrameStack<T> {
@@ -697,90 +714,90 @@ impl<T> Default for FrameStack<T> {
 }
 
 impl<T> FrameStack<T> {
-    fn push(&mut self, frame: T) {
+    pub(in crate::runtime) fn push(&mut self, frame: T) {
         if let Some(top) = self.top.replace(frame) {
             self.rest.push(top);
         }
     }
 
-    fn pop(&mut self) -> Option<T> {
+    pub(in crate::runtime) fn pop(&mut self) -> Option<T> {
         let frame = self.top.take()?;
         self.top = self.rest.pop();
         Some(frame)
     }
 
-    fn peek(&self) -> Option<&T> {
+    pub(in crate::runtime) fn peek(&self) -> Option<&T> {
         self.top.as_ref()
     }
 }
 
-type EvalFrameStack = FrameStack<EvalFrame>;
+pub(in crate::runtime) type EvalFrameStack = FrameStack<EvalFrame>;
 
-struct StackWhnfFrame {
-    prev_app_base: usize,
-    redex: NodeId,
-    used: usize,
-    profile_head: ProfileHead,
-    kind: WhnfFrameKind,
+pub(in crate::runtime) struct StackWhnfFrame {
+    pub(in crate::runtime) prev_app_base: usize,
+    pub(in crate::runtime) redex: NodeId,
+    pub(in crate::runtime) used: usize,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) kind: WhnfFrameKind,
 }
 
-struct StackIntFrame {
-    prev_app_base: usize,
-    redex: NodeId,
-    profile_head: ProfileHead,
-    kind: IntFrameKind,
+pub(in crate::runtime) struct StackIntFrame {
+    pub(in crate::runtime) prev_app_base: usize,
+    pub(in crate::runtime) redex: NodeId,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) kind: IntFrameKind,
 }
 
-struct StackInt64Frame {
-    prev_app_base: usize,
-    app_end: usize,
-    used: usize,
-    profile_head: ProfileHead,
-    kind: Int64FrameKind,
+pub(in crate::runtime) struct StackInt64Frame {
+    pub(in crate::runtime) prev_app_base: usize,
+    pub(in crate::runtime) app_end: usize,
+    pub(in crate::runtime) used: usize,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) kind: Int64FrameKind,
 }
 
-struct StackInt64ShiftFrame {
-    prev_app_base: usize,
-    app_end: usize,
-    used: usize,
-    profile_head: ProfileHead,
-    op: Int64BinOp,
-    x: NodeId,
+pub(in crate::runtime) struct StackInt64ShiftFrame {
+    pub(in crate::runtime) prev_app_base: usize,
+    pub(in crate::runtime) app_end: usize,
+    pub(in crate::runtime) used: usize,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) op: Int64BinOp,
+    pub(in crate::runtime) x: NodeId,
 }
 
-struct StackFloat64Frame {
-    prev_app_base: usize,
-    app_end: usize,
-    used: usize,
-    profile_head: ProfileHead,
-    kind: Float64FrameKind,
+pub(in crate::runtime) struct StackFloat64Frame {
+    pub(in crate::runtime) prev_app_base: usize,
+    pub(in crate::runtime) app_end: usize,
+    pub(in crate::runtime) used: usize,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) kind: Float64FrameKind,
 }
 
-struct StackFloat32Frame {
-    prev_app_base: usize,
-    app_end: usize,
-    used: usize,
-    profile_head: ProfileHead,
-    kind: Float32FrameKind,
+pub(in crate::runtime) struct StackFloat32Frame {
+    pub(in crate::runtime) prev_app_base: usize,
+    pub(in crate::runtime) app_end: usize,
+    pub(in crate::runtime) used: usize,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) kind: Float32FrameKind,
 }
 
-struct StackBytesFrame {
-    prev_app_base: usize,
-    app_end: usize,
-    used: usize,
-    profile_head: ProfileHead,
-    kind: BytesFrameKind,
+pub(in crate::runtime) struct StackBytesFrame {
+    pub(in crate::runtime) prev_app_base: usize,
+    pub(in crate::runtime) app_end: usize,
+    pub(in crate::runtime) used: usize,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) kind: BytesFrameKind,
 }
 
-struct StackConversionFrame {
-    prev_app_base: usize,
-    app_end: usize,
-    used: usize,
-    profile_head: ProfileHead,
-    kind: ConversionFrameKind,
+pub(in crate::runtime) struct StackConversionFrame {
+    pub(in crate::runtime) prev_app_base: usize,
+    pub(in crate::runtime) app_end: usize,
+    pub(in crate::runtime) used: usize,
+    pub(in crate::runtime) profile_head: ProfileHead,
+    pub(in crate::runtime) kind: ConversionFrameKind,
 }
 
-enum StackFrame {
+pub(in crate::runtime) enum StackFrame {
     Whnf(StackWhnfFrame),
     Int(StackIntFrame),
     Int64(StackInt64Frame),
@@ -792,13 +809,13 @@ enum StackFrame {
 }
 
 #[derive(Default)]
-struct EvalStack {
-    apps: Vec<NodeId>,
-    frames: Vec<StackFrame>,
-    app_base: usize,
+pub(in crate::runtime) struct EvalStack {
+    pub(in crate::runtime) apps: Vec<NodeId>,
+    pub(in crate::runtime) frames: Vec<StackFrame>,
+    pub(in crate::runtime) app_base: usize,
 }
 
-enum StackStep {
+pub(in crate::runtime) enum StackStep {
     Reduced {
         node: NodeId,
         reductions: usize,
@@ -816,7 +833,7 @@ enum StackStep {
 }
 
 impl StackFrame {
-    fn prev_app_base(&self) -> usize {
+    pub(in crate::runtime) fn prev_app_base(&self) -> usize {
         match self {
             Self::Whnf(frame) => frame.prev_app_base,
             Self::Int(frame) => frame.prev_app_base,
@@ -831,29 +848,29 @@ impl StackFrame {
 }
 
 impl EvalStack {
-    fn push_app(&mut self, app: NodeId) {
+    pub(in crate::runtime) fn push_app(&mut self, app: NodeId) {
         self.apps.push(app);
     }
 
-    fn app_unchecked(&self, index: usize) -> NodeId {
+    pub(in crate::runtime) fn app_unchecked(&self, index: usize) -> NodeId {
         debug_assert!(index < self.apps.len());
         unsafe { *self.apps.get_unchecked(index) }
     }
 
-    fn app_base(&self) -> usize {
+    pub(in crate::runtime) fn app_base(&self) -> usize {
         self.app_base
     }
 
-    fn app_len(&self) -> usize {
+    pub(in crate::runtime) fn app_len(&self) -> usize {
         self.apps.len() - self.app_base()
     }
 
-    fn arg(&self, nodes: &[Cell], index: usize) -> NodeId {
+    pub(in crate::runtime) fn arg(&self, nodes: &[Cell], index: usize) -> NodeId {
         let app_index = self.apps.len() - index - 1;
         self.arg_at_app(nodes, app_index)
     }
 
-    fn arg_at_app(&self, nodes: &[Cell], app_index: usize) -> NodeId {
+    pub(in crate::runtime) fn arg_at_app(&self, nodes: &[Cell], app_index: usize) -> NodeId {
         debug_assert!(app_index < self.apps.len());
         // The stack app segment is built only by descending through App
         // cells. Match eval.c's ARG(TOP(i)) discipline in the hot path.
@@ -863,13 +880,13 @@ impl EvalStack {
         }
     }
 
-    fn arg_from_app(nodes: &[Cell], app: NodeId) -> NodeId {
+    pub(in crate::runtime) fn arg_from_app(nodes: &[Cell], app: NodeId) -> NodeId {
         debug_assert!(app.index() < nodes.len());
         debug_assert_eq!(nodes[app.index()].tag(), CellTag::App);
         unsafe { nodes.get_unchecked(app.index()).id_word1() }
     }
 
-    fn take_args1(&mut self, nodes: &[Cell]) -> (NodeId, NodeId) {
+    pub(in crate::runtime) fn take_args1(&mut self, nodes: &[Cell]) -> (NodeId, NodeId) {
         let end = self.apps.len();
         debug_assert!(self.app_len() >= 1);
         let redex_index = end - 1;
@@ -879,7 +896,7 @@ impl EvalStack {
         (redex, x)
     }
 
-    fn take_args2(&mut self, nodes: &[Cell]) -> (NodeId, NodeId, NodeId) {
+    pub(in crate::runtime) fn take_args2(&mut self, nodes: &[Cell]) -> (NodeId, NodeId, NodeId) {
         let end = self.apps.len();
         debug_assert!(self.app_len() >= 2);
         let redex_index = end - 2;
@@ -891,7 +908,10 @@ impl EvalStack {
         (redex, x, y)
     }
 
-    fn take_args3(&mut self, nodes: &[Cell]) -> (NodeId, NodeId, NodeId, NodeId) {
+    pub(in crate::runtime) fn take_args3(
+        &mut self,
+        nodes: &[Cell],
+    ) -> (NodeId, NodeId, NodeId, NodeId) {
         let end = self.apps.len();
         debug_assert!(self.app_len() >= 3);
         let redex_index = end - 3;
@@ -905,7 +925,10 @@ impl EvalStack {
         (redex, x, y, z)
     }
 
-    fn take_args4(&mut self, nodes: &[Cell]) -> (NodeId, NodeId, NodeId, NodeId, NodeId) {
+    pub(in crate::runtime) fn take_args4(
+        &mut self,
+        nodes: &[Cell],
+    ) -> (NodeId, NodeId, NodeId, NodeId, NodeId) {
         let end = self.apps.len();
         debug_assert!(self.app_len() >= 4);
         let redex_index = end - 4;
@@ -921,7 +944,10 @@ impl EvalStack {
         (redex, x, y, z, w)
     }
 
-    fn take_args5(&mut self, nodes: &[Cell]) -> (NodeId, NodeId, NodeId, NodeId, NodeId, NodeId) {
+    pub(in crate::runtime) fn take_args5(
+        &mut self,
+        nodes: &[Cell],
+    ) -> (NodeId, NodeId, NodeId, NodeId, NodeId, NodeId) {
         let end = self.apps.len();
         debug_assert!(self.app_len() >= 5);
         let redex_index = end - 5;
@@ -939,7 +965,7 @@ impl EvalStack {
         (redex, x, y, z, w, v)
     }
 
-    fn outer_root(&self, head: NodeId) -> NodeId {
+    pub(in crate::runtime) fn outer_root(&self, head: NodeId) -> NodeId {
         let base = self.app_base();
         if base == self.apps.len() {
             return head;
@@ -947,15 +973,15 @@ impl EvalStack {
         self.apps[base]
     }
 
-    fn has_frame_below_apps(&self) -> bool {
+    pub(in crate::runtime) fn has_frame_below_apps(&self) -> bool {
         !self.frames.is_empty()
     }
 
-    fn top_is_frame(&self) -> bool {
+    pub(in crate::runtime) fn top_is_frame(&self) -> bool {
         !self.frames.is_empty() && self.apps.len() == self.app_base
     }
 
-    fn peek_frame(&self) -> Option<&StackFrame> {
+    pub(in crate::runtime) fn peek_frame(&self) -> Option<&StackFrame> {
         if self.top_is_frame() {
             self.frames.last()
         } else {
@@ -963,7 +989,7 @@ impl EvalStack {
         }
     }
 
-    fn push_whnf_frame(
+    pub(in crate::runtime) fn push_whnf_frame(
         &mut self,
         redex: NodeId,
         used: usize,
@@ -981,7 +1007,12 @@ impl EvalStack {
         self.app_base = self.apps.len();
     }
 
-    fn push_int_frame(&mut self, redex: NodeId, profile_head: ProfileHead, kind: IntFrameKind) {
+    pub(in crate::runtime) fn push_int_frame(
+        &mut self,
+        redex: NodeId,
+        profile_head: ProfileHead,
+        kind: IntFrameKind,
+    ) {
         let prev_app_base = self.app_base;
         self.frames.push(StackFrame::Int(StackIntFrame {
             prev_app_base,
@@ -992,7 +1023,7 @@ impl EvalStack {
         self.app_base = self.apps.len();
     }
 
-    fn push_int64_frame(
+    pub(in crate::runtime) fn push_int64_frame(
         &mut self,
         app_end: usize,
         used: usize,
@@ -1010,7 +1041,7 @@ impl EvalStack {
         self.app_base = self.apps.len();
     }
 
-    fn push_int64_shift_frame(
+    pub(in crate::runtime) fn push_int64_shift_frame(
         &mut self,
         app_end: usize,
         used: usize,
@@ -1031,7 +1062,7 @@ impl EvalStack {
         self.app_base = self.apps.len();
     }
 
-    fn push_float64_frame(
+    pub(in crate::runtime) fn push_float64_frame(
         &mut self,
         app_end: usize,
         used: usize,
@@ -1049,7 +1080,7 @@ impl EvalStack {
         self.app_base = self.apps.len();
     }
 
-    fn push_float32_frame(
+    pub(in crate::runtime) fn push_float32_frame(
         &mut self,
         app_end: usize,
         used: usize,
@@ -1067,7 +1098,7 @@ impl EvalStack {
         self.app_base = self.apps.len();
     }
 
-    fn push_bytes_frame(
+    pub(in crate::runtime) fn push_bytes_frame(
         &mut self,
         app_end: usize,
         used: usize,
@@ -1085,7 +1116,7 @@ impl EvalStack {
         self.app_base = self.apps.len();
     }
 
-    fn push_conversion_frame(
+    pub(in crate::runtime) fn push_conversion_frame(
         &mut self,
         app_end: usize,
         used: usize,
@@ -1104,7 +1135,7 @@ impl EvalStack {
         self.app_base = self.apps.len();
     }
 
-    fn pop_frame(&mut self) -> Option<StackFrame> {
+    pub(in crate::runtime) fn pop_frame(&mut self) -> Option<StackFrame> {
         if self.top_is_frame() {
             let frame = self.frames.pop().expect("frame marker must have payload");
             self.app_base = frame.prev_app_base();
@@ -1114,7 +1145,7 @@ impl EvalStack {
         }
     }
 
-    fn write_args_head_order(
+    pub(in crate::runtime) fn write_args_head_order(
         &self,
         nodes: &[Cell],
         args: &mut Vec<NodeId>,
@@ -1127,7 +1158,7 @@ impl EvalStack {
         Ok(())
     }
 
-    fn write_args_head_order_prefix(
+    pub(in crate::runtime) fn write_args_head_order_prefix(
         &self,
         nodes: &[Cell],
         args: &mut Vec<NodeId>,
@@ -1144,7 +1175,7 @@ impl EvalStack {
 }
 
 impl ConversionFrameKind {
-    fn ready_cell_value(self, cell: Cell) -> Option<ConversionValue> {
+    pub(in crate::runtime) fn ready_cell_value(self, cell: Cell) -> Option<ConversionValue> {
         match self {
             Self::IntToInt64
             | Self::IntToFloat64 { .. }
@@ -1163,7 +1194,7 @@ impl ConversionFrameKind {
         }
     }
 
-    fn expected_error(self, current: NodeId) -> EvalError {
+    pub(in crate::runtime) fn expected_error(self, current: NodeId) -> EvalError {
         match self {
             Self::IntToInt64
             | Self::IntToFloat64 { .. }

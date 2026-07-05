@@ -1,3 +1,5 @@
+use super::*;
+
 impl Program {
     pub fn new(nodes: Vec<Node>, root: NodeId, labels: HashMap<usize, NodeId>) -> Self {
         #[cfg(target_os = "wasi")]
@@ -154,22 +156,22 @@ impl Program {
             .collect()
     }
 
-    fn cell(&self, id: NodeId) -> Cell {
+    pub(in crate::runtime) fn cell(&self, id: NodeId) -> Cell {
         self.nodes[id.index()]
     }
 
-    fn cell_at(&self, index: usize) -> Cell {
+    pub(in crate::runtime) fn cell_at(&self, index: usize) -> Cell {
         self.nodes[index]
     }
 
     #[inline]
-    fn cell_trusted(&self, id: NodeId) -> Cell {
+    pub(in crate::runtime) fn cell_trusted(&self, id: NodeId) -> Cell {
         debug_assert!(id.index() < self.nodes.len());
         unsafe { *self.nodes.get_unchecked(id.index()) }
     }
 
     #[inline]
-    fn app_fun_trusted(&self, id: NodeId) -> Option<NodeId> {
+    pub(in crate::runtime) fn app_fun_trusted(&self, id: NodeId) -> Option<NodeId> {
         let word0 = self.cell_trusted(id).word0;
         let tag = word0 & CELL_TAG_BITS;
         if tag == CellTag::App.bits() {
@@ -181,32 +183,32 @@ impl Program {
         }
     }
 
-    fn set_cell_at(&mut self, index: usize, cell: Cell) {
+    pub(in crate::runtime) fn set_cell_at(&mut self, index: usize, cell: Cell) {
         self.drop_cold_payload(index);
         self.nodes[index] = cell;
     }
 
-    fn set_app_cell_at(&mut self, index: usize, cell: Cell) {
+    pub(in crate::runtime) fn set_app_cell_at(&mut self, index: usize, cell: Cell) {
         debug_assert_eq!(self.nodes[index].tag(), CellTag::App);
         self.nodes[index] = cell;
     }
 
-    fn set_free_cell_at(&mut self, index: usize, cell: Cell) {
+    pub(in crate::runtime) fn set_free_cell_at(&mut self, index: usize, cell: Cell) {
         debug_assert_eq!(self.nodes[index].tag(), CellTag::Free);
         self.nodes[index] = cell;
     }
 
-    fn set_app_node_at(&mut self, index: usize, node: Node) {
+    pub(in crate::runtime) fn set_app_node_at(&mut self, index: usize, node: Node) {
         debug_assert_eq!(self.nodes[index].tag(), CellTag::App);
         self.nodes[index] = Cell::from_node(node, &mut self.cold_nodes);
     }
 
-    fn set_node_at(&mut self, index: usize, node: Node) {
+    pub(in crate::runtime) fn set_node_at(&mut self, index: usize, node: Node) {
         self.drop_cold_payload(index);
         self.nodes[index] = Cell::from_node(node, &mut self.cold_nodes);
     }
 
-    fn push_cell(&mut self, cell: Cell) -> NodeId {
+    pub(in crate::runtime) fn push_cell(&mut self, cell: Cell) -> NodeId {
         let id = NodeId::from_index(self.nodes.len());
         self.nodes.push(cell);
         self.gc_high_water_nodes = self.gc_high_water_nodes.max(self.nodes.len());
@@ -214,26 +216,26 @@ impl Program {
     }
 
     #[cfg(feature = "gc-phase-profile")]
-    fn gc_profile_record_allocated_slot(&mut self, id: NodeId) {
+    pub(in crate::runtime) fn gc_profile_record_allocated_slot(&mut self, id: NodeId) {
         self.gc_young_profile_allocated_slots.push(id);
     }
 
-    fn push_node_fresh(&mut self, node: Node) -> NodeId {
+    pub(in crate::runtime) fn push_node_fresh(&mut self, node: Node) -> NodeId {
         let cell = Cell::from_node(node, &mut self.cold_nodes);
         self.push_cell(cell)
     }
 
-    fn cold_node(&self, id: NodeId) -> Option<&Node> {
+    pub(in crate::runtime) fn cold_node(&self, id: NodeId) -> Option<&Node> {
         let cold = self.cell(id).cold_index()?;
         self.cold_nodes.get(cold)?.as_ref()
     }
 
-    fn cold_node_mut(&mut self, id: NodeId) -> Option<&mut Node> {
+    pub(in crate::runtime) fn cold_node_mut(&mut self, id: NodeId) -> Option<&mut Node> {
         let cold = self.cell(id).cold_index()?;
         self.cold_nodes.get_mut(cold)?.as_mut()
     }
 
-    fn drop_cold_payload(&mut self, index: usize) {
+    pub(in crate::runtime) fn drop_cold_payload(&mut self, index: usize) {
         if let Some(cold) = self.nodes[index].cold_index() {
             if let Some(slot) = self.cold_nodes.get_mut(cold) {
                 *slot = None;
@@ -267,7 +269,7 @@ impl Program {
     }
 
     #[inline]
-    fn pop_free_node(&mut self) -> Option<usize> {
+    pub(in crate::runtime) fn pop_free_node(&mut self) -> Option<usize> {
         if self.free_nodes == 0 {
             return None;
         }
@@ -289,7 +291,7 @@ impl Program {
         Some(index)
     }
 
-    fn push_free_node(&mut self, index: usize) {
+    pub(in crate::runtime) fn push_free_node(&mut self, index: usize) {
         self.set_cell_at(
             index,
             Cell {
@@ -321,7 +323,7 @@ impl Program {
     }
 
     #[inline]
-    fn push_app_node(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
+    pub(in crate::runtime) fn push_app_node(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
         self.gc_allocations_since_collect = self.gc_allocations_since_collect.saturating_add(1);
         #[cfg(feature = "eval-phase-profile")]
         let profiling = self.profile.is_some();

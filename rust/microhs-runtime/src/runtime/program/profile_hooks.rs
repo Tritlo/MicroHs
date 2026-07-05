@@ -1,6 +1,13 @@
+use super::*;
+
 impl Program {
     #[cold]
-    fn profile_step(&mut self, head: NodeId, arity: usize, heap_spine: bool) -> ProfileHead {
+    pub(in crate::runtime) fn profile_step(
+        &mut self,
+        head: NodeId,
+        arity: usize,
+        heap_spine: bool,
+    ) -> ProfileHead {
         #[cfg(feature = "eval-phase-profile")]
         let started = Instant::now();
         let key = self.profile_head_key(head);
@@ -49,7 +56,7 @@ impl Program {
     }
 
     #[cold]
-    fn profile_reduction(&mut self, head: ProfileHead, reductions: usize) {
+    pub(in crate::runtime) fn profile_reduction(&mut self, head: ProfileHead, reductions: usize) {
         let Some(head) = head else {
             return;
         };
@@ -72,7 +79,11 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_eval_step_head_time(&mut self, head: ProfileHead, nanos: u128) {
+    pub(in crate::runtime) fn profile_stack_eval_step_head_time(
+        &mut self,
+        head: ProfileHead,
+        nanos: u128,
+    ) {
         let Some(head) = head else {
             return;
         };
@@ -89,7 +100,11 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_arg_read_head_time(&mut self, head: ProfileHead, nanos: u128) {
+    pub(in crate::runtime) fn profile_stack_arg_read_head_time(
+        &mut self,
+        head: ProfileHead,
+        nanos: u128,
+    ) {
         let Some(head) = head else {
             return;
         };
@@ -106,7 +121,11 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_app_alloc_site_time(&mut self, site: &'static str, nanos: u128) {
+    pub(in crate::runtime) fn profile_stack_app_alloc_site_time(
+        &mut self,
+        site: &'static str,
+        nanos: u128,
+    ) {
         let started = Instant::now();
         let Some(profile) = self.profile.as_mut() else {
             return;
@@ -122,7 +141,11 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_apply_rewrite_head_time(&mut self, head: ProfileHead, nanos: u128) {
+    pub(in crate::runtime) fn profile_stack_apply_rewrite_head_time(
+        &mut self,
+        head: ProfileHead,
+        nanos: u128,
+    ) {
         let Some(head) = head else {
             return;
         };
@@ -142,7 +165,11 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_apply_app_head_time(&mut self, head: ProfileHead, nanos: u128) {
+    pub(in crate::runtime) fn profile_stack_apply_app_head_time(
+        &mut self,
+        head: ProfileHead,
+        nanos: u128,
+    ) {
         let Some(head) = head else {
             return;
         };
@@ -159,7 +186,11 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_force_frame_head_time(&mut self, head: ProfileHead, nanos: u128) {
+    pub(in crate::runtime) fn profile_stack_force_frame_head_time(
+        &mut self,
+        head: ProfileHead,
+        nanos: u128,
+    ) {
         let Some(head) = head else {
             return;
         };
@@ -176,7 +207,11 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_inner_descent_head_time(&mut self, head: ProfileHead, nanos: u128) {
+    pub(in crate::runtime) fn profile_stack_inner_descent_head_time(
+        &mut self,
+        head: ProfileHead,
+        nanos: u128,
+    ) {
         let Some(head) = head else {
             return;
         };
@@ -196,7 +231,12 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_continue_next_head(&mut self, from: ProfileHead, next: NodeId, arity: usize) {
+    pub(in crate::runtime) fn profile_stack_continue_next_head(
+        &mut self,
+        from: ProfileHead,
+        next: NodeId,
+        arity: usize,
+    ) {
         let Some(from) = from else {
             return;
         };
@@ -220,7 +260,7 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_rewrite_arg_pattern(
+    pub(in crate::runtime) fn profile_stack_rewrite_arg_pattern(
         &mut self,
         head: &'static str,
         args: &[(&'static str, NodeId)],
@@ -243,7 +283,7 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_rewrite_opportunity(&mut self, key: &'static str) {
+    pub(in crate::runtime) fn profile_stack_rewrite_opportunity(&mut self, key: &'static str) {
         if let Some(profile) = self.profile.as_mut() {
             *profile
                 .stack_rewrite_opportunities
@@ -254,7 +294,11 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_rewrite_opportunity_at(&mut self, opportunity: &'static str, site: &str) {
+    pub(in crate::runtime) fn profile_stack_rewrite_opportunity_at(
+        &mut self,
+        opportunity: &'static str,
+        site: &str,
+    ) {
         self.profile_stack_rewrite_opportunity(opportunity);
         if let Some(profile) = self.profile.as_mut() {
             let mut key = String::with_capacity(opportunity.len() + site.len() + 1);
@@ -267,7 +311,12 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_app_opportunities(&mut self, site: &str, fun: NodeId, arg: NodeId) {
+    pub(in crate::runtime) fn profile_stack_app_opportunities(
+        &mut self,
+        site: &str,
+        fun: NodeId,
+        arg: NodeId,
+    ) {
         use KnownPrim::*;
 
         let funt = self.gc_profile_prim(fun);
@@ -322,7 +371,7 @@ impl Program {
     }
 
     #[cfg(feature = "eval-phase-profile")]
-    fn profile_node_shape_key(&self, id: NodeId) -> String {
+    pub(in crate::runtime) fn profile_node_shape_key(&self, id: NodeId) -> String {
         let cell = self.cell(id);
         match cell.tag() {
             CellTag::App => {
@@ -342,7 +391,7 @@ impl Program {
     }
 
     #[cfg(feature = "eval-phase-profile")]
-    fn profile_resolved_node_shape_key(&self, id: NodeId) -> String {
+    pub(in crate::runtime) fn profile_resolved_node_shape_key(&self, id: NodeId) -> String {
         let Some(id) = self.gc_profile_resolved_id(id) else {
             return "Free".to_owned();
         };
@@ -366,7 +415,11 @@ impl Program {
     }
 
     #[cfg(feature = "eval-phase-profile")]
-    fn profile_eval_whnf_value(&mut self, kind: &'static str, immediate: bool) {
+    pub(in crate::runtime) fn profile_eval_whnf_value(
+        &mut self,
+        kind: &'static str,
+        immediate: bool,
+    ) {
         let Some(profile) = self.profile.as_mut() else {
             return;
         };
@@ -383,7 +436,7 @@ impl Program {
     }
 
     #[cfg(feature = "eval-phase-profile")]
-    fn profile_reduce_node_whnf_entry(&mut self, root: NodeId) {
+    pub(in crate::runtime) fn profile_reduce_node_whnf_entry(&mut self, root: NodeId) {
         if self.profile.is_none() {
             return;
         }
@@ -397,7 +450,7 @@ impl Program {
     }
 
     #[cfg(feature = "eval-phase-profile")]
-    fn profile_cell_shape_key(&self, cell: Cell) -> &'static str {
+    pub(in crate::runtime) fn profile_cell_shape_key(&self, cell: Cell) -> &'static str {
         match cell.tag() {
             CellTag::App => "App",
             CellTag::Indir => "Indir",
@@ -417,7 +470,7 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_arg_read_time(&mut self, nanos: u128) {
+    pub(in crate::runtime) fn profile_stack_arg_read_time(&mut self, nanos: u128) {
         if let Some(profile) = self.profile.as_mut() {
             profile.stack_arg_read_nanos = profile.stack_arg_read_nanos.saturating_add(nanos);
         }
@@ -425,7 +478,7 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_app_alloc_time(&mut self, nanos: u128) {
+    pub(in crate::runtime) fn profile_stack_app_alloc_time(&mut self, nanos: u128) {
         if let Some(profile) = self.profile.as_mut() {
             profile.stack_app_alloc_nanos = profile.stack_app_alloc_nanos.saturating_add(nanos);
         }
@@ -433,7 +486,7 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_apply_rewrite_time(&mut self, nanos: u128) {
+    pub(in crate::runtime) fn profile_stack_apply_rewrite_time(&mut self, nanos: u128) {
         if let Some(profile) = self.profile.as_mut() {
             profile.stack_apply_rewrite_nanos =
                 profile.stack_apply_rewrite_nanos.saturating_add(nanos);
@@ -442,7 +495,7 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_apply_app_time(&mut self, nanos: u128) {
+    pub(in crate::runtime) fn profile_stack_apply_app_time(&mut self, nanos: u128) {
         if let Some(profile) = self.profile.as_mut() {
             profile.stack_apply_app_nanos = profile.stack_apply_app_nanos.saturating_add(nanos);
         }
@@ -450,7 +503,7 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_force_frame_time(&mut self, nanos: u128) {
+    pub(in crate::runtime) fn profile_stack_force_frame_time(&mut self, nanos: u128) {
         if let Some(profile) = self.profile.as_mut() {
             profile.stack_force_frame_nanos = profile.stack_force_frame_nanos.saturating_add(nanos);
         }
@@ -458,7 +511,7 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_stack_inner_descent_time(&mut self, nanos: u128) {
+    pub(in crate::runtime) fn profile_stack_inner_descent_time(&mut self, nanos: u128) {
         if let Some(profile) = self.profile.as_mut() {
             profile.stack_inner_descent_nanos =
                 profile.stack_inner_descent_nanos.saturating_add(nanos);
@@ -467,7 +520,7 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    fn profile_app_alloc_bookkeeping_time(&mut self, nanos: u128) {
+    pub(in crate::runtime) fn profile_app_alloc_bookkeeping_time(&mut self, nanos: u128) {
         if let Some(profile) = self.profile.as_mut() {
             profile.profile_app_alloc_bookkeeping_nanos = profile
                 .profile_app_alloc_bookkeeping_nanos
@@ -476,7 +529,7 @@ impl Program {
     }
 
     #[cold]
-    fn profile_resolve_chain(&mut self, depth: usize) {
+    pub(in crate::runtime) fn profile_resolve_chain(&mut self, depth: usize) {
         let Some(profile) = self.profile.as_mut() else {
             return;
         };
@@ -487,7 +540,7 @@ impl Program {
     }
 
     #[cold]
-    fn profile_shortcut(&mut self, key: &'static str, count: usize) {
+    pub(in crate::runtime) fn profile_shortcut(&mut self, key: &'static str, count: usize) {
         if count == 0 {
             return;
         }
@@ -502,7 +555,7 @@ impl Program {
     }
 
     #[cold]
-    fn profile_arg_materialization(&mut self, nodes: usize) {
+    pub(in crate::runtime) fn profile_arg_materialization(&mut self, nodes: usize) {
         if let Some(profile) = self.profile.as_mut() {
             profile.arg_materializations += 1;
             profile.arg_materialized_nodes += nodes;
@@ -510,7 +563,7 @@ impl Program {
     }
 
     #[cold]
-    fn profile_spine_rewrite(&mut self, extra_args: usize) {
+    pub(in crate::runtime) fn profile_spine_rewrite(&mut self, extra_args: usize) {
         if let Some(profile) = self.profile.as_mut() {
             profile.spine_rewrites += 1;
             profile.spine_rewrite_extra_args += extra_args;
@@ -518,7 +571,7 @@ impl Program {
     }
 
     #[cold]
-    fn profile_app_rewrite(&mut self, extra_args: usize) {
+    pub(in crate::runtime) fn profile_app_rewrite(&mut self, extra_args: usize) {
         if let Some(profile) = self.profile.as_mut() {
             profile.app_rewrites += 1;
             profile.app_rewrite_extra_args += extra_args;
@@ -526,7 +579,11 @@ impl Program {
     }
 
     #[cold]
-    fn profile_stack_rewrite(&mut self, used: usize, wrote_indirection: bool) {
+    pub(in crate::runtime) fn profile_stack_rewrite(
+        &mut self,
+        used: usize,
+        wrote_indirection: bool,
+    ) {
         if let Some(profile) = self.profile.as_mut() {
             profile.stack_rewrites += 1;
             profile.stack_rewrite_apps += used;
@@ -537,7 +594,7 @@ impl Program {
     }
 
     #[cold]
-    fn profile_stack_app_update(&mut self, used: usize) {
+    pub(in crate::runtime) fn profile_stack_app_update(&mut self, used: usize) {
         if let Some(profile) = self.profile.as_mut() {
             profile.stack_app_updates += 1;
             profile.stack_app_update_apps += used;
@@ -548,7 +605,7 @@ impl Program {
     }
 
     #[cold]
-    fn profile_stack_rethread(&mut self, apps: usize) {
+    pub(in crate::runtime) fn profile_stack_rethread(&mut self, apps: usize) {
         if let Some(profile) = self.profile.as_mut() {
             profile.stack_rethreads += 1;
             profile.stack_rethread_apps += apps;
@@ -556,42 +613,42 @@ impl Program {
     }
 
     #[cold]
-    fn profile_stack_descent_push(&mut self) {
+    pub(in crate::runtime) fn profile_stack_descent_push(&mut self) {
         if let Some(profile) = self.profile.as_mut() {
             profile.stack_descent_pushes += 1;
         }
     }
 
     #[cold]
-    fn profile_stack_arg_reads(&mut self, reads: usize) {
+    pub(in crate::runtime) fn profile_stack_arg_reads(&mut self, reads: usize) {
         if let Some(profile) = self.profile.as_mut() {
             profile.stack_arg_reads += reads;
         }
     }
 
     #[cold]
-    fn profile_stack_arg_batch(&mut self) {
+    pub(in crate::runtime) fn profile_stack_arg_batch(&mut self) {
         if let Some(profile) = self.profile.as_mut() {
             profile.stack_arg_batches += 1;
         }
     }
 
     #[cold]
-    fn profile_persistent_force(&mut self) {
+    pub(in crate::runtime) fn profile_persistent_force(&mut self) {
         if let Some(profile) = self.profile.as_mut() {
             profile.persistent_forces += 1;
         }
     }
 
     #[cold]
-    fn profile_persistent_fallback(&mut self) {
+    pub(in crate::runtime) fn profile_persistent_fallback(&mut self) {
         if let Some(profile) = self.profile.as_mut() {
             profile.persistent_fallbacks += 1;
         }
     }
 
     #[cold]
-    fn profile_stack_fallback_head(&mut self, head: NodeId) {
+    pub(in crate::runtime) fn profile_stack_fallback_head(&mut self, head: NodeId) {
         if self.profile.is_some() {
             let key = self.profile_head_key(head);
             if let Some(profile) = self.profile.as_mut() {
@@ -601,14 +658,14 @@ impl Program {
     }
 
     #[cold]
-    fn profile_fallback_eval_loop_step(&mut self) {
+    pub(in crate::runtime) fn profile_fallback_eval_loop_step(&mut self) {
         if let Some(profile) = self.profile.as_mut() {
             profile.fallback_eval_loop_steps += 1;
         }
     }
 
     #[cold]
-    fn profile_strict_redex_snapshot(&mut self, apps: usize) {
+    pub(in crate::runtime) fn profile_strict_redex_snapshot(&mut self, apps: usize) {
         if let Some(profile) = self.profile.as_mut() {
             profile.strict_redex_snapshots += 1;
             profile.strict_redex_snapshot_apps += apps;
@@ -616,7 +673,7 @@ impl Program {
     }
 
     #[cold]
-    fn profile_remaining_app_scan(&mut self, apps: usize) {
+    pub(in crate::runtime) fn profile_remaining_app_scan(&mut self, apps: usize) {
         if let Some(profile) = self.profile.as_mut() {
             profile.remaining_app_scans += 1;
             profile.remaining_app_scan_apps += apps;
@@ -624,7 +681,7 @@ impl Program {
     }
 
     #[cold]
-    fn profile_eval_frame_push(&mut self, kind: &'static str) {
+    pub(in crate::runtime) fn profile_eval_frame_push(&mut self, kind: &'static str) {
         if let Some(profile) = self.profile.as_mut() {
             profile.eval_frame_pushes += 1;
             *profile
@@ -635,28 +692,28 @@ impl Program {
     }
 
     #[cold]
-    fn profile_small_int_cache_hit(&mut self) {
+    pub(in crate::runtime) fn profile_small_int_cache_hit(&mut self) {
         if let Some(profile) = self.profile.as_mut() {
             profile.small_int_cache_hits += 1;
         }
     }
 
     #[cold]
-    fn profile_small_int_cache_miss(&mut self) {
+    pub(in crate::runtime) fn profile_small_int_cache_miss(&mut self) {
         if let Some(profile) = self.profile.as_mut() {
             profile.small_int_cache_misses += 1;
         }
     }
 
     #[cold]
-    fn profile_non_small_int_allocation(&mut self) {
+    pub(in crate::runtime) fn profile_non_small_int_allocation(&mut self) {
         if let Some(profile) = self.profile.as_mut() {
             profile.non_small_int_allocations += 1;
         }
     }
 
     #[cold]
-    fn profile_primitive_dispatch_probe(&mut self, key: &'static str) {
+    pub(in crate::runtime) fn profile_primitive_dispatch_probe(&mut self, key: &'static str) {
         if let Some(profile) = self.profile.as_mut() {
             *profile
                 .primitive_dispatch_probes
@@ -666,7 +723,7 @@ impl Program {
     }
 
     #[cold]
-    fn profile_primitive_dispatch_hit(&mut self, key: &'static str) {
+    pub(in crate::runtime) fn profile_primitive_dispatch_hit(&mut self, key: &'static str) {
         if let Some(profile) = self.profile.as_mut() {
             *profile
                 .primitive_dispatch_hits
@@ -676,7 +733,7 @@ impl Program {
     }
 
     #[cold]
-    fn profile_strict_primitive_dispatch(
+    pub(in crate::runtime) fn profile_strict_primitive_dispatch(
         &mut self,
         args_len: usize,
         action: StrictPrimitiveAction,
@@ -722,7 +779,7 @@ impl Program {
     }
 
     #[cold]
-    fn profile_node_allocation(&mut self, node: &Node) {
+    pub(in crate::runtime) fn profile_node_allocation(&mut self, node: &Node) {
         if let Some(profile) = self.profile.as_mut() {
             *profile
                 .node_allocations

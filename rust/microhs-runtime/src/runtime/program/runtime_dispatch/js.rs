@@ -1,5 +1,7 @@
+use super::*;
+
 impl Program {
-    fn js_call(
+    pub(in crate::runtime) fn js_call(
         &mut self,
         tags: &str,
         body: &[u8],
@@ -49,7 +51,7 @@ impl Program {
         Ok(Some((arity + 1, self.pair(result, args[arity]))))
     }
 
-    fn js_wrap(
+    pub(in crate::runtime) fn js_wrap(
         &mut self,
         tags: &str,
         args: &[NodeId],
@@ -73,13 +75,20 @@ impl Program {
         Ok(Some((2, self.pair(result, args[1]))))
     }
 
-    fn register_js_wrapper_tags(&mut self, tags: &str) -> Result<u32, EvalError> {
+    pub(in crate::runtime) fn register_js_wrapper_tags(
+        &mut self,
+        tags: &str,
+    ) -> Result<u32, EvalError> {
         let index = u32::try_from(self.js_wrapper_tags.len()).map_err(|_| EvalError::Overflow)?;
         self.js_wrapper_tags.push(tags.to_owned());
         Ok(index)
     }
 
-    fn js_value_node(&mut self, tag: u8, value: &JsValue) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn js_value_node(
+        &mut self,
+        tag: u8,
+        value: &JsValue,
+    ) -> Result<NodeId, EvalError> {
         let node = match (tag, value) {
             (b'I', JsValue::Int(value)) => Node::Int(i64::from(*value)),
             (b'U', JsValue::UInt(value)) => Node::Int(i64::from(*value)),
@@ -94,7 +103,11 @@ impl Program {
         Ok(self.push_value_node(node))
     }
 
-    fn js_value_from_node(&mut self, tag: u8, id: NodeId) -> Result<JsValue, EvalError> {
+    pub(in crate::runtime) fn js_value_from_node(
+        &mut self,
+        tag: u8,
+        id: NodeId,
+    ) -> Result<JsValue, EvalError> {
         match tag {
             b'V' => {
                 let _ = self.reduce_node_whnf(id, FORCE_REDUCTION_LIMIT)?;

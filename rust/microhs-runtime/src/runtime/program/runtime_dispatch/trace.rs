@@ -1,5 +1,7 @@
+use super::*;
+
 impl Program {
-    fn node_trace_summary(&self, id: NodeId) -> String {
+    pub(in crate::runtime) fn node_trace_summary(&self, id: NodeId) -> String {
         let Some(cell) = self.nodes.get(id.index()).copied() else {
             return format!("{id:?}:<missing>");
         };
@@ -45,7 +47,7 @@ impl Program {
         }
     }
 
-    fn trace_invalid_op_error(
+    pub(in crate::runtime) fn trace_invalid_op_error(
         &self,
         domain: &str,
         name: &str,

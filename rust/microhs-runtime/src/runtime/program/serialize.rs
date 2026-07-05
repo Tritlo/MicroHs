@@ -1,3 +1,5 @@
+use super::*;
+
 impl Program {
     #[cold]
     #[inline(never)]
@@ -13,7 +15,7 @@ impl Program {
 
     #[cold]
     #[inline(never)]
-    fn print_program(&self, root: NodeId) -> Result<Vec<u8>, EvalError> {
+    pub(in crate::runtime) fn print_program(&self, root: NodeId) -> Result<Vec<u8>, EvalError> {
         let mut labels = self.find_serialization_labels(root)?;
         let mut out = Vec::new();
         self.print_comb_into(root, &mut labels, &mut out)?;

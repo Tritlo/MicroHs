@@ -1,5 +1,7 @@
+use super::*;
+
 impl Program {
-    fn close_bfile(&mut self, ptr: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn close_bfile(&mut self, ptr: i64) -> Result<(), EvalError> {
         if let Some(handle) = handle_from_ptr(ptr) {
             return self.flush_io_handle(handle);
         }
@@ -99,7 +101,7 @@ impl Program {
         Ok(())
     }
 
-    fn read_dir_entry(&mut self, ptr: i64) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn read_dir_entry(&mut self, ptr: i64) -> Result<i64, EvalError> {
         let slot = self.decode_dir_pointer(ptr)?;
         let name = {
             let dir = self
@@ -120,7 +122,7 @@ impl Program {
         Ok(ptr)
     }
 
-    fn close_dir(&mut self, ptr: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn close_dir(&mut self, ptr: i64) -> Result<(), EvalError> {
         let slot = self.decode_dir_pointer(ptr)?;
         let slot = self.dirs.get_mut(slot).ok_or(EvalError::InvalidHandle)?;
         if slot.is_none() {
@@ -130,7 +132,7 @@ impl Program {
         Ok(())
     }
 
-    fn flush_bfile(&mut self, ptr: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn flush_bfile(&mut self, ptr: i64) -> Result<(), EvalError> {
         if let Some(handle) = handle_from_ptr(ptr) {
             return self.flush_io_handle(handle);
         }

@@ -1,5 +1,7 @@
+use super::*;
+
 impl Program {
-    fn bytes_op(
+    pub(in crate::runtime) fn bytes_op(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -10,7 +12,7 @@ impl Program {
         }
     }
 
-    fn bytes_op_inner(
+    pub(in crate::runtime) fn bytes_op_inner(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -203,7 +205,7 @@ impl Program {
         Ok(rewrite)
     }
 
-    fn bytes_unop(
+    pub(in crate::runtime) fn bytes_unop(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -214,7 +216,7 @@ impl Program {
         }
     }
 
-    fn bytes_unop_inner(
+    pub(in crate::runtime) fn bytes_unop_inner(
         &mut self,
         name: &str,
         args: &[NodeId],

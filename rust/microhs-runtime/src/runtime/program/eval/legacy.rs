@@ -1,5 +1,7 @@
+use super::*;
+
 impl Program {
-    fn eval_loop_result(
+    pub(in crate::runtime) fn eval_loop_result(
         &mut self,
         profile_head: ProfileHead,
         node: NodeId,
@@ -11,7 +13,7 @@ impl Program {
         EvalLoopStep { node, reductions }
     }
 
-    fn fill_eval_spine(
+    pub(in crate::runtime) fn fill_eval_spine(
         &mut self,
         mut node: NodeId,
         spine: &mut EvalSpine,
@@ -24,7 +26,7 @@ impl Program {
         Ok(node)
     }
 
-    fn apply_eval_spine_rewrite(
+    pub(in crate::runtime) fn apply_eval_spine_rewrite(
         &mut self,
         root: NodeId,
         spine: &EvalSpine,
@@ -54,7 +56,7 @@ impl Program {
         node
     }
 
-    fn apply_eval_spine_app(
+    pub(in crate::runtime) fn apply_eval_spine_app(
         &mut self,
         root: NodeId,
         spine: &EvalSpine,
@@ -86,7 +88,7 @@ impl Program {
         node
     }
 
-    fn eval_loop_app_result(
+    pub(in crate::runtime) fn eval_loop_app_result(
         &mut self,
         profile_head: ProfileHead,
         root: NodeId,
@@ -103,7 +105,7 @@ impl Program {
         self.eval_loop_result(profile_head, node, reductions)
     }
 
-    fn strict_redex_from_eval_spine(
+    pub(in crate::runtime) fn strict_redex_from_eval_spine(
         &mut self,
         root: NodeId,
         used: usize,
@@ -124,7 +126,7 @@ impl Program {
         }
     }
 
-    fn strict_redex_from_persistent_spine(
+    pub(in crate::runtime) fn strict_redex_from_persistent_spine(
         &mut self,
         root: NodeId,
         used: usize,
@@ -144,7 +146,7 @@ impl Program {
     }
 
     #[cold]
-    fn profile_head_key(&self, head: NodeId) -> String {
+    pub(in crate::runtime) fn profile_head_key(&self, head: NodeId) -> String {
         match self.node_for_debug(head) {
             Node::App(_, _) => "App".to_owned(),
             Node::Indir(_) => "Indir".to_owned(),
@@ -173,7 +175,7 @@ impl Program {
         }
     }
 
-    fn eval_loop_step(
+    pub(in crate::runtime) fn eval_loop_step(
         &mut self,
         root: NodeId,
         budget: usize,
@@ -831,7 +833,7 @@ impl Program {
         Ok(Some(self.eval_loop_result(profile_head, node, reductions)))
     }
 
-    fn fallback_runtime_prim_rewrite(
+    pub(in crate::runtime) fn fallback_runtime_prim_rewrite(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -975,7 +977,7 @@ impl Program {
         Ok(None)
     }
 
-    fn fill_persistent_spine(
+    pub(in crate::runtime) fn fill_persistent_spine(
         &mut self,
         mut node: NodeId,
         spine: &mut PersistentSpine,
@@ -988,7 +990,7 @@ impl Program {
         Ok(node)
     }
 
-    fn persistent_eval_step(
+    pub(in crate::runtime) fn persistent_eval_step(
         &mut self,
         head: NodeId,
         spine: &mut PersistentSpine,

@@ -1,5 +1,7 @@
+use super::*;
+
 impl Program {
-    fn finish_int_frame(
+    pub(in crate::runtime) fn finish_int_frame(
         &mut self,
         frame: IntFrame,
         value: i64,
@@ -38,7 +40,7 @@ impl Program {
         Ok((node, 1))
     }
 
-    fn int64_result_node(&mut self, result: Int64Result) -> NodeId {
+    pub(in crate::runtime) fn int64_result_node(&mut self, result: Int64Result) -> NodeId {
         match result {
             Int64Result::Int64(n) => self.push_node(Node::Int64(n)),
             Int64Result::Bool(b) => self.prim(if b { "A" } else { "K" }),
@@ -46,7 +48,7 @@ impl Program {
         }
     }
 
-    fn int64_result_value_node(result: Int64Result) -> Node {
+    pub(in crate::runtime) fn int64_result_value_node(result: Int64Result) -> Node {
         match result {
             Int64Result::Int64(n) => Node::Int64(n),
             Int64Result::Bool(b) => Self::bool_value_node(b),
@@ -54,14 +56,14 @@ impl Program {
         }
     }
 
-    fn int64_un_result_node(&mut self, result: Int64UnResult) -> NodeId {
+    pub(in crate::runtime) fn int64_un_result_node(&mut self, result: Int64UnResult) -> NodeId {
         match result {
             Int64UnResult::Int64(n) => self.push_node(Node::Int64(n)),
             Int64UnResult::Int(n) => self.int(n),
         }
     }
 
-    fn finish_int64_frame(
+    pub(in crate::runtime) fn finish_int64_frame(
         &mut self,
         frame: Int64Frame,
         value: i64,
@@ -108,7 +110,7 @@ impl Program {
         Ok((node, 1))
     }
 
-    fn apply_strict_redex(
+    pub(in crate::runtime) fn apply_strict_redex(
         &mut self,
         redex: StrictRedex,
         mut node: NodeId,
@@ -129,7 +131,11 @@ impl Program {
         Ok(node)
     }
 
-    fn stack_entry_app(&self, stack: &EvalStack, index: usize) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn stack_entry_app(
+        &self,
+        stack: &EvalStack,
+        index: usize,
+    ) -> Result<NodeId, EvalError> {
         stack
             .apps
             .get(index)
@@ -137,7 +143,12 @@ impl Program {
             .ok_or_else(|| EvalError::DanglingIndirection(NodeId::from_index(index)))
     }
 
-    fn apply_stack_rewrite(&mut self, stack: &mut EvalStack, used: usize, node: NodeId) -> NodeId {
+    pub(in crate::runtime) fn apply_stack_rewrite(
+        &mut self,
+        stack: &mut EvalStack,
+        used: usize,
+        node: NodeId,
+    ) -> NodeId {
         if used == 0 {
             return node;
         }
@@ -145,7 +156,7 @@ impl Program {
         self.apply_stack_frame_rewrite(stack, app_end, used, node)
     }
 
-    fn apply_stack_frame_rewrite(
+    pub(in crate::runtime) fn apply_stack_frame_rewrite(
         &mut self,
         stack: &mut EvalStack,
         app_end: usize,
@@ -173,7 +184,7 @@ impl Program {
         node
     }
 
-    fn apply_stack_frame_value(
+    pub(in crate::runtime) fn apply_stack_frame_value(
         &mut self,
         stack: &mut EvalStack,
         app_end: usize,
@@ -198,7 +209,12 @@ impl Program {
         redex
     }
 
-    fn apply_stack_redex_value(&mut self, redex: NodeId, used: usize, value: Node) -> NodeId {
+    pub(in crate::runtime) fn apply_stack_redex_value(
+        &mut self,
+        redex: NodeId,
+        used: usize,
+        value: Node,
+    ) -> NodeId {
         #[cfg(feature = "eval-phase-profile")]
         let started = self.profile.is_some().then(Instant::now);
         self.set_app_node_at(redex.index(), value);
@@ -212,7 +228,7 @@ impl Program {
         redex
     }
 
-    fn apply_stack_app(
+    pub(in crate::runtime) fn apply_stack_app(
         &mut self,
         stack: &mut EvalStack,
         used: usize,
@@ -242,7 +258,7 @@ impl Program {
         node
     }
 
-    fn rethread_stack_app_segment(
+    pub(in crate::runtime) fn rethread_stack_app_segment(
         &mut self,
         stack: &mut EvalStack,
         mut node: NodeId,
@@ -263,7 +279,7 @@ impl Program {
         Ok(node)
     }
 
-    fn descend_stack_from(
+    pub(in crate::runtime) fn descend_stack_from(
         &mut self,
         mut current: NodeId,
         stack: &mut EvalStack,
@@ -281,7 +297,7 @@ impl Program {
         Ok(current)
     }
 
-    fn finish_stack_whnf_frame(
+    pub(in crate::runtime) fn finish_stack_whnf_frame(
         &mut self,
         frame: StackWhnfFrame,
         _stack: &mut EvalStack,
@@ -336,7 +352,7 @@ impl Program {
         Ok((node, 1))
     }
 
-    fn finish_ready_stack_frame(
+    pub(in crate::runtime) fn finish_ready_stack_frame(
         &mut self,
         stack: &mut EvalStack,
         current: NodeId,
@@ -581,7 +597,7 @@ impl Program {
         Ok(Some(result))
     }
 
-    fn finish_whnf_stack_frame(
+    pub(in crate::runtime) fn finish_whnf_stack_frame(
         &mut self,
         stack: &mut EvalStack,
         current: NodeId,
@@ -602,7 +618,7 @@ impl Program {
         Ok(Some(result))
     }
 
-    fn begin_whnf_force_frame(
+    pub(in crate::runtime) fn begin_whnf_force_frame(
         &mut self,
         root: NodeId,
     ) -> Result<Option<(WhnfFrame, NodeId)>, EvalError> {
@@ -658,7 +674,7 @@ impl Program {
         )))
     }
 
-    fn finish_whnf_frame(
+    pub(in crate::runtime) fn finish_whnf_frame(
         &mut self,
         frame: WhnfFrame,
         value: NodeId,
@@ -680,7 +696,7 @@ impl Program {
         Ok((node, 1))
     }
 
-    fn conversion_result_node(
+    pub(in crate::runtime) fn conversion_result_node(
         &mut self,
         kind: ConversionFrameKind,
         value: ConversionValue,
@@ -732,7 +748,10 @@ impl Program {
         }
     }
 
-    fn conversion_result_value_node(kind: ConversionFrameKind, value: ConversionValue) -> Node {
+    pub(in crate::runtime) fn conversion_result_value_node(
+        kind: ConversionFrameKind,
+        value: ConversionValue,
+    ) -> Node {
         match (kind, value) {
             (ConversionFrameKind::IntToInt64, ConversionValue::Int(n)) => Node::Int64(n),
             (ConversionFrameKind::Int64ToInt, ConversionValue::Int64(n)) => Node::Int(n),
@@ -778,7 +797,7 @@ impl Program {
         }
     }
 
-    fn finish_conversion_frame(
+    pub(in crate::runtime) fn finish_conversion_frame(
         &mut self,
         frame: ConversionFrame,
         value: ConversionValue,
@@ -792,7 +811,7 @@ impl Program {
         Ok((node, 1))
     }
 
-    fn finish_ready_eval_frame(
+    pub(in crate::runtime) fn finish_ready_eval_frame(
         &mut self,
         stack: &mut EvalFrameStack,
         current: NodeId,
@@ -872,7 +891,7 @@ impl Program {
         Ok(Some(result))
     }
 
-    fn finish_whnf_eval_frame(
+    pub(in crate::runtime) fn finish_whnf_eval_frame(
         &mut self,
         stack: &mut EvalFrameStack,
         current: NodeId,
@@ -893,7 +912,7 @@ impl Program {
         Ok(Some(result))
     }
 
-    fn resolve_for_whnf(
+    pub(in crate::runtime) fn resolve_for_whnf(
         &mut self,
         root: NodeId,
         profile_resolve: bool,
@@ -905,7 +924,7 @@ impl Program {
         }
     }
 
-    fn reduce_whnf_from(
+    pub(in crate::runtime) fn reduce_whnf_from(
         &mut self,
         root: NodeId,
         limit: usize,
@@ -918,7 +937,7 @@ impl Program {
         result
     }
 
-    fn reduce_whnf_from_inner(
+    pub(in crate::runtime) fn reduce_whnf_from_inner(
         &mut self,
         mut root: NodeId,
         limit: usize,
@@ -1056,7 +1075,7 @@ impl Program {
         Err(EvalError::StepLimit { limit })
     }
 
-    fn reduce_whnf_from_stack(
+    pub(in crate::runtime) fn reduce_whnf_from_stack(
         &mut self,
         mut current: NodeId,
         limit: usize,

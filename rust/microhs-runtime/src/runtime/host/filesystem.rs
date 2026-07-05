@@ -1,43 +1,55 @@
+use super::*;
+
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 unsafe extern "C" {
-    fn mhs_host_result_copy(dst: *mut u8, len: usize) -> usize;
-    fn mhs_host_getenv(name_ptr: *const u8, name_len: usize) -> isize;
-    fn mhs_host_setenv(
+    pub(in crate::runtime) fn mhs_host_result_copy(dst: *mut u8, len: usize) -> usize;
+    pub(in crate::runtime) fn mhs_host_getenv(name_ptr: *const u8, name_len: usize) -> isize;
+    pub(in crate::runtime) fn mhs_host_setenv(
         name_ptr: *const u8,
         name_len: usize,
         value_ptr: *const u8,
         value_len: usize,
         overwrite: i64,
     ) -> i64;
-    fn mhs_host_unsetenv(name_ptr: *const u8, name_len: usize) -> i64;
-    fn mhs_host_environ() -> isize;
-    fn mhs_host_remove(path_ptr: *const u8, path_len: usize) -> i64;
-    fn mhs_host_chdir(path_ptr: *const u8, path_len: usize) -> i64;
-    fn mhs_host_mkdir(path_ptr: *const u8, path_len: usize, mode: i64) -> i64;
-    fn mhs_host_getcwd() -> isize;
-    fn mhs_host_tmpname(
+    pub(in crate::runtime) fn mhs_host_unsetenv(name_ptr: *const u8, name_len: usize) -> i64;
+    pub(in crate::runtime) fn mhs_host_environ() -> isize;
+    pub(in crate::runtime) fn mhs_host_remove(path_ptr: *const u8, path_len: usize) -> i64;
+    pub(in crate::runtime) fn mhs_host_chdir(path_ptr: *const u8, path_len: usize) -> i64;
+    pub(in crate::runtime) fn mhs_host_mkdir(
+        path_ptr: *const u8,
+        path_len: usize,
+        mode: i64,
+    ) -> i64;
+    pub(in crate::runtime) fn mhs_host_getcwd() -> isize;
+    pub(in crate::runtime) fn mhs_host_tmpname(
         pre_ptr: *const u8,
         pre_len: usize,
         suf_ptr: *const u8,
         suf_len: usize,
     ) -> isize;
-    fn mhs_host_get_permissions(path_ptr: *const u8, path_len: usize) -> i64;
-    fn mhs_host_set_permissions(path_ptr: *const u8, path_len: usize, permissions: i64) -> i64;
-    fn mhs_host_dir_entries(path_ptr: *const u8, path_len: usize) -> isize;
-    fn mhs_host_file_open(
+    pub(in crate::runtime) fn mhs_host_get_permissions(path_ptr: *const u8, path_len: usize)
+    -> i64;
+    pub(in crate::runtime) fn mhs_host_set_permissions(
+        path_ptr: *const u8,
+        path_len: usize,
+        permissions: i64,
+    ) -> i64;
+    pub(in crate::runtime) fn mhs_host_dir_entries(path_ptr: *const u8, path_len: usize) -> isize;
+    pub(in crate::runtime) fn mhs_host_file_open(
         path_ptr: *const u8,
         path_len: usize,
         mode_ptr: *const u8,
         mode_len: usize,
     ) -> i64;
-    fn mhs_host_file_read(handle: i64, dst: *mut u8, len: usize) -> isize;
-    fn mhs_host_file_write(handle: i64, src: *const u8, len: usize) -> isize;
-    fn mhs_host_file_flush(handle: i64) -> i64;
-    fn mhs_host_file_close(handle: i64) -> i64;
+    pub(in crate::runtime) fn mhs_host_file_read(handle: i64, dst: *mut u8, len: usize) -> isize;
+    pub(in crate::runtime) fn mhs_host_file_write(handle: i64, src: *const u8, len: usize)
+    -> isize;
+    pub(in crate::runtime) fn mhs_host_file_flush(handle: i64) -> i64;
+    pub(in crate::runtime) fn mhs_host_file_close(handle: i64) -> i64;
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn host_result_i64(rc: i64) -> HostIntResult {
+pub(in crate::runtime) fn host_result_i64(rc: i64) -> HostIntResult {
     if rc < 0 {
         HostIntResult::err((-rc) as i32)
     } else {
@@ -46,7 +58,7 @@ fn host_result_i64(rc: i64) -> HostIntResult {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn host_result_usize(rc: isize) -> Result<usize, i32> {
+pub(in crate::runtime) fn host_result_usize(rc: isize) -> Result<usize, i32> {
     if rc < 0 {
         Err((-rc) as i32)
     } else {
@@ -55,7 +67,7 @@ fn host_result_usize(rc: isize) -> Result<usize, i32> {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn copy_host_result(len: usize) -> Vec<u8> {
+pub(in crate::runtime) fn copy_host_result(len: usize) -> Vec<u8> {
     let mut bytes = vec![0; len];
     if len != 0 {
         let copied = unsafe { mhs_host_result_copy(bytes.as_mut_ptr(), len) };
@@ -65,13 +77,13 @@ fn copy_host_result(len: usize) -> Vec<u8> {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn host_bytes_result(rc: isize) -> Result<Vec<u8>, i32> {
+pub(in crate::runtime) fn host_bytes_result(rc: isize) -> Result<Vec<u8>, i32> {
     let len = host_result_usize(rc)?;
     Ok(copy_host_result(len))
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
+pub(in crate::runtime) fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
     use std::ffi::OsStr;
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
@@ -79,7 +91,7 @@ fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
+pub(in crate::runtime) fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
     let len = unsafe { mhs_host_getenv(name.as_ptr(), name.len()) };
     if len < 0 {
         None
@@ -89,7 +101,7 @@ fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
 }
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
-fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
+pub(in crate::runtime) fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
     #[cfg(target_os = "wasi")]
     wasi_trace_host("getenv", &String::from_utf8_lossy(name));
     let name = std::str::from_utf8(name).ok()?;
@@ -97,7 +109,7 @@ fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
+pub(in crate::runtime) fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
@@ -116,7 +128,7 @@ fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
+pub(in crate::runtime) fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
     host_result_i64(unsafe {
         mhs_host_setenv(
             name.as_ptr(),
@@ -129,7 +141,7 @@ fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
 }
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
-fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
+pub(in crate::runtime) fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
     #[cfg(target_os = "wasi")]
     wasi_trace_host(
         "setenv",
@@ -157,7 +169,7 @@ fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
@@ -172,12 +184,12 @@ fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
     host_result_i64(unsafe { mhs_host_unsetenv(name.as_ptr(), name.len()) })
 }
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
-fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
     #[cfg(target_os = "wasi")]
     wasi_trace_host("unsetenv", &String::from_utf8_lossy(name));
     if name.is_empty() || name.contains(&b'=') {
@@ -194,7 +206,7 @@ fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn environ_bytes() -> Vec<Vec<u8>> {
+pub(in crate::runtime) fn environ_bytes() -> Vec<Vec<u8>> {
     use std::os::unix::ffi::OsStringExt;
 
     std::env::vars_os()
@@ -208,7 +220,7 @@ fn environ_bytes() -> Vec<Vec<u8>> {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn environ_bytes() -> Vec<Vec<u8>> {
+pub(in crate::runtime) fn environ_bytes() -> Vec<Vec<u8>> {
     let Ok(bytes) = host_bytes_result(unsafe { mhs_host_environ() }) else {
         return Vec::new();
     };
@@ -220,7 +232,7 @@ fn environ_bytes() -> Vec<Vec<u8>> {
 }
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
-fn environ_bytes() -> Vec<Vec<u8>> {
+pub(in crate::runtime) fn environ_bytes() -> Vec<Vec<u8>> {
     std::env::vars_os()
         .map(|(name, value)| {
             let mut bytes = name.to_string_lossy().into_owned().into_bytes();
@@ -232,7 +244,7 @@ fn environ_bytes() -> Vec<Vec<u8>> {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn remove_path_bytes(path: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn remove_path_bytes(path: &[u8]) -> HostIntResult {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
@@ -249,12 +261,12 @@ fn remove_path_bytes(path: &[u8]) -> HostIntResult {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn remove_path_bytes(path: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn remove_path_bytes(path: &[u8]) -> HostIntResult {
     host_result_i64(unsafe { mhs_host_remove(path.as_ptr(), path.len()) })
 }
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
-fn remove_path_bytes(path: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn remove_path_bytes(path: &[u8]) -> HostIntResult {
     #[cfg(target_os = "wasi")]
     wasi_trace_host("remove", &String::from_utf8_lossy(path));
     let Ok(path) = std::str::from_utf8(path) else {
@@ -272,7 +284,7 @@ fn remove_path_bytes(path: &[u8]) -> HostIntResult {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn system_command_bytes(command: Option<&[u8]>) -> i64 {
+pub(in crate::runtime) fn system_command_bytes(command: Option<&[u8]>) -> i64 {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::process::ExitStatusExt;
@@ -291,13 +303,13 @@ fn system_command_bytes(command: Option<&[u8]>) -> i64 {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn system_command_bytes(command: Option<&[u8]>) -> i64 {
+pub(in crate::runtime) fn system_command_bytes(command: Option<&[u8]>) -> i64 {
     let _ = command;
     -1
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
-fn system_command_bytes(command: Option<&[u8]>) -> i64 {
+pub(in crate::runtime) fn system_command_bytes(command: Option<&[u8]>) -> i64 {
     let Some(command) = command else {
         return 1;
     };
@@ -315,7 +327,7 @@ fn system_command_bytes(command: Option<&[u8]>) -> i64 {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
@@ -327,12 +339,12 @@ fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
     host_result_i64(unsafe { mhs_host_chdir(path.as_ptr(), path.len()) })
 }
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
-fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
     #[cfg(target_os = "wasi")]
     wasi_trace_host("chdir", &String::from_utf8_lossy(path));
     let Ok(path) = std::str::from_utf8(path) else {
@@ -345,7 +357,7 @@ fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntResult {
+pub(in crate::runtime) fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntResult {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::DirBuilderExt;
@@ -361,12 +373,12 @@ fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntResult {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntResult {
+pub(in crate::runtime) fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntResult {
     host_result_i64(unsafe { mhs_host_mkdir(path.as_ptr(), path.len(), mode) })
 }
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
-fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntResult {
+pub(in crate::runtime) fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntResult {
     #[cfg(target_os = "wasi")]
     wasi_trace_host(
         "mkdir",
@@ -383,7 +395,7 @@ fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntResult {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn current_dir_bytes() -> Result<Vec<u8>, i32> {
+pub(in crate::runtime) fn current_dir_bytes() -> Result<Vec<u8>, i32> {
     use std::os::unix::ffi::OsStringExt;
 
     std::env::current_dir()
@@ -392,12 +404,12 @@ fn current_dir_bytes() -> Result<Vec<u8>, i32> {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn current_dir_bytes() -> Result<Vec<u8>, i32> {
+pub(in crate::runtime) fn current_dir_bytes() -> Result<Vec<u8>, i32> {
     host_bytes_result(unsafe { mhs_host_getcwd() })
 }
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
-fn current_dir_bytes() -> Result<Vec<u8>, i32> {
+pub(in crate::runtime) fn current_dir_bytes() -> Result<Vec<u8>, i32> {
     #[cfg(target_os = "wasi")]
     wasi_trace_host("getcwd", "");
     std::env::current_dir()
@@ -406,7 +418,7 @@ fn current_dir_bytes() -> Result<Vec<u8>, i32> {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn executable_path_bytes() -> Result<Vec<u8>, i32> {
+pub(in crate::runtime) fn executable_path_bytes() -> Result<Vec<u8>, i32> {
     use std::os::unix::ffi::OsStringExt;
 
     std::env::current_exe()
@@ -415,12 +427,12 @@ fn executable_path_bytes() -> Result<Vec<u8>, i32> {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn executable_path_bytes() -> Result<Vec<u8>, i32> {
+pub(in crate::runtime) fn executable_path_bytes() -> Result<Vec<u8>, i32> {
     Err(errno_i32("ENOSYS"))
 }
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
-fn executable_path_bytes() -> Result<Vec<u8>, i32> {
+pub(in crate::runtime) fn executable_path_bytes() -> Result<Vec<u8>, i32> {
     #[cfg(target_os = "wasi")]
     wasi_trace_host("get_executable_path", "");
     std::env::current_exe()
@@ -429,7 +441,7 @@ fn executable_path_bytes() -> Result<Vec<u8>, i32> {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn tmpname_bytes(pre: &[u8], suf: &[u8]) -> Result<Vec<u8>, i32> {
+pub(in crate::runtime) fn tmpname_bytes(pre: &[u8], suf: &[u8]) -> Result<Vec<u8>, i32> {
     use std::ffi::{CString, OsString};
     use std::os::unix::ffi::OsStringExt;
     use std::os::unix::io::RawFd;
@@ -461,7 +473,7 @@ fn tmpname_bytes(pre: &[u8], suf: &[u8]) -> Result<Vec<u8>, i32> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn tmpname_bytes(pre: &[u8], suf: &[u8]) -> Result<Vec<u8>, i32> {
+pub(in crate::runtime) fn tmpname_bytes(pre: &[u8], suf: &[u8]) -> Result<Vec<u8>, i32> {
     #[cfg(target_os = "wasi")]
     {
         let _ = (pre, suf);
@@ -476,7 +488,7 @@ fn tmpname_bytes(pre: &[u8], suf: &[u8]) -> Result<Vec<u8>, i32> {
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
-fn tmpname_bytes(pre: &[u8], suf: &[u8]) -> Result<Vec<u8>, i32> {
+pub(in crate::runtime) fn tmpname_bytes(pre: &[u8], suf: &[u8]) -> Result<Vec<u8>, i32> {
     let pre = std::str::from_utf8(pre).map_err(|_| errno_i32("EINVAL"))?;
     let suf = std::str::from_utf8(suf).map_err(|_| errno_i32("EINVAL"))?;
     let tmpdir = std::env::temp_dir();
@@ -504,7 +516,7 @@ fn tmpname_bytes(pre: &[u8], suf: &[u8]) -> Result<Vec<u8>, i32> {
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
-fn tmp_six(mut value: u64) -> [u8; 6] {
+pub(in crate::runtime) fn tmp_six(mut value: u64) -> [u8; 6] {
     const ALPHABET: &[u8; 36] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let mut out = [b'0'; 6];
     for byte in &mut out {
@@ -515,7 +527,7 @@ fn tmp_six(mut value: u64) -> [u8; 6] {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::PermissionsExt;
@@ -540,12 +552,12 @@ fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
     host_result_i64(unsafe { mhs_host_get_permissions(path.as_ptr(), path.len()) })
 }
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
-fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
     #[cfg(target_os = "wasi")]
     wasi_trace_host("get_permissions", &String::from_utf8_lossy(path));
     let Ok(path) = std::str::from_utf8(path) else {
@@ -566,7 +578,10 @@ fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> HostIntResult {
+pub(in crate::runtime) fn set_permissions_path_bytes(
+    path: &[u8],
+    permissions: i64,
+) -> HostIntResult {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::PermissionsExt;
@@ -613,12 +628,18 @@ fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> HostIntResult {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> HostIntResult {
+pub(in crate::runtime) fn set_permissions_path_bytes(
+    path: &[u8],
+    permissions: i64,
+) -> HostIntResult {
     host_result_i64(unsafe { mhs_host_set_permissions(path.as_ptr(), path.len(), permissions) })
 }
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
-fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> HostIntResult {
+pub(in crate::runtime) fn set_permissions_path_bytes(
+    path: &[u8],
+    permissions: i64,
+) -> HostIntResult {
     #[cfg(target_os = "wasi")]
     wasi_trace_host(
         "set_permissions",
@@ -644,7 +665,7 @@ fn set_permissions_path_bytes(path: &[u8], permissions: i64) -> HostIntResult {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
+pub(in crate::runtime) fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
     use std::ffi::OsStr;
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
@@ -661,7 +682,7 @@ fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
+pub(in crate::runtime) fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
     let bytes = host_bytes_result(unsafe { mhs_host_dir_entries(path.as_ptr(), path.len()) })?;
     Ok(bytes
         .split(|byte| *byte == 0)
@@ -671,7 +692,7 @@ fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
 }
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
-fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
+pub(in crate::runtime) fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
     #[cfg(target_os = "wasi")]
     wasi_trace_host("opendir", &String::from_utf8_lossy(path));
     let path = std::str::from_utf8(path).map_err(|_| errno_i32("EINVAL"))?;
@@ -693,7 +714,7 @@ fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
+pub(in crate::runtime) fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
@@ -710,7 +731,7 @@ fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
+pub(in crate::runtime) fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
     let handle =
         unsafe { mhs_host_file_open(path.as_ptr(), path.len(), mode.as_ptr(), mode.len()) };
     if handle < 0 {
@@ -728,7 +749,7 @@ fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
 }
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
-fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
+pub(in crate::runtime) fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
     #[cfg(target_os = "wasi")]
     wasi_trace_host(
         "fopen",
@@ -752,7 +773,7 @@ fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn native_fd_bfile(fd: i32) -> Result<BFile, i32> {
+pub(in crate::runtime) fn native_fd_bfile(fd: i32) -> Result<BFile, i32> {
     use std::os::unix::io::FromRawFd;
 
     if fd < 0 {
@@ -771,13 +792,13 @@ fn native_fd_bfile(fd: i32) -> Result<BFile, i32> {
 }
 
 #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
-fn native_fd_bfile(fd: i32) -> Result<BFile, i32> {
+pub(in crate::runtime) fn native_fd_bfile(fd: i32) -> Result<BFile, i32> {
     let _ = fd;
     Err(errno_i32("ENOSYS"))
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn open_fd_path_bytes(path: &[u8], flags: i32, mode: i64) -> HostIntResult {
+pub(in crate::runtime) fn open_fd_path_bytes(path: &[u8], flags: i32, mode: i64) -> HostIntResult {
     let path = match std::ffi::CString::new(path) {
         Ok(path) => path,
         Err(_) => return HostIntResult::err(errno_i32("EINVAL")),
@@ -796,13 +817,13 @@ fn open_fd_path_bytes(path: &[u8], flags: i32, mode: i64) -> HostIntResult {
 }
 
 #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
-fn open_fd_path_bytes(path: &[u8], flags: i32, mode: i64) -> HostIntResult {
+pub(in crate::runtime) fn open_fd_path_bytes(path: &[u8], flags: i32, mode: i64) -> HostIntResult {
     let _ = (path, flags, mode);
     HostIntResult::err(errno_i32("ENOSYS"))
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn close_fd(fd: i32) -> HostIntResult {
+pub(in crate::runtime) fn close_fd(fd: i32) -> HostIntResult {
     // SAFETY: close only consumes the integer file descriptor.
     let rc = unsafe { libc::close(fd) };
     if rc < 0 {
@@ -813,13 +834,13 @@ fn close_fd(fd: i32) -> HostIntResult {
 }
 
 #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
-fn close_fd(fd: i32) -> HostIntResult {
+pub(in crate::runtime) fn close_fd(fd: i32) -> HostIntResult {
     let _ = fd;
     HostIntResult::err(errno_i32("ENOSYS"))
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn fcntl_fd(fd: i32, cmd: i32, arg: i32) -> HostIntResult {
+pub(in crate::runtime) fn fcntl_fd(fd: i32, cmd: i32, arg: i32) -> HostIntResult {
     // SAFETY: this mirrors the C runtime's three-int fcntl wrapper.
     let rc = unsafe { libc::fcntl(fd, cmd, arg) };
     if rc < 0 {
@@ -830,13 +851,13 @@ fn fcntl_fd(fd: i32, cmd: i32, arg: i32) -> HostIntResult {
 }
 
 #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
-fn fcntl_fd(fd: i32, cmd: i32, arg: i32) -> HostIntResult {
+pub(in crate::runtime) fn fcntl_fd(fd: i32, cmd: i32, arg: i32) -> HostIntResult {
     let _ = (fd, cmd, arg);
     HostIntResult::err(errno_i32("ENOSYS"))
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn socket_fd(domain: i32, typ: i32, protocol: i32) -> HostIntResult {
+pub(in crate::runtime) fn socket_fd(domain: i32, typ: i32, protocol: i32) -> HostIntResult {
     // SAFETY: socket takes plain integer arguments.
     let fd = unsafe { libc::socket(domain, typ, protocol) };
     if fd < 0 {
@@ -847,13 +868,13 @@ fn socket_fd(domain: i32, typ: i32, protocol: i32) -> HostIntResult {
 }
 
 #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
-fn socket_fd(domain: i32, typ: i32, protocol: i32) -> HostIntResult {
+pub(in crate::runtime) fn socket_fd(domain: i32, typ: i32, protocol: i32) -> HostIntResult {
     let _ = (domain, typ, protocol);
     HostIntResult::err(errno_i32("ENOSYS"))
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn bind_socket(fd: i32, addr: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn bind_socket(fd: i32, addr: &[u8]) -> HostIntResult {
     let len = match libc::socklen_t::try_from(addr.len()) {
         Ok(len) => len,
         Err(_) => return HostIntResult::err(errno_i32("EINVAL")),
@@ -868,13 +889,13 @@ fn bind_socket(fd: i32, addr: &[u8]) -> HostIntResult {
 }
 
 #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
-fn bind_socket(fd: i32, addr: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn bind_socket(fd: i32, addr: &[u8]) -> HostIntResult {
     let _ = (fd, addr);
     HostIntResult::err(errno_i32("ENOSYS"))
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn connect_socket(fd: i32, addr: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn connect_socket(fd: i32, addr: &[u8]) -> HostIntResult {
     let len = match libc::socklen_t::try_from(addr.len()) {
         Ok(len) => len,
         Err(_) => return HostIntResult::err(errno_i32("EINVAL")),
@@ -889,13 +910,13 @@ fn connect_socket(fd: i32, addr: &[u8]) -> HostIntResult {
 }
 
 #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
-fn connect_socket(fd: i32, addr: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn connect_socket(fd: i32, addr: &[u8]) -> HostIntResult {
     let _ = (fd, addr);
     HostIntResult::err(errno_i32("ENOSYS"))
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn listen_socket(fd: i32, backlog: i32) -> HostIntResult {
+pub(in crate::runtime) fn listen_socket(fd: i32, backlog: i32) -> HostIntResult {
     // SAFETY: listen takes plain integer arguments.
     let rc = unsafe { libc::listen(fd, backlog) };
     if rc < 0 {
@@ -906,13 +927,18 @@ fn listen_socket(fd: i32, backlog: i32) -> HostIntResult {
 }
 
 #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
-fn listen_socket(fd: i32, backlog: i32) -> HostIntResult {
+pub(in crate::runtime) fn listen_socket(fd: i32, backlog: i32) -> HostIntResult {
     let _ = (fd, backlog);
     HostIntResult::err(errno_i32("ENOSYS"))
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn setsockopt_socket(fd: i32, level: i32, optname: i32, optval: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn setsockopt_socket(
+    fd: i32,
+    level: i32,
+    optname: i32,
+    optval: &[u8],
+) -> HostIntResult {
     let len = match libc::socklen_t::try_from(optval.len()) {
         Ok(len) => len,
         Err(_) => return HostIntResult::err(errno_i32("EINVAL")),
@@ -927,12 +953,17 @@ fn setsockopt_socket(fd: i32, level: i32, optname: i32, optval: &[u8]) -> HostIn
 }
 
 #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
-fn setsockopt_socket(fd: i32, level: i32, optname: i32, optval: &[u8]) -> HostIntResult {
+pub(in crate::runtime) fn setsockopt_socket(
+    fd: i32,
+    level: i32,
+    optname: i32,
+    optval: &[u8],
+) -> HostIntResult {
     let _ = (fd, level, optname, optval);
     HostIntResult::err(errno_i32("ENOSYS"))
 }
 
-fn parse_native_file_mode(mode: &[u8]) -> Option<NativeFileMode> {
+pub(in crate::runtime) fn parse_native_file_mode(mode: &[u8]) -> Option<NativeFileMode> {
     let mut normalized = Vec::with_capacity(mode.len());
     for byte in mode {
         if *byte != b'b' {
@@ -988,7 +1019,10 @@ fn parse_native_file_mode(mode: &[u8]) -> Option<NativeFileMode> {
 }
 
 #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
-fn open_native_file(path: &std::path::Path, mode: NativeFileMode) -> Result<std::fs::File, i32> {
+pub(in crate::runtime) fn open_native_file(
+    path: &std::path::Path,
+    mode: NativeFileMode,
+) -> Result<std::fs::File, i32> {
     std::fs::OpenOptions::new()
         .read(mode.readable)
         .write(mode.writable && !mode.append)
