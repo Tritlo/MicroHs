@@ -32,6 +32,7 @@ pub(in crate::runtime) struct Spine {
     pub(in crate::runtime) storage: SpineStorage,
 }
 
+/// Temporary application spine used by the fallback reducer and serializer.
 pub(in crate::runtime) struct EvalSpine {
     pub(in crate::runtime) inline_args: [MaybeUninit<NodeId>; INLINE_SPINE],
     pub(in crate::runtime) inline_apps: [MaybeUninit<NodeId>; INLINE_SPINE],
@@ -636,6 +637,11 @@ pub(in crate::runtime) enum StackFrame {
     Conversion(StackConversionFrame),
 }
 
+/// Explicit WHNF machine stack.
+///
+/// `apps` is the current application spine and `frames` holds strict primitive
+/// continuations. `app_base` lets nested strict frames reserve their own app
+/// segment without copying the outer spine.
 #[derive(Default)]
 pub(in crate::runtime) struct EvalStack {
     pub(in crate::runtime) apps: Vec<NodeId>,
@@ -643,6 +649,7 @@ pub(in crate::runtime) struct EvalStack {
     pub(in crate::runtime) app_base: usize,
 }
 
+/// Result of one bounded stack-reducer slice.
 pub(in crate::runtime) enum StackStep {
     Reduced {
         node: NodeId,

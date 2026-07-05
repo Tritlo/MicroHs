@@ -163,6 +163,8 @@ impl Program {
         Ok(node)
     }
 
+    /// Follow `App` links from `current`, pushing each application node onto the
+    /// active spine until a non-application head is reached.
     pub(in crate::runtime) fn descend_stack_from(
         &mut self,
         mut current: NodeId,

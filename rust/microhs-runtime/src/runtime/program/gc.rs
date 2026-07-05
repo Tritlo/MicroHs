@@ -461,6 +461,10 @@ impl Program {
         Ok(())
     }
 
+    /// Run one non-moving mark-sweep collection between evaluator steps.
+    ///
+    /// The caller passes the active reducer roots because they are not all
+    /// stored on `Program` while a reduction slice is running.
     pub(in crate::runtime) fn collect_garbage_between_steps(
         &mut self,
         current_root: NodeId,
