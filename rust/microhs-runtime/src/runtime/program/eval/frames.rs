@@ -662,7 +662,7 @@ impl Program {
                         return Err(EvalError::StepLimit { limit });
                     }
                     if self.profiling_enabled() {
-                        self.profile_persistent_fallback();
+                        self.profile_fallback_entry();
                     }
                     let root = if stack.app_len() == 0 {
                         root

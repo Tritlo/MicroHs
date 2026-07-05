@@ -141,16 +141,16 @@ impl Program {
     }
 
     #[cold]
-    pub(in crate::runtime) fn profile_persistent_force(&mut self) {
+    pub(in crate::runtime) fn profile_strict_force(&mut self) {
         if let Some(profile) = self.profile.as_mut() {
-            profile.persistent_forces += 1;
+            profile.strict_forces += 1;
         }
     }
 
     #[cold]
-    pub(in crate::runtime) fn profile_persistent_fallback(&mut self) {
+    pub(in crate::runtime) fn profile_fallback_entry(&mut self) {
         if let Some(profile) = self.profile.as_mut() {
-            profile.persistent_fallbacks += 1;
+            profile.fallback_entries += 1;
         }
     }
 
@@ -229,10 +229,10 @@ impl Program {
     pub(in crate::runtime) fn profile_stack_arg_batch(&mut self) {}
 
     #[inline]
-    pub(in crate::runtime) fn profile_persistent_force(&mut self) {}
+    pub(in crate::runtime) fn profile_strict_force(&mut self) {}
 
     #[inline]
-    pub(in crate::runtime) fn profile_persistent_fallback(&mut self) {}
+    pub(in crate::runtime) fn profile_fallback_entry(&mut self) {}
 
     #[inline]
     pub(in crate::runtime) fn profile_stack_fallback_head(&mut self, _head: NodeId) {}
