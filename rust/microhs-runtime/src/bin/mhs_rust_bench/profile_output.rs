@@ -111,13 +111,10 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
         "profile_stack_arg_batches: {}",
         profile.profile.stack_arg_batches
     );
+    println!("profile_strict_forces: {}", profile.profile.strict_forces);
     println!(
-        "profile_persistent_forces: {}",
-        profile.profile.persistent_forces
-    );
-    println!(
-        "profile_persistent_fallbacks: {}",
-        profile.profile.persistent_fallbacks
+        "profile_fallback_entries: {}",
+        profile.profile.fallback_entries
     );
     println!(
         "profile_fallback_eval_loop_steps: {}",

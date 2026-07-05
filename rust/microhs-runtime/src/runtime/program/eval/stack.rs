@@ -180,7 +180,7 @@ impl Program {
                     let kind = $kind;
                     let next = $next;
                     if profiling {
-                        self.profile_persistent_force();
+                        self.profile_strict_force();
                         self.profile_eval_frame_push($profile_kind);
                     }
                     stack.$push(app_end, $used, profile_head, kind);
@@ -278,7 +278,7 @@ impl Program {
                                     finish_reduction!(node, 1);
                                 }
                                 if profiling {
-                                    self.profile_persistent_force();
+                                    self.profile_strict_force();
                                     self.profile_eval_frame_push("Int");
                                 }
                                 stack.push_int_frame(
@@ -289,7 +289,7 @@ impl Program {
                                 continue_with!(x);
                             }
                             if profiling {
-                                self.profile_persistent_force();
+                                self.profile_strict_force();
                                 self.profile_eval_frame_push("Int");
                             }
                             stack.push_int_frame(
@@ -302,7 +302,7 @@ impl Program {
                         StrictPrimitiveAction::IntUn(op) => {
                             let (redex, x) = take_args!(1, take_args1);
                             if profiling {
-                                self.profile_persistent_force();
+                                self.profile_strict_force();
                                 self.profile_eval_frame_push("Int");
                             }
                             stack.push_int_frame(redex, profile_head, IntFrameKind::Un { op });
@@ -314,7 +314,7 @@ impl Program {
                                 let x = arg!(0);
                                 let next = arg!(1);
                                 if profiling {
-                                    self.profile_persistent_force();
+                                    self.profile_strict_force();
                                     self.profile_eval_frame_push("Int64Shift");
                                 }
                                 stack.push_int64_shift_frame(app_end, 2, profile_head, op, x);
@@ -429,7 +429,7 @@ impl Program {
                 IoStrict if args_len >= 2 => {
                     let (redex, action, value) = take_args!(2, take_args2);
                     if profiling {
-                        self.profile_persistent_force();
+                        self.profile_strict_force();
                         self.profile_eval_frame_push("Whnf");
                     }
                     stack.push_whnf_frame(
@@ -443,7 +443,7 @@ impl Program {
                 Seq if args_len >= 2 => {
                     let (redex, x, result) = take_args!(2, take_args2);
                     if profiling {
-                        self.profile_persistent_force();
+                        self.profile_strict_force();
                         self.profile_eval_frame_push("Whnf");
                     }
                     stack.push_whnf_frame(redex, 2, profile_head, WhnfFrameKind::Seq { result });
@@ -452,7 +452,7 @@ impl Program {
                 IsInt if args_len >= 1 => {
                     let (redex, x) = take_args!(1, take_args1);
                     if profiling {
-                        self.profile_persistent_force();
+                        self.profile_strict_force();
                         self.profile_eval_frame_push("Whnf");
                     }
                     stack.push_whnf_frame(redex, 1, profile_head, WhnfFrameKind::IsInt);
