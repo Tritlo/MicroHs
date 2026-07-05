@@ -256,14 +256,6 @@ impl Program {
     }
 
     #[cold]
-    pub(in crate::runtime) fn profile_stack_rethread(&mut self, apps: usize) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.stack_rethreads += 1;
-            profile.stack_rethread_apps += apps;
-        }
-    }
-
-    #[cold]
     pub(in crate::runtime) fn profile_stack_descent_push(&mut self) {
         if let Some(profile) = self.profile.as_mut() {
             profile.stack_descent_pushes += 1;

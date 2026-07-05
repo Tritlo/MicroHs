@@ -297,9 +297,6 @@ impl Program {
         mut node: NodeId,
     ) -> Result<NodeId, EvalError> {
         let base = stack.app_base();
-        if self.profile.is_some() {
-            self.profile_stack_rethread(stack.apps.len().saturating_sub(base));
-        }
         for index in (base..stack.apps.len()).rev() {
             let app = self.stack_entry_app(stack, index)?;
             let Some((_, arg)) = self.cell(app).app_fields() else {

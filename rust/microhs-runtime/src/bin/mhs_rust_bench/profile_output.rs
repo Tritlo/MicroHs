@@ -100,14 +100,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
         profile.profile.stack_app_update_apps
     );
     println!(
-        "profile_stack_rethreads: {}",
-        profile.profile.stack_rethreads
-    );
-    println!(
-        "profile_stack_rethread_apps: {}",
-        profile.profile.stack_rethread_apps
-    );
-    println!(
         "profile_stack_descent_pushes: {}",
         profile.profile.stack_descent_pushes
     );
