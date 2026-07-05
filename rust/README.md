@@ -24,29 +24,33 @@ Where the time goes (at C-matched memory):
 - **GC is at parity with C** - ~11.1 s vs C's ~11.4 s. An 8-byte packed cell (a
   4-bit tag plus two 30-bit node ids; wide scalars demoted to a cold side-table)
   and a sweep fast-path closed what was a ~12 s collector gap.
-- The residual gap is the **mutator/locality** (~44.8 s vs C's ~35.0 s), which is
-  ~85% memory-latency at the free-list allocator: each allocation reads a cold dead
-  cell for the next-free pointer and hands back scattered slots, so the following
-  spine descent misses cache. C's bitmap allocator returns the lowest free slot and
-  self-densifies.
+- The residual gap is the **mutator** (~44.8 s vs C's ~35.0 s). The leading
+  hypothesis is heap locality: the free-list hands back scattered slots, so the
+  following spine descent misses cache, where C's bitmap allocator returns the
+  lowest free slot and self-densifies. **But this is unproven** — both direct tests
+  of that idea in Rust (a C-style bitmap allocator and an address-ordered free-list)
+  came back mutator-neutral-to-worse, and there is no hardware-counter evidence yet
+  separating allocator-load stalls from descent misses. Cause still open.
 
 **Codegen floor - the fair PGO/heap matrix (measurement-only, not shipped).** A
 profile-guided (PGO) build of the same Rust source - no algorithmic change - runs
-the self-host at 45.5 s (128M heap) / 49.4 s (C-matched memory). But that is a Rust
-codegen floor, not a win over C: give C the same compiler and heap treatment and it
-stays ahead. Self-host at the matched 128M heap, all runs byte-identical:
+the self-host at 49.4 s (matched ~80M memory) / 45.5 s (128M heap). But that is a
+Rust codegen floor, not a win over C: give C the same compiler and heap and it
+stays ahead. Self-host wall (median), all cells byte-identical:
 
-| self-host @ 128M heap | `-O3` | PGO |
-|---|---|---|
-| **C `eval.c`** | 40.3 s | **38.6 s** |
-| **Rust** | 53.6 s | **45.5 s** |
+| self-host, by heap | C `-O3` | C PGO | Rust default | Rust PGO |
+|---|---|---|---|---|
+| C default (50M cells) | 46.4 s | 45.6 s | - | - |
+| **matched memory (~80M)** | 43.3 s | **41.2 s** | 55.9 s | **49.4 s** |
+| 128M heap | 40.3 s | 38.6 s | 53.6 s | 45.5 s |
 
-At C's own default heap, C `-O3` is 46.4 s (89 GCs); the 128M heap alone is a ~13%
-C win (GC drops from 89 to 34 collections). The decisive equalized peer is therefore
-**Rust-PGO@128M 45.5 s vs C-PGO@128M 38.6 s = 1.18x C**: PGO buys Rust a large
-speedup but does not erase the gap once C gets the same treatment. PGO is
-deliberately not shipped (a build flag that complicates the reproducible-build
-story); it only marks the floor. Build it with `tools/native/build-selfhost-pgo.sh`.
+The honest peers, at **matched memory (~80M)**: Rust is **1.29x** C without PGO
+(the shipped config) and **1.20x** C once both are PGO-optimized; at 128M the PGO
+peer is 1.18x. So PGO buys Rust a large speedup, but C keeps a ~1.2x edge once
+equally optimized, and a bigger heap helps both sides (mostly by cutting GC
+frequency). PGO is deliberately not shipped (a build flag that complicates the
+reproducible-build story); it only marks the floor. Build it with
+`tools/native/build-selfhost-pgo.sh`.
 
 Size: the Rust runtime is ~22k LOC (including tests, the wasm/JS-FFI boundary, and
 the bench harness) against ~8k for the C runtime.
