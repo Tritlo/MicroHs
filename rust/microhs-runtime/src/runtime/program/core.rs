@@ -303,6 +303,7 @@ impl Program {
         Some(index)
     }
 
+    #[cfg_attr(feature = "moving-gc", allow(dead_code))]
     pub(in crate::runtime) fn push_free_node(&mut self, index: usize) {
         if self.nodes[index].has_tag(CellTag::Cold) {
             self.drop_cold_payload(index);
