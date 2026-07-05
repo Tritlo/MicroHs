@@ -990,17 +990,6 @@ impl Program {
         let mut scratch_args = Vec::new();
         let mut scratch_apps = Vec::new();
         while steps < limit {
-            #[cfg(feature = "moving-gc")]
-            self.maybe_collect_moving_garbage_between_steps(
-                &mut root,
-                &mut frame_stack,
-                &mut eval_spine,
-                &mut persistent_spine,
-                &mut scratch_args,
-                &mut scratch_apps,
-                None,
-            )?;
-            #[cfg(not(feature = "moving-gc"))]
             self.maybe_collect_garbage_between_steps(
                 root,
                 &frame_stack,
@@ -1130,9 +1119,6 @@ impl Program {
         let mut stack = EvalStack::default();
         let mut fallback_frame_stack = EvalFrameStack::default();
         let mut eval_spine = EvalSpine::default();
-        #[cfg(feature = "moving-gc")]
-        let mut persistent_spine = PersistentSpine::default();
-        #[cfg(not(feature = "moving-gc"))]
         let persistent_spine = PersistentSpine::default();
         let mut scratch_args = Vec::new();
         let mut scratch_apps = Vec::new();
@@ -1196,17 +1182,6 @@ impl Program {
         while steps < limit {
             profile_stack_counter!(stack_loop_iterations);
             let gc_started = stack_phase_start!();
-            #[cfg(feature = "moving-gc")]
-            self.maybe_collect_moving_garbage_between_steps(
-                &mut current,
-                &mut fallback_frame_stack,
-                &mut eval_spine,
-                &mut persistent_spine,
-                &mut scratch_args,
-                &mut scratch_apps,
-                Some(&mut stack),
-            )?;
-            #[cfg(not(feature = "moving-gc"))]
             self.maybe_collect_garbage_between_steps(
                 current,
                 &fallback_frame_stack,

@@ -48,8 +48,6 @@ impl Program {
             free_nodes: 0,
             gc_node_interval,
             gc_allocations_since_collect: 0,
-            #[cfg(feature = "moving-gc")]
-            gc_nursery_start: high_water_nodes,
             gc_last_allocations_since_collect: 0,
             gc_collections: 0,
             gc_freed_nodes_total: 0,
@@ -259,7 +257,6 @@ impl Program {
     }
 
     #[inline]
-    #[cfg_attr(feature = "moving-gc", allow(dead_code))]
     pub(in crate::runtime) fn pop_free_node(&mut self) -> Option<usize> {
         if self.free_nodes == 0 {
             return None;
@@ -282,7 +279,6 @@ impl Program {
         Some(index)
     }
 
-    #[cfg_attr(feature = "moving-gc", allow(dead_code))]
     pub(in crate::runtime) fn push_free_node(&mut self, index: usize) {
         if self.nodes[index].has_tag(CellTag::Cold) {
             self.drop_cold_payload(index);
@@ -294,9 +290,6 @@ impl Program {
 
     pub(in crate::runtime) fn push_node(&mut self, node: Node) -> NodeId {
         self.gc_allocations_since_collect = self.gc_allocations_since_collect.saturating_add(1);
-        #[cfg(feature = "moving-gc")]
-        let free_index: Option<usize> = None;
-        #[cfg(not(feature = "moving-gc"))]
         let free_index = self.pop_free_node();
         if let Some(index) = free_index {
             debug_assert_eq!(self.nodes[index].tag(), CellTag::Free);
@@ -317,9 +310,6 @@ impl Program {
         let profiling = self.profiling_enabled();
         #[cfg(feature = "eval-phase-profile")]
         let pop_started = profiling.then(Instant::now);
-        #[cfg(feature = "moving-gc")]
-        let free_index: Option<usize> = None;
-        #[cfg(not(feature = "moving-gc"))]
         let free_index = self.pop_free_node();
         #[cfg(feature = "eval-phase-profile")]
         if let Some(started) = pop_started {
