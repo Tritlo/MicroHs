@@ -339,7 +339,10 @@ impl Program {
     }
 
     pub(in crate::runtime) fn push_free_node(&mut self, index: usize) {
-        self.set_cell_at(index, Cell::free(self.free_head));
+        if self.nodes[index].has_tag(CellTag::Cold) {
+            self.drop_cold_payload(index);
+        }
+        self.nodes[index] = Cell::free(self.free_head);
         self.free_head = Some(NodeId::from_index(index));
         self.free_nodes += 1;
     }
