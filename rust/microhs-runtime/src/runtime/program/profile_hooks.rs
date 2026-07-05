@@ -490,12 +490,8 @@ impl Program {
                 cell.prim_name().expect("primitive tag must decode")
             }
             CellTag::Int => "Int",
-            CellTag::Int64 => "Int64",
-            CellTag::Float64 => "Float64",
             CellTag::Float32 => "Float32",
             CellTag::ThreadId => "ThreadId",
-            CellTag::Ptr => "Ptr",
-            CellTag::RawFunPtr => "RawFunPtr",
             CellTag::Cold => "Cold",
         }
     }

@@ -177,41 +177,24 @@ impl Program {
         if let Some(value) = cell.int_value() {
             return Some(value);
         }
-        #[cfg(feature = "packed-cell")]
-        {
-            if let Some(Node::Int(value)) = self.cold_node(id) {
-                return Some(*value);
-            }
+        if let Some(Node::Int(value)) = self.cold_node(id) {
+            return Some(*value);
         }
         None
     }
 
     #[inline]
     pub(in crate::runtime) fn cell_int64_value(&self, id: NodeId) -> Option<i64> {
-        let cell = self.cell_trusted(id);
-        if let Some(value) = cell.int64_value() {
-            return Some(value);
-        }
-        #[cfg(feature = "packed-cell")]
-        {
-            if let Some(Node::Int64(value)) = self.cold_node(id) {
-                return Some(*value);
-            }
+        if let Some(Node::Int64(value)) = self.cold_node(id) {
+            return Some(*value);
         }
         None
     }
 
     #[inline]
     pub(in crate::runtime) fn cell_float64_value(&self, id: NodeId) -> Option<f64> {
-        let cell = self.cell_trusted(id);
-        if let Some(value) = cell.float64_value() {
-            return Some(value);
-        }
-        #[cfg(feature = "packed-cell")]
-        {
-            if let Some(Node::Float64(value)) = self.cold_node(id) {
-                return Some(*value);
-            }
+        if let Some(Node::Float64(value)) = self.cold_node(id) {
+            return Some(*value);
         }
         None
     }
@@ -222,12 +205,6 @@ impl Program {
         if let Some(value) = cell.float32_value() {
             return Some(value);
         }
-        #[cfg(feature = "packed-cell")]
-        {
-            if let Some(Node::Float32(value)) = self.cold_node(id) {
-                return Some(*value);
-            }
-        }
         None
     }
 
@@ -237,41 +214,24 @@ impl Program {
         if let Some(value) = cell.thread_id_value() {
             return Some(value);
         }
-        #[cfg(feature = "packed-cell")]
-        {
-            if let Some(Node::ThreadId(value)) = self.cold_node(id) {
-                return Some(*value);
-            }
+        if let Some(Node::ThreadId(value)) = self.cold_node(id) {
+            return Some(*value);
         }
         None
     }
 
     #[inline]
     pub(in crate::runtime) fn cell_ptr_value(&self, id: NodeId) -> Option<i64> {
-        let cell = self.cell_trusted(id);
-        if let Some(value) = cell.ptr_value() {
-            return Some(value);
-        }
-        #[cfg(feature = "packed-cell")]
-        {
-            if let Some(Node::Ptr(value)) = self.cold_node(id) {
-                return Some(*value);
-            }
+        if let Some(Node::Ptr(value)) = self.cold_node(id) {
+            return Some(*value);
         }
         None
     }
 
     #[inline]
     pub(in crate::runtime) fn cell_raw_fun_ptr_value(&self, id: NodeId) -> Option<i64> {
-        let cell = self.cell_trusted(id);
-        if let Some(value) = cell.raw_fun_ptr_value() {
-            return Some(value);
-        }
-        #[cfg(feature = "packed-cell")]
-        {
-            if let Some(Node::RawFunPtr(value)) = self.cold_node(id) {
-                return Some(*value);
-            }
+        if let Some(Node::RawFunPtr(value)) = self.cold_node(id) {
+            return Some(*value);
         }
         None
     }

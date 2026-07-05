@@ -136,10 +136,6 @@ impl Program {
                 .option_id_word1()
                 .map(|id| Self::gc_profile_young_edge(young, id))
                 .unwrap_or(0),
-            CellTag::Ptr | CellTag::RawFunPtr => cell
-                .pointer_payload()
-                .map(|ptr| self.gc_profile_young_pointer_edge(young, ptr))
-                .unwrap_or(0),
             CellTag::Cold => match self.cold_node(NodeId::from_index(index)) {
                 Some(Node::Ptr(ptr) | Node::RawFunPtr(ptr)) => {
                     self.gc_profile_young_pointer_edge(young, *ptr)
@@ -169,8 +165,6 @@ impl Program {
             | CellTag::KnownPrim
             | CellTag::RuntimePrim
             | CellTag::Int
-            | CellTag::Int64
-            | CellTag::Float64
             | CellTag::Float32
             | CellTag::ThreadId => 0,
         }
@@ -701,11 +695,6 @@ impl Program {
                 continue;
             }
             match cell.tag() {
-                CellTag::Ptr | CellTag::RawFunPtr => {
-                    if let Some(ptr) = cell.pointer_payload() {
-                        self.mark_pointer_target(marked, work, ptr);
-                    }
-                }
                 CellTag::Cold => match self.cold_node(id) {
                     Some(Node::Ptr(ptr) | Node::RawFunPtr(ptr)) => {
                         self.mark_pointer_target(marked, work, *ptr);
@@ -734,8 +723,6 @@ impl Program {
                 | CellTag::KnownPrim
                 | CellTag::RuntimePrim
                 | CellTag::Int
-                | CellTag::Int64
-                | CellTag::Float64
                 | CellTag::Float32
                 | CellTag::ThreadId => {}
             }
