@@ -35,6 +35,7 @@ mod codecs;
 mod core_types;
 mod eval_state;
 mod host;
+mod lzma_decode;
 mod ops;
 mod prims;
 mod profile;
