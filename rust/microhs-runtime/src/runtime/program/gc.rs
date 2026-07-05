@@ -519,19 +519,19 @@ impl Program {
         None
     }
 
-    #[cfg(any(feature = "gc-phase-profile", feature = "eval-phase-profile"))]
+    #[cfg(feature = "gc-phase-profile")]
     pub(in crate::runtime) fn gc_profile_prim(&self, id: NodeId) -> Option<Prim> {
         let id = self.gc_profile_resolved_id(id)?;
         self.nodes.get(id.index())?.prim()
     }
 
-    #[cfg(any(feature = "gc-phase-profile", feature = "eval-phase-profile"))]
+    #[cfg(feature = "gc-phase-profile")]
     pub(in crate::runtime) fn gc_profile_app_fields(&self, id: NodeId) -> Option<(NodeId, NodeId)> {
         let id = self.gc_profile_resolved_id(id)?;
         self.nodes.get(id.index())?.app_fields()
     }
 
-    #[cfg(any(feature = "gc-phase-profile", feature = "eval-phase-profile"))]
+    #[cfg(feature = "gc-phase-profile")]
     pub(in crate::runtime) fn gc_profile_flipped_prim(prim: Prim) -> Option<Prim> {
         match prim {
             Prim::Known(KnownPrim::K) => Some(Prim::Known(KnownPrim::A)),
