@@ -151,31 +151,6 @@ pub(super) fn main() -> ExitCode {
             "gc_total_sweep_ms: {:.3}",
             nanos_millis(eval.gc.total_sweep_nanos)
         );
-        println!("gc_red_i_opportunities: {}", eval.gc.red_i_opportunities);
-        println!("gc_red_k_opportunities: {}", eval.gc.red_k_opportunities);
-        println!("gc_red_a_opportunities: {}", eval.gc.red_a_opportunities);
-        println!("gc_red_bi_opportunities: {}", eval.gc.red_bi_opportunities);
-        println!(
-            "gc_red_bxi_opportunities: {}",
-            eval.gc.red_bxi_opportunities
-        );
-        println!(
-            "gc_red_ccbi_opportunities: {}",
-            eval.gc.red_ccbi_opportunities
-        );
-        println!("gc_red_cc_opportunities: {}", eval.gc.red_cc_opportunities);
-        println!(
-            "gc_red_cci_opportunities: {}",
-            eval.gc.red_cci_opportunities
-        );
-        println!(
-            "gc_red_ccbbcp_opportunities: {}",
-            eval.gc.red_ccbbcp_opportunities
-        );
-        println!(
-            "gc_red_flip_opportunities: {}",
-            eval.gc.red_flip_opportunities
-        );
         println!(
             "gc_young_profile_last_slots: {}",
             eval.gc.young_profile_last_slots
