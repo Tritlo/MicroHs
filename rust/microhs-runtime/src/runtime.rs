@@ -52,7 +52,9 @@ mod program;
 #[cfg(test)]
 mod tests;
 
-pub use self::core_types::{EvalError, JsCallNode, JsValue, Node, Program};
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+pub(crate) use self::core_types::JsValue;
+pub use self::core_types::{EvalError, JsCallNode, Node, Program};
 pub(crate) use self::ops::is_runtime_prim_name;
 pub use self::prims::{KnownPrim, NodeId, Prim};
 pub use self::profile::{EvalProfile, GcStats};

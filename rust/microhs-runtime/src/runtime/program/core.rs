@@ -310,7 +310,8 @@ impl Program {
         self.profile.take()
     }
 
-    pub fn set_js_program_handle(&mut self, handle: u32) {
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    pub(crate) fn set_js_program_handle(&mut self, handle: u32) {
         self.js_program_handle = Some(handle);
     }
 

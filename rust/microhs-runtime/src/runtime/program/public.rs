@@ -106,22 +106,8 @@ impl Program {
         self.eval_string_bytes(displayed)
     }
 
-    pub fn apply_stable_ptr_pointer(
-        &mut self,
-        stable_ptr: usize,
-        arg: i64,
-        limit: usize,
-    ) -> Result<i64, EvalError> {
-        let fun = self.deref_stable_ptr(stable_ptr)?;
-        let arg = self.push_node(Node::Ptr(arg));
-        let action = self.app(fun, arg);
-        let perform_io = self.prim("IO.performIO");
-        let root = self.app(perform_io, action);
-        let root = self.reduce_node_whnf(root, limit)?;
-        self.eval_pointer_value(root)
-    }
-
-    pub fn apply_js_wrapper(
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    fn apply_js_wrapper(
         &mut self,
         tags: &str,
         stable_ptr: usize,
@@ -145,7 +131,8 @@ impl Program {
         self.js_value_from_node(tags[0], root)
     }
 
-    pub fn apply_js_wrapper_index(
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    pub(crate) fn apply_js_wrapper_index(
         &mut self,
         wrapper_index: u32,
         stable_ptr: usize,
@@ -156,7 +143,8 @@ impl Program {
         self.apply_js_wrapper(&tags, stable_ptr, args, limit)
     }
 
-    pub fn js_wrapper_tags(&self, wrapper_index: u32) -> Result<&str, EvalError> {
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    pub(crate) fn js_wrapper_tags(&self, wrapper_index: u32) -> Result<&str, EvalError> {
         self.js_wrapper_tags
             .get(usize::try_from(wrapper_index).map_err(|_| EvalError::Overflow)?)
             .map(String::as_str)
