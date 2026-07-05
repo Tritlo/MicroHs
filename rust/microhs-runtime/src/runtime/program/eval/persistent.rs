@@ -41,7 +41,7 @@ impl Program {
     ) -> Result<PersistentStep, EvalError> {
         let args_len = spine.len();
         let profile_head = if self.profile.is_some() {
-            self.profile_step(head, args_len, false)
+            self.profile_step(head, args_len)
         } else {
             None
         };

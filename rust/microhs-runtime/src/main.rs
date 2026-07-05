@@ -177,7 +177,6 @@ fn print_profile(profile: &EvalProfile, top: usize) {
         "profile_non_small_int_allocations: {}",
         profile.non_small_int_allocations
     );
-    eprintln!("profile_heap_spines: {}", profile.heap_spines);
     eprintln!("profile_max_spine_arity: {}", profile.max_spine_arity);
     eprintln!("profile_resolve_calls: {}", profile.resolve_calls);
     eprintln!(
@@ -192,10 +191,6 @@ fn print_profile(profile: &EvalProfile, top: usize) {
     eprintln!("profile_top_head_reductions:");
     for (head, count) in profile.top_head_reductions(top) {
         eprintln!("  {head}: {count}");
-    }
-    eprintln!("profile_spine_arity:");
-    for (arity, count) in &profile.spine_arity {
-        eprintln!("  {arity}: {count}");
     }
     eprintln!("profile_resolve_chain:");
     for (depth, count) in &profile.resolve_chain {

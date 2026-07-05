@@ -33,12 +33,7 @@ impl Program {
     }
 
     #[cold]
-    pub(in crate::runtime) fn profile_step(
-        &mut self,
-        head: NodeId,
-        arity: usize,
-        heap_spine: bool,
-    ) -> ProfileHead {
+    pub(in crate::runtime) fn profile_step(&mut self, head: NodeId, arity: usize) -> ProfileHead {
         #[cfg(feature = "eval-phase-profile")]
         let started = Instant::now();
         let key = self.profile_head_key(head);
@@ -71,10 +66,6 @@ impl Program {
                         .or_default() += 1;
                 }
             }
-        }
-        *profile.spine_arity.entry(arity).or_default() += 1;
-        if heap_spine {
-            profile.heap_spines += 1;
         }
         profile.max_spine_arity = profile.max_spine_arity.max(arity);
         #[cfg(feature = "eval-phase-profile")]
