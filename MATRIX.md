@@ -4511,6 +4511,15 @@ This is a no-code audit for the next structural heap step. Current GC can mark r
 | 100M/32M bounded A/B | base ms: `1593.598`, `1540.194`, `1538.139`, `1568.268`, `1546.763`, `1528.374`, `1553.923`, `1532.077`, `1698.924`, `1527.718`, `1556.789`, `1528.557`, `1546.995`, `1571.533`, `1524.696`, `1555.349` (avg `1556.994`); candidate ms: `1551.240`, `1536.920`, `1544.018`, `1537.772`, `1518.668`, `1529.145`, `1597.747`, `1528.623`, `1544.879`, `1545.687`, `1587.692`, `1561.795`, `1580.718`, `1542.314`, `1583.146`, `1610.369` (avg `1556.296`, `-0.045%`). Pair direction was `7/16` favorable; the second half regressed at base avg `1563.820` vs candidate avg `1569.575` (`+0.368%`, `2/8` favorable) |
 | reading | Cold-marking the fallback reducer is not a keeper. The combined average is flat and the extension rejects it, so layout hints at this coarse boundary do not explain the remaining PGO/default gap |
 
+## 2026-07-05 App-Value Setter Inline-Control Probe
+
+| item | result |
+|---|---|
+| probe | rejected source inline-control probe: changed `Program::set_app_node_at` to `#[inline(always)]` after the frame-value keeper, trying to let value-frame and redex-value rewrites specialize the `Cell::from_node` conversion at call sites. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | 24-pair extended screen: base avg `1614.896ms`, candidate avg `1605.482ms` (`-0.583%`), but only `10/24` pairs were favorable. The first 16 pairs averaged base `1639.012ms` vs candidate `1607.198ms` (`-1.941%`, `8/16` favorable), then the final 8 pairs rejected the probe at base avg `1566.665ms` vs candidate avg `1602.049ms` (`+2.259%`, `2/8` favorable). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,856`/`33,949,858`, sink `661902`, and `cell_size_bytes=8` |
+| reading | The apparent average win depended on slow baseline outliers and did not survive the extension. Keep `apply_stack_frame_value` inlined, but leave the lower-level `set_app_node_at` helper compiler-chosen |
+
 ## Active Tradeoffs
 
 | item | reading |
