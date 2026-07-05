@@ -438,9 +438,9 @@ impl Program {
                     match action {
                         StrictPrimitiveAction::IntBin(op) => {
                             let (redex, x, y) = take_args!(2, take_args2);
-                            let y_immediate = self.cell_trusted(y).int_value();
+                            let y_immediate = self.cell_int_value(y);
                             if let Some(y_value) = y_immediate {
-                                if let Some(x_value) = self.cell_trusted(x).int_value() {
+                                if let Some(x_value) = self.cell_int_value(x) {
                                     let result = op
                                         .apply(x_value, y_value)
                                         .map_err(|err| self.arithmetic_eval_error(err))?;

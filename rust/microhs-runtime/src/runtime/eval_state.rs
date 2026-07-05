@@ -1176,25 +1176,6 @@ impl EvalStack {
 }
 
 impl ConversionFrameKind {
-    pub(in crate::runtime) fn ready_cell_value(self, cell: Cell) -> Option<ConversionValue> {
-        match self {
-            Self::IntToInt64
-            | Self::IntToFloat64 { .. }
-            | Self::IntToFloat32 { .. }
-            | Self::IntBitsToFloat32 => cell.int_value().map(ConversionValue::Int),
-            Self::Int64ToInt
-            | Self::Int64ToFloat64
-            | Self::Int64ToFloat32
-            | Self::Int64BitsToFloat64 => cell.int64_value().map(ConversionValue::Int64),
-            Self::Float64ToInt | Self::Float64ToFloat32 | Self::Float64BitsToInt64 => {
-                cell.float64_value().map(ConversionValue::Float64)
-            }
-            Self::Float32ToInt | Self::Float32ToFloat64 | Self::Float32BitsToInt => {
-                cell.float32_value().map(ConversionValue::Float32)
-            }
-        }
-    }
-
     pub(in crate::runtime) fn expected_error(self, current: NodeId) -> EvalError {
         match self {
             Self::IntToInt64

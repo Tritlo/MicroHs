@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use microhs_runtime::{
-    EvalError, EvalProfile, GcStats, Node, NodeId, Prim, Program, parse_program,
+    EvalError, EvalProfile, GcStats, Node, NodeId, Prim, Program, cell_size_bytes, parse_program,
 };
 
 #[path = "mhs_rust_bench/c_compare.rs"]

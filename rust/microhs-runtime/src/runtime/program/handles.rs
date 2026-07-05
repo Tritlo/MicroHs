@@ -197,7 +197,7 @@ impl Program {
     ) -> Result<ForeignFinalizer, EvalError> {
         let root = self.reduce_node_whnf(id, FORCE_REDUCTION_LIMIT)?;
         let root = self.resolve(root)?;
-        if let Some(value) = self.cell(root).raw_fun_ptr_value() {
+        if let Some(value) = self.cell_raw_fun_ptr_value(root) {
             return if value == 0 {
                 Ok(ForeignFinalizer::RawZero)
             } else {

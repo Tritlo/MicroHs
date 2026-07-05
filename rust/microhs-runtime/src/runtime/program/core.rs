@@ -172,16 +172,113 @@ impl Program {
     }
 
     #[inline]
-    pub(in crate::runtime) fn app_fun_trusted(&self, id: NodeId) -> Option<NodeId> {
-        let word0 = self.cell_trusted(id).word0;
-        let tag = word0 & CELL_TAG_BITS;
-        if tag == CellTag::App.bits() {
-            Some(NodeId((word0 >> CELL_PAYLOAD_SHIFT) as u32))
-        } else {
-            debug_assert_ne!(tag, CellTag::Indir.bits());
-            debug_assert_ne!(tag, CellTag::Free.bits());
-            None
+    pub(in crate::runtime) fn cell_int_value(&self, id: NodeId) -> Option<i64> {
+        let cell = self.cell_trusted(id);
+        if let Some(value) = cell.int_value() {
+            return Some(value);
         }
+        #[cfg(feature = "packed-cell")]
+        {
+            if let Some(Node::Int(value)) = self.cold_node(id) {
+                return Some(*value);
+            }
+        }
+        None
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn cell_int64_value(&self, id: NodeId) -> Option<i64> {
+        let cell = self.cell_trusted(id);
+        if let Some(value) = cell.int64_value() {
+            return Some(value);
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            if let Some(Node::Int64(value)) = self.cold_node(id) {
+                return Some(*value);
+            }
+        }
+        None
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn cell_float64_value(&self, id: NodeId) -> Option<f64> {
+        let cell = self.cell_trusted(id);
+        if let Some(value) = cell.float64_value() {
+            return Some(value);
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            if let Some(Node::Float64(value)) = self.cold_node(id) {
+                return Some(*value);
+            }
+        }
+        None
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn cell_float32_value(&self, id: NodeId) -> Option<f32> {
+        let cell = self.cell_trusted(id);
+        if let Some(value) = cell.float32_value() {
+            return Some(value);
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            if let Some(Node::Float32(value)) = self.cold_node(id) {
+                return Some(*value);
+            }
+        }
+        None
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn cell_thread_id_value(&self, id: NodeId) -> Option<i64> {
+        let cell = self.cell_trusted(id);
+        if let Some(value) = cell.thread_id_value() {
+            return Some(value);
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            if let Some(Node::ThreadId(value)) = self.cold_node(id) {
+                return Some(*value);
+            }
+        }
+        None
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn cell_ptr_value(&self, id: NodeId) -> Option<i64> {
+        let cell = self.cell_trusted(id);
+        if let Some(value) = cell.ptr_value() {
+            return Some(value);
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            if let Some(Node::Ptr(value)) = self.cold_node(id) {
+                return Some(*value);
+            }
+        }
+        None
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn cell_raw_fun_ptr_value(&self, id: NodeId) -> Option<i64> {
+        let cell = self.cell_trusted(id);
+        if let Some(value) = cell.raw_fun_ptr_value() {
+            return Some(value);
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            if let Some(Node::RawFunPtr(value)) = self.cold_node(id) {
+                return Some(*value);
+            }
+        }
+        None
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn app_fun_trusted(&self, id: NodeId) -> Option<NodeId> {
+        self.cell_trusted(id).app_fun_trusted()
     }
 
     pub(in crate::runtime) fn set_cell_at(&mut self, index: usize, cell: Cell) {
@@ -293,13 +390,7 @@ impl Program {
     }
 
     pub(in crate::runtime) fn push_free_node(&mut self, index: usize) {
-        self.set_cell_at(
-            index,
-            Cell {
-                word0: CellTag::Free.bits(),
-                word1: pack_option_id(self.free_head),
-            },
-        );
+        self.set_cell_at(index, Cell::free(self.free_head));
         self.free_head = Some(NodeId::from_index(index));
         self.free_nodes += 1;
     }

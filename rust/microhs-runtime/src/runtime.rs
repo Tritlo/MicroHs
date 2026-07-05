@@ -57,6 +57,10 @@ pub(crate) use self::ops::is_runtime_prim_name;
 pub use self::prims::{KnownPrim, NodeId, Prim};
 pub use self::profile::{EvalProfile, GcStats};
 
+pub fn cell_size_bytes() -> usize {
+    size_of::<Cell>()
+}
+
 pub(in crate::runtime) use self::codecs::*;
 pub(in crate::runtime) use self::core_types::*;
 pub(in crate::runtime) use self::eval_state::*;

@@ -26,8 +26,11 @@ impl Program {
             let cell = self.cell_trusted(id);
             match cell.tag_bits() {
                 tag if tag == CellTag::Indir.bits() => {
-                    debug_assert_ne!(cell.word1, CELL_NONE_ID);
-                    id = NodeId(cell.word1 as u32);
+                    let target = cell
+                        .indir_target_trusted()
+                        .expect("trusted indirection must have a target");
+                    debug_assert_ne!(pack_option_id(Some(target)), CELL_NONE_ID);
+                    id = target;
                 }
                 tag => {
                     debug_assert_ne!(tag, CellTag::Free.bits());
@@ -89,7 +92,7 @@ impl Program {
 
     pub fn uncaught_exception_message_bytes(&mut self, exn: NodeId) -> Result<Vec<u8>, EvalError> {
         let exn = self.resolve(exn)?;
-        if let Some(code) = self.cell(exn).int_value() {
+        if let Some(code) = self.cell_int_value(exn) {
             return Ok(rts_exception_message(code).to_vec());
         }
 

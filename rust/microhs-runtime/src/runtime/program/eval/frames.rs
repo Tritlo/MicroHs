@@ -2,6 +2,38 @@
 use super::*;
 
 impl Program {
+    #[inline]
+    pub(in crate::runtime) fn ready_conversion_value(
+        &self,
+        kind: ConversionFrameKind,
+        current: NodeId,
+    ) -> Option<ConversionValue> {
+        match kind {
+            ConversionFrameKind::IntToInt64
+            | ConversionFrameKind::IntToFloat64 { .. }
+            | ConversionFrameKind::IntToFloat32 { .. }
+            | ConversionFrameKind::IntBitsToFloat32 => {
+                self.cell_int_value(current).map(ConversionValue::Int)
+            }
+            ConversionFrameKind::Int64ToInt
+            | ConversionFrameKind::Int64ToFloat64
+            | ConversionFrameKind::Int64ToFloat32
+            | ConversionFrameKind::Int64BitsToFloat64 => {
+                self.cell_int64_value(current).map(ConversionValue::Int64)
+            }
+            ConversionFrameKind::Float64ToInt
+            | ConversionFrameKind::Float64ToFloat32
+            | ConversionFrameKind::Float64BitsToInt64 => self
+                .cell_float64_value(current)
+                .map(ConversionValue::Float64),
+            ConversionFrameKind::Float32ToInt
+            | ConversionFrameKind::Float32ToFloat64
+            | ConversionFrameKind::Float32BitsToInt => self
+                .cell_float32_value(current)
+                .map(ConversionValue::Float32),
+        }
+    }
+
     pub(in crate::runtime) fn finish_int_frame(
         &mut self,
         frame: IntFrame,
@@ -342,7 +374,7 @@ impl Program {
             }
             WhnfFrameKind::IsInt => {
                 let value = self.resolve(value)?;
-                let n = self.cell(value).int_value().unwrap_or(-1);
+                let n = self.cell_int_value(value).unwrap_or(-1);
                 self.apply_stack_redex_value(frame.redex, frame.used, Node::Int(n))
             }
         };
@@ -372,13 +404,18 @@ impl Program {
             Conversion(ConversionValue),
         }
 
-        let current_cell = self.cell_trusted(current);
         let ready = match stack.peek_frame() {
-            Some(StackFrame::Int(_)) => current_cell.int_value().map(ReadyFrame::Int),
-            Some(StackFrame::Int64Shift(_)) => current_cell.int_value().map(ReadyFrame::Int64Shift),
-            Some(StackFrame::Int64(_)) => current_cell.int64_value().map(ReadyFrame::Int64),
-            Some(StackFrame::Float64(_)) => current_cell.float64_value().map(ReadyFrame::Float64),
-            Some(StackFrame::Float32(_)) => current_cell.float32_value().map(ReadyFrame::Float32),
+            Some(StackFrame::Int(_)) => self.cell_int_value(current).map(ReadyFrame::Int),
+            Some(StackFrame::Int64Shift(_)) => {
+                self.cell_int_value(current).map(ReadyFrame::Int64Shift)
+            }
+            Some(StackFrame::Int64(_)) => self.cell_int64_value(current).map(ReadyFrame::Int64),
+            Some(StackFrame::Float64(_)) => {
+                self.cell_float64_value(current).map(ReadyFrame::Float64)
+            }
+            Some(StackFrame::Float32(_)) => {
+                self.cell_float32_value(current).map(ReadyFrame::Float32)
+            }
             Some(StackFrame::Bytes(_))
                 if matches!(
                     self.cold_node(current),
@@ -387,9 +424,8 @@ impl Program {
             {
                 Some(ReadyFrame::Bytes)
             }
-            Some(StackFrame::Conversion(frame)) => frame
-                .kind
-                .ready_cell_value(current_cell)
+            Some(StackFrame::Conversion(frame)) => self
+                .ready_conversion_value(frame.kind, current)
                 .map(ReadyFrame::Conversion),
             _ => None,
         };
@@ -685,7 +721,7 @@ impl Program {
             WhnfFrameKind::IoStrict { action, value } => self.app(action, value),
             WhnfFrameKind::IsInt => {
                 let value = self.resolve(value)?;
-                let n = self.cell(value).int_value().unwrap_or(-1);
+                let n = self.cell_int_value(value).unwrap_or(-1);
                 self.int(n)
             }
         };
@@ -827,13 +863,18 @@ impl Program {
             Conversion(ConversionValue),
         }
 
-        let current_cell = self.cell(current);
         let ready = match stack.peek() {
-            Some(EvalFrame::Int(_)) => current_cell.int_value().map(ReadyFrame::Int),
-            Some(EvalFrame::Int64Shift(_)) => current_cell.int_value().map(ReadyFrame::Int64Shift),
-            Some(EvalFrame::Int64(_)) => current_cell.int64_value().map(ReadyFrame::Int64),
-            Some(EvalFrame::Float64(_)) => current_cell.float64_value().map(ReadyFrame::Float64),
-            Some(EvalFrame::Float32(_)) => current_cell.float32_value().map(ReadyFrame::Float32),
+            Some(EvalFrame::Int(_)) => self.cell_int_value(current).map(ReadyFrame::Int),
+            Some(EvalFrame::Int64Shift(_)) => {
+                self.cell_int_value(current).map(ReadyFrame::Int64Shift)
+            }
+            Some(EvalFrame::Int64(_)) => self.cell_int64_value(current).map(ReadyFrame::Int64),
+            Some(EvalFrame::Float64(_)) => {
+                self.cell_float64_value(current).map(ReadyFrame::Float64)
+            }
+            Some(EvalFrame::Float32(_)) => {
+                self.cell_float32_value(current).map(ReadyFrame::Float32)
+            }
             Some(EvalFrame::Bytes(_))
                 if matches!(
                     self.cold_node(current),
@@ -842,9 +883,8 @@ impl Program {
             {
                 Some(ReadyFrame::Bytes)
             }
-            Some(EvalFrame::Conversion(frame)) => frame
-                .kind
-                .ready_cell_value(current_cell)
+            Some(EvalFrame::Conversion(frame)) => self
+                .ready_conversion_value(frame.kind, current)
                 .map(ReadyFrame::Conversion),
             _ => None,
         };
