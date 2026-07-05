@@ -1,6 +1,101 @@
 //! Mark-sweep GC over the node arena and cold payload tables.
 use super::*;
 
+#[cfg(feature = "parallel-gc")]
+const MAX_PARALLEL_GC_THREADS: usize = 16;
+#[cfg(feature = "parallel-gc")]
+const PARALLEL_SWEEP_ALIGNMENT: usize = 64;
+
+#[cfg(feature = "parallel-gc")]
+struct SweepSegment {
+    head: Option<NodeId>,
+    tail: Option<NodeId>,
+    freed: usize,
+    live: usize,
+    cold_indices: Vec<usize>,
+}
+
+#[cfg(feature = "parallel-gc")]
+fn configured_parallel_gc_threads(node_count: usize) -> usize {
+    if node_count <= PARALLEL_SWEEP_ALIGNMENT {
+        return 1;
+    }
+    let hardware_threads = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1);
+    let default_threads = hardware_threads.min(MAX_PARALLEL_GC_THREADS).max(1);
+    let requested_threads = std::env::var("MHS_GC_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|threads| *threads > 0)
+        .unwrap_or(default_threads);
+    let range_cap = node_count.div_ceil(PARALLEL_SWEEP_ALIGNMENT).max(1);
+    requested_threads
+        .min(hardware_threads)
+        .min(MAX_PARALLEL_GC_THREADS)
+        .min(range_cap)
+        .max(1)
+}
+
+#[cfg(feature = "parallel-gc")]
+fn aligned_sweep_ranges(node_count: usize, threads: usize) -> Vec<std::ops::Range<usize>> {
+    let threads = threads
+        .min(node_count.div_ceil(PARALLEL_SWEEP_ALIGNMENT))
+        .max(1);
+    let mut ranges = Vec::with_capacity(threads);
+    let mut start = 0usize;
+    for range_index in 1..threads {
+        let raw_end = node_count * range_index / threads;
+        let aligned_end = raw_end
+            .div_ceil(PARALLEL_SWEEP_ALIGNMENT)
+            .saturating_mul(PARALLEL_SWEEP_ALIGNMENT)
+            .min(node_count);
+        if aligned_end > start {
+            ranges.push(start..aligned_end);
+            start = aligned_end;
+        }
+    }
+    if start < node_count {
+        ranges.push(start..node_count);
+    }
+    ranges
+}
+
+#[cfg(feature = "parallel-gc")]
+fn sweep_node_range(start: usize, nodes: &mut [Cell], marked: &mut [bool]) -> SweepSegment {
+    let mut head = None;
+    let mut tail = None;
+    let mut freed = 0usize;
+    let mut live = 0usize;
+    let mut cold_indices = Vec::new();
+    for (offset, (cell, mark)) in nodes.iter_mut().zip(marked.iter_mut()).enumerate() {
+        if *mark {
+            live += 1;
+            *mark = false;
+            continue;
+        }
+        if cell.has_tag(CellTag::Cold) {
+            if let Some(cold) = cell.cold_index() {
+                cold_indices.push(cold);
+            }
+        }
+        let id = NodeId::from_index(start + offset);
+        *cell = Cell::free(head);
+        if tail.is_none() {
+            tail = Some(id);
+        }
+        head = Some(id);
+        freed += 1;
+    }
+    SweepSegment {
+        head,
+        tail,
+        freed,
+        live,
+        cold_indices,
+    }
+}
+
 impl Program {
     pub fn gc_stats(&self) -> GcStats {
         GcStats {
@@ -461,6 +556,78 @@ impl Program {
         Ok(())
     }
 
+    fn sweep_sequential(&mut self, marked: &[bool]) -> (usize, usize) {
+        self.free_head = None;
+        self.free_nodes = 0;
+        let mut freed = 0;
+        let mut live = 0;
+        for (index, mark) in marked.iter().enumerate() {
+            if *mark {
+                live += 1;
+                continue;
+            }
+            freed += 1;
+            self.push_free_node(index);
+        }
+        (freed, live)
+    }
+
+    #[cfg(feature = "parallel-gc")]
+    fn sweep_parallel(&mut self, marked: &mut [bool], threads: usize) -> (usize, usize) {
+        let ranges = aligned_sweep_ranges(marked.len(), threads);
+        if ranges.len() <= 1 {
+            return self.sweep_sequential(marked);
+        }
+
+        let segments = std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(ranges.len());
+            let mut nodes_tail = self.nodes.as_mut_slice();
+            let mut marks_tail = marked;
+            let mut cursor = 0usize;
+            for range in ranges {
+                let skip = range.start - cursor;
+                let (_, nodes_after_skip) = nodes_tail.split_at_mut(skip);
+                let (nodes_chunk, nodes_next) =
+                    nodes_after_skip.split_at_mut(range.end - range.start);
+                nodes_tail = nodes_next;
+
+                let (_, marks_after_skip) = marks_tail.split_at_mut(skip);
+                let (marks_chunk, marks_next) =
+                    marks_after_skip.split_at_mut(range.end - range.start);
+                marks_tail = marks_next;
+
+                cursor = range.end;
+                handles.push(
+                    scope.spawn(move || sweep_node_range(range.start, nodes_chunk, marks_chunk)),
+                );
+            }
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("parallel GC sweep worker panicked"))
+                .collect::<Vec<_>>()
+        });
+
+        self.free_head = None;
+        self.free_nodes = 0;
+        let mut freed = 0usize;
+        let mut live = 0usize;
+        for segment in segments {
+            for cold in segment.cold_indices {
+                if let Some(slot) = self.cold_nodes.get_mut(cold) {
+                    *slot = None;
+                }
+            }
+            if let Some(tail) = segment.tail {
+                self.nodes[tail.index()] = Cell::free(self.free_head);
+                self.free_head = segment.head;
+                self.free_nodes += segment.freed;
+            }
+            freed += segment.freed;
+            live += segment.live;
+        }
+        (freed, live)
+    }
+
     /// Run one non-moving mark-sweep collection between evaluator steps.
     ///
     /// The caller passes the active reducer roots because they are not all
@@ -506,18 +673,17 @@ impl Program {
 
         #[cfg(feature = "gc-phase-profile")]
         let sweep_started = Instant::now();
-        self.free_head = None;
-        self.free_nodes = 0;
-        let mut freed = 0;
-        let mut live = 0;
-        for index in 0..marked.len() {
-            if marked[index] {
-                live += 1;
-                continue;
+        #[cfg(feature = "parallel-gc")]
+        let (freed, live) = {
+            let gc_threads = configured_parallel_gc_threads(marked.len());
+            if gc_threads > 1 {
+                self.sweep_parallel(&mut marked, gc_threads)
+            } else {
+                self.sweep_sequential(&marked)
             }
-            freed += 1;
-            self.push_free_node(index);
-        }
+        };
+        #[cfg(not(feature = "parallel-gc"))]
+        let (freed, live) = self.sweep_sequential(&marked);
         #[cfg(feature = "gc-phase-profile")]
         let sweep_nanos = sweep_started.elapsed().as_nanos();
         self.gc_marked = marked;
