@@ -293,6 +293,10 @@ impl Program {
                 Some((2, n))
             }
             Some(IoGc) if args_len >= 2 => {
+                // Request a full collection at the next top-level step boundary (where
+                // the GC roots are valid). This is what lets weak pointers whose keys
+                // have gone out of scope die and their finalizers run.
+                self.force_gc = true;
                 let unit = self.prim("I");
                 Some((2, self.pair(unit, arg!(1))))
             }
@@ -341,6 +345,7 @@ impl Program {
                 Some((1, self.pair(thread, arg!(0))))
             }
             Some(IoYield) if args_len >= 1 => {
+                self.run_pending_weak_finalizers()?;
                 let unit = self.prim("I");
                 Some((1, self.pair(unit, arg!(0))))
             }

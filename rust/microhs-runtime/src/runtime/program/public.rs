@@ -81,8 +81,15 @@ impl Program {
     pub fn reduce_main(&mut self, limit: usize) -> Result<(NodeId, usize), EvalError> {
         let world = self.world();
         let root = self.app(self.root, world);
+        // Track the live computation in `self.root` so the GC (which always marks
+        // `self.root`) follows the running program rather than pinning the original
+        // `main` template. Otherwise nodes only reachable from the template — e.g. the
+        // key of a weak pointer that has gone out of scope — are never collected, so
+        // weak pointers never die and their finalizers never run.
+        self.root = root;
         let reductions = self.reductions;
         let root = self.reduce_node_whnf(root, limit)?;
+        self.root = root;
         Ok((root, self.reductions - reductions))
     }
 

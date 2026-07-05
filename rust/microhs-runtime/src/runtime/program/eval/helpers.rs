@@ -145,6 +145,7 @@ impl Program {
                 Ok(Some((result, world)))
             }
             Some(Prim::Known(IoYield)) if args.is_empty() => {
+                self.run_pending_weak_finalizers()?;
                 let result = self.prim("I");
                 Ok(Some((result, world)))
             }
