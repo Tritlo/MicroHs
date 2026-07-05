@@ -4549,6 +4549,16 @@ This is a no-code audit for the next structural heap step. Current GC can mark r
 | 100M/32M bounded A/B | base ms: `1589.603`, `1747.486`, `1497.133`, `1497.095`, `1512.937`, `1501.213`, `1520.981`, `1520.779` (avg `1548.403`); candidate ms: `1519.551`, `1536.965`, `1542.521`, `1545.813`, `1580.646`, `1493.653`, `1548.950`, `1531.998` (avg `1537.512`, `-0.703%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,784`, sink `661902`, and `cell_size_bytes=8` |
 | reading | Reject despite the apparent average: only `3/8` pairs were favorable and the average depended on a slow baseline outlier. The frame-completion cold bundle is useful, but pushing adjacent rethread repair cold does not show a stable bounded win |
 
+## 2026-07-06 Current-Source PGO Oracle Refresh
+
+| item | result |
+|---|---|
+| setup | measurement-only PGO oracle after the frame-completion cold-layout keeper. Ran `rust/microhs-runtime/tools/native/build-selfhost-pgo.sh` with `MHS_PGO_DIR=/tmp/mhs-rust-pgo-framecold-20260706`, `MHS_GC_NODE_INTERVAL=134217728`, and `MHS_PGO_TRAIN_TIMEOUT=900s`; the PGO-use binary was `/tmp/mhs-rust-pgo-framecold-20260706/use/release/mhs-rust-bench`. This does not change source or release defaults |
+| training run | instrumented 128M full self-host completed byte-identically at `87.603342s`, `3,659,454,933` steps, `31` GCs, `10.678012s` GC pause, high-water `138,057,550`, sink `661902`, SHA `29b8c5a55e0952bd25a9a06d5723033e0367ebaf53cfd598fa00f8e65a80d98a` |
+| PGO 128M default 3x | byte-identical outputs at `49.565508s`, `49.158916s`, `49.511570s` (median `49.511570s`, avg `49.411998s`), `3,659,454,990` steps, `31` GCs, high-water `138,057,556`, sink `661902`, same SHA and `cmp=0` |
+| PGO 80Mi fair 3x | byte-identical outputs at `52.004879s`, `52.480572s`, `52.321845s` (median `52.321845s`, avg `52.269099s`), `3,659,454,971` steps, `50` GCs, high-water `88,207,740`, sink `661902`, same SHA and `cmp=0` |
+| reading | The source-level codegen keepers have collapsed most of the old Rust-default-vs-Rust-PGO gap: current default is about `50.04s` at 128M and `52.81s` at 80Mi versus PGO `49.51s` and `52.32s`. PGO is now only a small remaining oracle, and neither default nor PGO beats non-PGO C default (`46.40s`), so further progress likely needs a new source shape rather than more one-off PGO mimicry |
+
 ## Active Tradeoffs
 
 | item | reading |
