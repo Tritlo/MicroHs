@@ -16,6 +16,42 @@ struct SweepSegment {
 }
 
 #[cfg(feature = "parallel-gc")]
+#[derive(Clone)]
+struct ParallelSweepJob {
+    nodes_addr: usize,
+    marked_addr: usize,
+    ranges: std::sync::Arc<Vec<std::ops::Range<usize>>>,
+}
+
+#[cfg(feature = "parallel-gc")]
+struct ParallelSweepState {
+    generation: u64,
+    running: bool,
+    active: usize,
+    job: Option<ParallelSweepJob>,
+    results: Vec<Option<SweepSegment>>,
+}
+
+#[cfg(feature = "parallel-gc")]
+struct ParallelSweepShared {
+    state: std::sync::Mutex<ParallelSweepState>,
+    ready: std::sync::Condvar,
+    done: std::sync::Condvar,
+}
+
+#[cfg(feature = "parallel-gc")]
+struct ParallelSweepPool {
+    threads: usize,
+    shared: std::sync::Arc<ParallelSweepShared>,
+}
+
+#[cfg(feature = "parallel-gc")]
+// Pools are process-lifetime: workers are detached, then reused by later GCs.
+static PARALLEL_SWEEP_POOLS: std::sync::OnceLock<
+    std::sync::Mutex<Vec<std::sync::Arc<ParallelSweepPool>>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(feature = "parallel-gc")]
 fn configured_parallel_gc_threads(node_count: usize) -> usize {
     if node_count <= PARALLEL_SWEEP_ALIGNMENT {
         return 1;
@@ -59,6 +95,154 @@ fn aligned_sweep_ranges(node_count: usize, threads: usize) -> Vec<std::ops::Rang
         ranges.push(start..node_count);
     }
     ranges
+}
+
+#[cfg(feature = "parallel-gc")]
+impl ParallelSweepPool {
+    fn new(threads: usize) -> Self {
+        let shared = std::sync::Arc::new(ParallelSweepShared {
+            state: std::sync::Mutex::new(ParallelSweepState {
+                generation: 0,
+                running: false,
+                active: 0,
+                job: None,
+                results: Vec::new(),
+            }),
+            ready: std::sync::Condvar::new(),
+            done: std::sync::Condvar::new(),
+        });
+        for worker_id in 0..threads {
+            let worker_shared = std::sync::Arc::clone(&shared);
+            std::thread::Builder::new()
+                .name(format!("mhs-gc-sweep-{worker_id}"))
+                .spawn(move || parallel_sweep_worker(worker_id, worker_shared))
+                .expect("failed to spawn parallel GC sweep worker");
+        }
+        Self { threads, shared }
+    }
+
+    fn sweep(
+        &self,
+        nodes: &mut [Cell],
+        marked: &mut [bool],
+        ranges: Vec<std::ops::Range<usize>>,
+    ) -> Vec<SweepSegment> {
+        debug_assert!(self.threads >= ranges.len());
+        let range_count = ranges.len();
+        let job = ParallelSweepJob {
+            nodes_addr: nodes.as_mut_ptr() as usize,
+            marked_addr: marked.as_mut_ptr() as usize,
+            ranges: std::sync::Arc::new(ranges),
+        };
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .expect("parallel GC sweep mutex poisoned");
+        while state.running {
+            state = self
+                .shared
+                .done
+                .wait(state)
+                .expect("parallel GC sweep mutex poisoned");
+        }
+        state.running = true;
+        state.results.clear();
+        state.results.resize_with(range_count, || None);
+        state.job = Some(job);
+        state.active = self.threads;
+        state.generation = state.generation.wrapping_add(1);
+        self.shared.ready.notify_all();
+        while state.active != 0 {
+            state = self
+                .shared
+                .done
+                .wait(state)
+                .expect("parallel GC sweep mutex poisoned");
+        }
+        let mut segments = Vec::with_capacity(range_count);
+        for slot in state.results.iter_mut() {
+            segments.push(
+                slot.take()
+                    .expect("parallel GC sweep worker did not return a segment"),
+            );
+        }
+        state.results.clear();
+        state.job = None;
+        state.running = false;
+        self.shared.done.notify_all();
+        segments
+    }
+}
+
+#[cfg(feature = "parallel-gc")]
+fn parallel_sweep_pool(threads: usize) -> std::sync::Arc<ParallelSweepPool> {
+    let pools = PARALLEL_SWEEP_POOLS.get_or_init(|| std::sync::Mutex::new(Vec::new()));
+    let mut pools = pools.lock().expect("parallel GC sweep pool mutex poisoned");
+    if let Some(pool) = pools.iter().find(|pool| pool.threads == threads) {
+        return std::sync::Arc::clone(pool);
+    }
+    let pool = std::sync::Arc::new(ParallelSweepPool::new(threads));
+    pools.push(std::sync::Arc::clone(&pool));
+    pool
+}
+
+#[cfg(feature = "parallel-gc")]
+fn parallel_sweep_worker(worker_id: usize, shared: std::sync::Arc<ParallelSweepShared>) {
+    let mut seen_generation = 0u64;
+    loop {
+        let job = {
+            let mut state = shared
+                .state
+                .lock()
+                .expect("parallel GC sweep mutex poisoned");
+            while state.generation == seen_generation {
+                state = shared
+                    .ready
+                    .wait(state)
+                    .expect("parallel GC sweep mutex poisoned");
+            }
+            seen_generation = state.generation;
+            state
+                .job
+                .clone()
+                .expect("parallel GC sweep worker woke without a job")
+        };
+        let segment = job
+            .ranges
+            .get(worker_id)
+            .cloned()
+            .map(|range| sweep_job_range(&job, range));
+        let mut state = shared
+            .state
+            .lock()
+            .expect("parallel GC sweep mutex poisoned");
+        if let Some(segment) = segment {
+            state.results[worker_id] = Some(segment);
+        }
+        state.active = state
+            .active
+            .checked_sub(1)
+            .expect("parallel GC sweep active worker underflow");
+        if state.active == 0 {
+            shared.done.notify_all();
+        }
+    }
+}
+
+#[cfg(feature = "parallel-gc")]
+fn sweep_job_range(job: &ParallelSweepJob, range: std::ops::Range<usize>) -> SweepSegment {
+    let len = range.end - range.start;
+    // The caller holds exclusive access to both backing slices until all
+    // workers report completion, and ranges are non-overlapping.
+    let (nodes, marked) = unsafe {
+        let nodes =
+            std::slice::from_raw_parts_mut((job.nodes_addr as *mut Cell).add(range.start), len);
+        let marked =
+            std::slice::from_raw_parts_mut((job.marked_addr as *mut bool).add(range.start), len);
+        (nodes, marked)
+    };
+    sweep_node_range(range.start, nodes, marked)
 }
 
 #[cfg(feature = "parallel-gc")]
@@ -579,33 +763,8 @@ impl Program {
             return self.sweep_sequential(marked);
         }
 
-        let segments = std::thread::scope(|scope| {
-            let mut handles = Vec::with_capacity(ranges.len());
-            let mut nodes_tail = self.nodes.as_mut_slice();
-            let mut marks_tail = marked;
-            let mut cursor = 0usize;
-            for range in ranges {
-                let skip = range.start - cursor;
-                let (_, nodes_after_skip) = nodes_tail.split_at_mut(skip);
-                let (nodes_chunk, nodes_next) =
-                    nodes_after_skip.split_at_mut(range.end - range.start);
-                nodes_tail = nodes_next;
-
-                let (_, marks_after_skip) = marks_tail.split_at_mut(skip);
-                let (marks_chunk, marks_next) =
-                    marks_after_skip.split_at_mut(range.end - range.start);
-                marks_tail = marks_next;
-
-                cursor = range.end;
-                handles.push(
-                    scope.spawn(move || sweep_node_range(range.start, nodes_chunk, marks_chunk)),
-                );
-            }
-            handles
-                .into_iter()
-                .map(|handle| handle.join().expect("parallel GC sweep worker panicked"))
-                .collect::<Vec<_>>()
-        });
+        let pool = parallel_sweep_pool(ranges.len());
+        let segments = pool.sweep(self.nodes.as_mut_slice(), marked, ranges);
 
         self.free_head = None;
         self.free_nodes = 0;
