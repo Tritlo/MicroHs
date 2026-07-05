@@ -726,26 +726,6 @@ pub struct Program {
     #[cfg(feature = "gc-phase-profile")]
     pub(in crate::runtime) gc_total_sweep_nanos: u128,
     #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_red_i_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_red_k_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_red_a_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_red_bi_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_red_bxi_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_red_ccbi_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_red_cc_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_red_cci_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_red_ccbbcp_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_red_flip_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
     pub(in crate::runtime) gc_young_profile_allocated_slots: Vec<NodeId>,
     #[cfg(feature = "gc-phase-profile")]
     pub(in crate::runtime) gc_young_profile_last_slots: usize,

@@ -65,26 +65,6 @@ impl Program {
             #[cfg(feature = "gc-phase-profile")]
             gc_total_sweep_nanos: 0,
             #[cfg(feature = "gc-phase-profile")]
-            gc_red_i_opportunities: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_red_k_opportunities: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_red_a_opportunities: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_red_bi_opportunities: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_red_bxi_opportunities: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_red_ccbi_opportunities: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_red_cc_opportunities: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_red_cci_opportunities: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_red_ccbbcp_opportunities: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_red_flip_opportunities: 0,
-            #[cfg(feature = "gc-phase-profile")]
             gc_young_profile_allocated_slots: Vec::new(),
             #[cfg(feature = "gc-phase-profile")]
             gc_young_profile_last_slots: 0,

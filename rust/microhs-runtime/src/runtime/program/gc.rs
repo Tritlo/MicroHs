@@ -22,26 +22,6 @@ impl Program {
             #[cfg(feature = "gc-phase-profile")]
             total_sweep_nanos: self.gc_total_sweep_nanos,
             #[cfg(feature = "gc-phase-profile")]
-            red_i_opportunities: self.gc_red_i_opportunities,
-            #[cfg(feature = "gc-phase-profile")]
-            red_k_opportunities: self.gc_red_k_opportunities,
-            #[cfg(feature = "gc-phase-profile")]
-            red_a_opportunities: self.gc_red_a_opportunities,
-            #[cfg(feature = "gc-phase-profile")]
-            red_bi_opportunities: self.gc_red_bi_opportunities,
-            #[cfg(feature = "gc-phase-profile")]
-            red_bxi_opportunities: self.gc_red_bxi_opportunities,
-            #[cfg(feature = "gc-phase-profile")]
-            red_ccbi_opportunities: self.gc_red_ccbi_opportunities,
-            #[cfg(feature = "gc-phase-profile")]
-            red_cc_opportunities: self.gc_red_cc_opportunities,
-            #[cfg(feature = "gc-phase-profile")]
-            red_cci_opportunities: self.gc_red_cci_opportunities,
-            #[cfg(feature = "gc-phase-profile")]
-            red_ccbbcp_opportunities: self.gc_red_ccbbcp_opportunities,
-            #[cfg(feature = "gc-phase-profile")]
-            red_flip_opportunities: self.gc_red_flip_opportunities,
-            #[cfg(feature = "gc-phase-profile")]
             young_profile_last_slots: self.gc_young_profile_last_slots,
             #[cfg(feature = "gc-phase-profile")]
             young_profile_last_live: self.gc_young_profile_last_live,
@@ -506,7 +486,7 @@ impl Program {
         target
     }
 
-    #[cfg(any(feature = "gc-phase-profile", feature = "eval-phase-profile"))]
+    #[cfg(feature = "eval-phase-profile")]
     pub(in crate::runtime) fn gc_profile_resolved_id(&self, id: NodeId) -> Option<NodeId> {
         let mut current = id;
         for _ in 0..self.nodes.len() {
@@ -517,152 +497,6 @@ impl Program {
             current = cell.option_id_word1()?;
         }
         None
-    }
-
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) fn gc_profile_prim(&self, id: NodeId) -> Option<Prim> {
-        let id = self.gc_profile_resolved_id(id)?;
-        self.nodes.get(id.index())?.prim()
-    }
-
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) fn gc_profile_app_fields(&self, id: NodeId) -> Option<(NodeId, NodeId)> {
-        let id = self.gc_profile_resolved_id(id)?;
-        self.nodes.get(id.index())?.app_fields()
-    }
-
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) fn gc_profile_flipped_prim(prim: Prim) -> Option<Prim> {
-        match prim {
-            Prim::Known(KnownPrim::K) => Some(Prim::Known(KnownPrim::A)),
-            Prim::Known(KnownPrim::A) => Some(Prim::Known(KnownPrim::K)),
-            Prim::Runtime(runtime) => {
-                let flipped = match runtime.name() {
-                    "+" => "+",
-                    "-" => "subtract",
-                    "*" => "*",
-                    "u+" => "u+",
-                    "u-" => "usubtract",
-                    "u*" => "u*",
-                    "subtract" => "-",
-                    "usubtract" => "u-",
-                    "and" => "and",
-                    "or" => "or",
-                    "xor" => "xor",
-                    "d+" => "d+",
-                    "d*" => "d*",
-                    "d==" => "d==",
-                    "d/=" => "d/=",
-                    "d<" => "d>",
-                    "d<=" => "d>=",
-                    "d>" => "d<",
-                    "d>=" => "d<=",
-                    "f+" => "f+",
-                    "f*" => "f*",
-                    "f==" => "f==",
-                    "f/=" => "f/=",
-                    "f<" => "f>",
-                    "f<=" => "f>=",
-                    "f>" => "f<",
-                    "f>=" => "f<=",
-                    "bs==" => "bs==",
-                    "bs/=" => "bs/=",
-                    "bs<" => "bs>",
-                    "bs<=" => "bs>=",
-                    "bs>" => "bs<",
-                    "bs>=" => "bs<=",
-                    "==" => "==",
-                    "/=" => "/=",
-                    "<" => ">",
-                    "u<" => "u>",
-                    "u<=" => "u>=",
-                    "u>" => "u<",
-                    "u>=" => "u<=",
-                    "<=" => ">=",
-                    ">" => "<",
-                    ">=" => "<=",
-                    "I+" => "I+",
-                    "I-" => "Isubtract",
-                    "I*" => "I*",
-                    "Iu+" => "Iu+",
-                    "Iu-" => "Iusubtract",
-                    "Iu*" => "Iu*",
-                    "Isubtract" => "I-",
-                    "Iusubtract" => "Iu-",
-                    "Iand" => "Iand",
-                    "Ior" => "Ior",
-                    "Ixor" => "Ixor",
-                    "I==" => "I==",
-                    "I/=" => "I/=",
-                    "I<" => "I>",
-                    "Iu<" => "Iu>",
-                    "Iu<=" => "Iu>=",
-                    "Iu>" => "Iu<",
-                    "Iu>=" => "Iu<=",
-                    "I<=" => "I>=",
-                    "I>" => "I<",
-                    "I>=" => "I<=",
-                    _ => return None,
-                };
-                Prim::from_name(flipped)
-            }
-            _ => None,
-        }
-    }
-
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) fn profile_gc_red_opportunities(&mut self, fun: NodeId, arg: NodeId) {
-        use KnownPrim::*;
-
-        let funt = self.gc_profile_prim(fun);
-        let argt = self.gc_profile_prim(arg);
-        let fun_app = self.gc_profile_app_fields(fun);
-        let funfunt = fun_app.and_then(|(fun_fun, _)| self.gc_profile_prim(fun_fun));
-        let arg_app = self.gc_profile_app_fields(arg);
-        let arg_fun_t = arg_app.and_then(|(arg_fun, _)| self.gc_profile_prim(arg_fun));
-
-        if funt == Some(Prim::Known(I)) {
-            self.gc_red_i_opportunities += 1;
-        }
-        if funfunt == Some(Prim::Known(K)) {
-            self.gc_red_k_opportunities += 1;
-        }
-        if funfunt == Some(Prim::Known(A)) {
-            self.gc_red_a_opportunities += 1;
-        }
-        if funt == Some(Prim::Known(B)) && argt == Some(Prim::Known(I)) {
-            self.gc_red_bi_opportunities += 1;
-        }
-        if funfunt == Some(Prim::Known(B)) && argt == Some(Prim::Known(I)) {
-            self.gc_red_bxi_opportunities += 1;
-        }
-        if funfunt == Some(Prim::Known(CPrimeB)) && argt == Some(Prim::Known(I)) {
-            self.gc_red_ccbi_opportunities += 1;
-        }
-        if funt == Some(Prim::Known(C)) && arg_fun_t == Some(Prim::Known(C)) {
-            self.gc_red_cc_opportunities += 1;
-        }
-        if funt == Some(Prim::Known(CPrime)) && argt == Some(Prim::Known(I)) {
-            self.gc_red_cci_opportunities += 1;
-        }
-        if funt == Some(Prim::Known(CPrimeB)) {
-            if let Some((arg_fun, arg_arg)) = arg_app {
-                let fun_arg_is_p = self.gc_profile_prim(arg_arg) == Some(Prim::Known(P));
-                let fun_arg_is_bc = self
-                    .gc_profile_app_fields(arg_fun)
-                    .map(|(bc_fun, bc_arg)| {
-                        self.gc_profile_prim(bc_fun) == Some(Prim::Known(B))
-                            && self.gc_profile_prim(bc_arg) == Some(Prim::Known(C))
-                    })
-                    .unwrap_or(false);
-                if fun_arg_is_p && fun_arg_is_bc {
-                    self.gc_red_ccbbcp_opportunities += 1;
-                }
-            }
-        }
-        if funt == Some(Prim::Known(C)) && argt.and_then(Self::gc_profile_flipped_prim).is_some() {
-            self.gc_red_flip_opportunities += 1;
-        }
     }
 
     pub(in crate::runtime) fn mark_reachable(
@@ -687,8 +521,6 @@ impl Program {
             if let Some((fun, arg)) = cell.app_fields() {
                 let fun = self.mark_canonical_child(marked, work, fun);
                 let arg = self.mark_canonical_child(marked, work, arg);
-                #[cfg(feature = "gc-phase-profile")]
-                self.profile_gc_red_opportunities(fun, arg);
                 if fun != cell.id_payload() || arg != cell.id_word1() {
                     self.set_app_cell_at(id.index(), Cell::app(fun, arg));
                 }

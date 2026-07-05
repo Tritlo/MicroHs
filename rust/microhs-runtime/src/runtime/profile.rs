@@ -21,26 +21,6 @@ pub struct GcStats {
     #[cfg(feature = "gc-phase-profile")]
     pub total_sweep_nanos: u128,
     #[cfg(feature = "gc-phase-profile")]
-    pub red_i_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub red_k_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub red_a_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub red_bi_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub red_bxi_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub red_ccbi_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub red_cc_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub red_cci_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub red_ccbbcp_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub red_flip_opportunities: usize,
-    #[cfg(feature = "gc-phase-profile")]
     pub young_profile_last_slots: usize,
     #[cfg(feature = "gc-phase-profile")]
     pub young_profile_last_live: usize,

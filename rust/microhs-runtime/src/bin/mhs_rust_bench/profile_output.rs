@@ -51,46 +51,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
             nanos_millis(profile.gc.total_sweep_nanos)
         );
         println!(
-            "profile_gc_red_i_opportunities: {}",
-            profile.gc.red_i_opportunities
-        );
-        println!(
-            "profile_gc_red_k_opportunities: {}",
-            profile.gc.red_k_opportunities
-        );
-        println!(
-            "profile_gc_red_a_opportunities: {}",
-            profile.gc.red_a_opportunities
-        );
-        println!(
-            "profile_gc_red_bi_opportunities: {}",
-            profile.gc.red_bi_opportunities
-        );
-        println!(
-            "profile_gc_red_bxi_opportunities: {}",
-            profile.gc.red_bxi_opportunities
-        );
-        println!(
-            "profile_gc_red_ccbi_opportunities: {}",
-            profile.gc.red_ccbi_opportunities
-        );
-        println!(
-            "profile_gc_red_cc_opportunities: {}",
-            profile.gc.red_cc_opportunities
-        );
-        println!(
-            "profile_gc_red_cci_opportunities: {}",
-            profile.gc.red_cci_opportunities
-        );
-        println!(
-            "profile_gc_red_ccbbcp_opportunities: {}",
-            profile.gc.red_ccbbcp_opportunities
-        );
-        println!(
-            "profile_gc_red_flip_opportunities: {}",
-            profile.gc.red_flip_opportunities
-        );
-        println!(
             "profile_gc_young_profile_last_slots: {}",
             profile.gc.young_profile_last_slots
         );
