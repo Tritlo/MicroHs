@@ -1,6 +1,6 @@
 # MicroHs Rust Matrix
 
-Updated: 2026-07-05
+Updated: 2026-07-06
 
 Working dashboard for the Rust rewrite of the MicroHs C runtime/evaluator. The
 compiler stays in Haskell; Rust consumes and executes compiler-produced `.comb`.
@@ -4558,6 +4558,15 @@ This is a no-code audit for the next structural heap step. Current GC can mark r
 | PGO 128M default 3x | byte-identical outputs at `49.565508s`, `49.158916s`, `49.511570s` (median `49.511570s`, avg `49.411998s`), `3,659,454,990` steps, `31` GCs, high-water `138,057,556`, sink `661902`, same SHA and `cmp=0` |
 | PGO 80Mi fair 3x | byte-identical outputs at `52.004879s`, `52.480572s`, `52.321845s` (median `52.321845s`, avg `52.269099s`), `3,659,454,971` steps, `50` GCs, high-water `88,207,740`, sink `661902`, same SHA and `cmp=0` |
 | reading | The source-level codegen keepers have collapsed most of the old Rust-default-vs-Rust-PGO gap: current default is about `50.04s` at 128M and `52.81s` at 80Mi versus PGO `49.51s` and `52.32s`. PGO is now only a small remaining oracle, and neither default nor PGO beats non-PGO C default (`46.40s`), so further progress likely needs a new source shape rather than more one-off PGO mimicry |
+
+## 2026-07-06 Strict Action Cold-Outline Probe
+
+| item | result |
+|---|---|
+| probe | rejected source layout probe after the frame-completion keeper: changed `RuntimePrim::strict_action` from `#[inline(always)]` to `#[cold] #[inline(never)]`, trying to shrink the hot stack evaluator by moving runtime strict-primitive classification out of line. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1779.985`, `1570.952`, `1694.749`, `1505.724`, `1561.738`, `1629.207`, `1721.892`, `1528.290` (avg `1624.067`); candidate ms: `1645.335`, `1846.012`, `1684.439`, `1683.314`, `1787.576`, `1723.056`, `1780.605`, `1746.596` (avg `1737.117`, `+6.961%`). Pair direction was only `2/8` favorable. All samples used `100,807,543` steps, `3` GCs, high-water `33,949,856`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Clear reject: unlike the older non-cold noinline probe, adding `#[cold]` makes the bounded slice decisively worse. Runtime strict-action classification stays inline; the remaining gap is not exposed by pushing this table/range classifier out of the hot body |
 
 ## Active Tradeoffs
 
