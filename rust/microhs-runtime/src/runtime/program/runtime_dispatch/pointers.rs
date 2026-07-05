@@ -21,14 +21,6 @@ impl Program {
         name: &str,
         args: &[NodeId],
     ) -> Result<Option<(usize, NodeId)>, EvalError> {
-        self.foreign_ptr_op_inner(name, args)
-    }
-
-    pub(in crate::runtime) fn foreign_ptr_op_inner(
-        &mut self,
-        name: &str,
-        args: &[NodeId],
-    ) -> Result<Option<(usize, NodeId)>, EvalError> {
         let rewrite = match name {
             "fp+" => {
                 let foreign_ptr = self.eval_foreign_ptr_id(args[0])?;
@@ -63,14 +55,6 @@ impl Program {
     }
 
     pub(in crate::runtime) fn foreign_ptr_unop(
-        &mut self,
-        name: &str,
-        args: &[NodeId],
-    ) -> Result<Option<(usize, NodeId)>, EvalError> {
-        self.foreign_ptr_unop_inner(name, args)
-    }
-
-    pub(in crate::runtime) fn foreign_ptr_unop_inner(
         &mut self,
         name: &str,
         args: &[NodeId],

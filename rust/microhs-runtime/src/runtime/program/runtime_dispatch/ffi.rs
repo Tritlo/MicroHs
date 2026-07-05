@@ -7,14 +7,6 @@ impl Program {
         name: &str,
         args: &[NodeId],
     ) -> Result<Option<(usize, NodeId)>, EvalError> {
-        self.ffi_call_inner(name, args)
-    }
-
-    pub(in crate::runtime) fn ffi_call_inner(
-        &mut self,
-        name: &str,
-        args: &[NodeId],
-    ) -> Result<Option<(usize, NodeId)>, EvalError> {
         if !args.is_empty() {
             if let Some(result) = self.zero_arity_ffi_result(name)? {
                 let result = self.push_value_node(result);
