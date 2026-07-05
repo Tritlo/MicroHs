@@ -4464,6 +4464,15 @@ This is a no-code audit for the next structural heap step. Current GC can mark r
 | 100M/32M bounded A/B | base ms: `1700.638`, `1549.711`, `1556.464`, `1545.230`, `1707.923`, `1643.936`, `1589.548`, `1612.737` (avg `1613.273`); candidate ms: `1621.024`, `1578.638`, `1602.112`, `1634.857`, `1580.267`, `1568.376`, `1703.422`, `1645.014` (avg `1616.714`, `+0.213%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,784`, sink `661902`, and `cell_size_bytes=8` |
 | reading | Explicitly splitting the resolver branch did not expose the PGO win; the code-size/layout perturbation slightly lost and pair direction was only `3/8` favorable. Keep the compact `resolve_for_whnf` call inside descent |
 
+## 2026-07-05 App Wrapper Inline-Control Probe
+
+| item | result |
+|---|---|
+| probe | rejected source inline-control probe: changed the tiny allocation wrappers `Program::app` and `Program::app_with_site` from `#[inline]` to `#[inline(always)]` so hot `app_site!` calls could always see through the profiling branch into `push_app_node`. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1545.085`, `1622.999`, `1547.079`, `1568.725`, `1540.483`, `1618.986`, `1761.992`, `1659.077` (avg `1608.053`); candidate ms: `1587.667`, `1601.759`, `1628.418`, `1653.943`, `1564.877`, `1572.423`, `1548.397`, `1724.662` (avg `1610.268`, `+0.138%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,778`, sink `661902`, and `cell_size_bytes=8` |
+| reading | The wrappers are already cheap enough for LLVM to handle without forcing. The forced inline version had only `3/8` favorable pairs and no bounded win, so leave these wrappers compiler-chosen |
+
 ## Active Tradeoffs
 
 | item | reading |
