@@ -581,22 +581,6 @@ impl Program {
     }
 
     #[cold]
-    pub(in crate::runtime) fn profile_strict_redex_snapshot(&mut self, apps: usize) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.strict_redex_snapshots += 1;
-            profile.strict_redex_snapshot_apps += apps;
-        }
-    }
-
-    #[cold]
-    pub(in crate::runtime) fn profile_remaining_app_scan(&mut self, apps: usize) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.remaining_app_scans += 1;
-            profile.remaining_app_scan_apps += apps;
-        }
-    }
-
-    #[cold]
     pub(in crate::runtime) fn profile_eval_frame_push(&mut self, kind: &'static str) {
         if let Some(profile) = self.profile.as_mut() {
             profile.eval_frame_pushes += 1;
