@@ -97,6 +97,7 @@ impl Program {
             run_queue: std::collections::VecDeque::new(),
             current_thread: 0,
             next_thread_id: 1,
+            reschedule_now: false,
         }
     }
 

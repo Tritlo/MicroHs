@@ -751,4 +751,8 @@ pub struct Program {
     pub(in crate::runtime) current_thread: usize,
     /// Monotonic thread-id counter; `main` is 1 (matching the C runtime).
     pub(in crate::runtime) next_thread_id: i64,
+    /// Set when the running thread should yield to the scheduler at the next step
+    /// boundary (e.g. right after a `forkIO` that makes the program multi-threaded),
+    /// so the reducer can leave an otherwise-unbounded single-thread slice.
+    pub(in crate::runtime) reschedule_now: bool,
 }
