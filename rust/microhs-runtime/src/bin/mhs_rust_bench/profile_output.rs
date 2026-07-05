@@ -122,16 +122,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
         "profile_arg_materialized_nodes: {}",
         profile.profile.arg_materialized_nodes
     );
-    println!("profile_spine_rewrites: {}", profile.profile.spine_rewrites);
-    println!(
-        "profile_spine_rewrite_extra_args: {}",
-        profile.profile.spine_rewrite_extra_args
-    );
-    println!("profile_app_rewrites: {}", profile.profile.app_rewrites);
-    println!(
-        "profile_app_rewrite_extra_args: {}",
-        profile.profile.app_rewrite_extra_args
-    );
     println!("profile_stack_rewrites: {}", profile.profile.stack_rewrites);
     println!(
         "profile_stack_rewrite_apps: {}",

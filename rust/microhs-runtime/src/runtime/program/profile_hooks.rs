@@ -415,22 +415,6 @@ impl Program {
     }
 
     #[cold]
-    pub(in crate::runtime) fn profile_spine_rewrite(&mut self, extra_args: usize) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.spine_rewrites += 1;
-            profile.spine_rewrite_extra_args += extra_args;
-        }
-    }
-
-    #[cold]
-    pub(in crate::runtime) fn profile_app_rewrite(&mut self, extra_args: usize) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.app_rewrites += 1;
-            profile.app_rewrite_extra_args += extra_args;
-        }
-    }
-
-    #[cold]
     pub(in crate::runtime) fn profile_stack_rewrite(
         &mut self,
         used: usize,

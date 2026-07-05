@@ -24,9 +24,6 @@ impl Program {
         arg: NodeId,
         reductions: usize,
     ) -> EvalLoopStep {
-        if profile_head.is_some() {
-            self.profile_app_rewrite(spine.len() - used);
-        }
         let node = self.apply_eval_spine_app(root, spine, used, fun, arg);
         self.eval_loop_result(profile_head, node, reductions)
     }
@@ -72,9 +69,6 @@ impl Program {
         }
         macro_rules! rewrite_step {
             ($used:expr, $node:expr, $reductions:expr) => {{
-                if profile_head.is_some() {
-                    self.profile_spine_rewrite(spine.len() - $used);
-                }
                 let node = self.apply_eval_spine_rewrite(root, spine, $used, $node);
                 return Ok(Some(self.eval_loop_result(profile_head, node, $reductions)));
             }};
@@ -678,9 +672,6 @@ impl Program {
                 alias_shortcuts += 1;
             }
             self.profile_shortcut("identity_alias_chain", alias_shortcuts);
-        }
-        if profile_head.is_some() {
-            self.profile_spine_rewrite(args_len - used);
         }
         let node = self.apply_eval_spine_rewrite(root, spine, used, node);
         Ok(Some(self.eval_loop_result(profile_head, node, reductions)))

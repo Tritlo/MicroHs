@@ -155,16 +155,6 @@ fn print_profile(profile: &EvalProfile, top: usize) {
         "profile_arg_materialized_nodes: {}",
         profile.arg_materialized_nodes
     );
-    eprintln!("profile_spine_rewrites: {}", profile.spine_rewrites);
-    eprintln!(
-        "profile_spine_rewrite_extra_args: {}",
-        profile.spine_rewrite_extra_args
-    );
-    eprintln!("profile_app_rewrites: {}", profile.app_rewrites);
-    eprintln!(
-        "profile_app_rewrite_extra_args: {}",
-        profile.app_rewrite_extra_args
-    );
     eprintln!("profile_max_spine_arity: {}", profile.max_spine_arity);
     eprintln!("profile_resolve_calls: {}", profile.resolve_calls);
     eprintln!(
