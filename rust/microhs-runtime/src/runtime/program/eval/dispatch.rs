@@ -33,9 +33,7 @@ impl Program {
             Float64FrameKind::Un { op } => self.push_node(Node::Float64(op.apply(value))),
         };
 
-        if frame.profile_head.is_some() {
-            self.profile_reduction(frame.profile_head, 1);
-        }
+        self.profile_reduction(frame.profile_head, 1);
         let node = self.apply_strict_redex(frame.redex, node)?;
         Ok((node, 1))
     }
@@ -71,9 +69,7 @@ impl Program {
             Float32FrameKind::Un { op } => self.push_node(Node::Float32(op.apply(value))),
         };
 
-        if frame.profile_head.is_some() {
-            self.profile_reduction(frame.profile_head, 1);
-        }
+        self.profile_reduction(frame.profile_head, 1);
         let node = self.apply_strict_redex(frame.redex, node)?;
         Ok((node, 1))
     }
@@ -142,9 +138,7 @@ impl Program {
             BytesFrameKind::BinFirst { op, y } => self.bytes_bin_result_node(op, value, y)?,
         };
 
-        if frame.profile_head.is_some() {
-            self.profile_reduction(frame.profile_head, 1);
-        }
+        self.profile_reduction(frame.profile_head, 1);
         let node = self.apply_strict_redex(frame.redex, node)?;
         Ok((node, 1))
     }

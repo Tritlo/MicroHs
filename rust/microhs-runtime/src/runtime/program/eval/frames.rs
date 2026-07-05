@@ -65,9 +65,7 @@ impl Program {
             }
         };
 
-        if frame.profile_head.is_some() {
-            self.profile_reduction(frame.profile_head, 1);
-        }
+        self.profile_reduction(frame.profile_head, 1);
         let result_node = self.int_result_node(result);
         let node = self.apply_strict_redex(frame.redex, result_node)?;
         Ok((node, 1))
@@ -136,9 +134,7 @@ impl Program {
             }
         };
 
-        if frame.profile_head.is_some() {
-            self.profile_reduction(frame.profile_head, 1);
-        }
+        self.profile_reduction(frame.profile_head, 1);
         let node = self.apply_strict_redex(frame.redex, node)?;
         Ok((node, 1))
     }
@@ -311,9 +307,7 @@ impl Program {
     ) -> Result<(NodeId, usize), EvalError> {
         let node = match frame.kind {
             WhnfFrameKind::Seq { result } => {
-                if frame.profile_head.is_some() {
-                    self.profile_reduction(frame.profile_head, 1);
-                }
+                self.profile_reduction(frame.profile_head, 1);
                 let wrote_indirection = result != frame.redex;
                 if wrote_indirection {
                     self.set_app_cell_at(frame.redex.index(), Cell::indir(Some(result)));
@@ -324,9 +318,7 @@ impl Program {
                 return Ok((result, 1));
             }
             WhnfFrameKind::IoStrict { action, value } => {
-                if frame.profile_head.is_some() {
-                    self.profile_reduction(frame.profile_head, 1);
-                }
+                self.profile_reduction(frame.profile_head, 1);
                 if self.profiling_enabled() {
                     self.profile_stack_app_update(frame.used);
                 }
@@ -340,9 +332,7 @@ impl Program {
             }
         };
 
-        if frame.profile_head.is_some() {
-            self.profile_reduction(frame.profile_head, 1);
-        }
+        self.profile_reduction(frame.profile_head, 1);
         Ok((node, 1))
     }
 
@@ -423,9 +413,7 @@ impl Program {
                         IntResult::Int(n)
                     }
                 };
-                if frame.profile_head.is_some() {
-                    self.profile_reduction(frame.profile_head, 1);
-                }
+                self.profile_reduction(frame.profile_head, 1);
                 let node = self.apply_stack_redex_value(
                     frame.redex,
                     used,
@@ -460,9 +448,7 @@ impl Program {
                         match result {
                             Int64UnResult::Int64(n) => Int64Result::Int64(n),
                             Int64UnResult::Int(n) => {
-                                if frame.profile_head.is_some() {
-                                    self.profile_reduction(frame.profile_head, 1);
-                                }
+                                self.profile_reduction(frame.profile_head, 1);
                                 let node = self.apply_stack_frame_value(
                                     stack,
                                     frame.app_end,
@@ -474,9 +460,7 @@ impl Program {
                         }
                     }
                 };
-                if frame.profile_head.is_some() {
-                    self.profile_reduction(frame.profile_head, 1);
-                }
+                self.profile_reduction(frame.profile_head, 1);
                 let node = self.apply_stack_frame_value(
                     stack,
                     frame.app_end,
@@ -517,9 +501,7 @@ impl Program {
                     Float64FrameKind::BinFirst { op, y } => op.apply(value, y),
                     Float64FrameKind::Un { op } => Float64Result::Float(op.apply(value)),
                 };
-                if frame.profile_head.is_some() {
-                    self.profile_reduction(frame.profile_head, 1);
-                }
+                self.profile_reduction(frame.profile_head, 1);
                 let value = match result {
                     Float64Result::Float(n) => Node::Float64(n),
                     Float64Result::Bool(b) => Self::bool_value_node(b),
@@ -544,9 +526,7 @@ impl Program {
                     Float32FrameKind::BinFirst { op, y } => op.apply(value, y),
                     Float32FrameKind::Un { op } => Float32Result::Float(op.apply(value)),
                 };
-                if frame.profile_head.is_some() {
-                    self.profile_reduction(frame.profile_head, 1);
-                }
+                self.profile_reduction(frame.profile_head, 1);
                 let value = match result {
                     Float32Result::Float(n) => Node::Float32(n),
                     Float32Result::Bool(b) => Self::bool_value_node(b),
@@ -572,16 +552,12 @@ impl Program {
                         self.bytes_bin_result_node(op, current, y)?
                     }
                 };
-                if frame.profile_head.is_some() {
-                    self.profile_reduction(frame.profile_head, 1);
-                }
+                self.profile_reduction(frame.profile_head, 1);
                 let node = self.apply_stack_frame_rewrite(stack, frame.app_end, frame.used, node);
                 (node, 1)
             }
             (StackFrame::Conversion(frame), ReadyFrame::Conversion(value)) => {
-                if frame.profile_head.is_some() {
-                    self.profile_reduction(frame.profile_head, 1);
-                }
+                self.profile_reduction(frame.profile_head, 1);
                 let node = self.apply_stack_frame_value(
                     stack,
                     frame.app_end,
@@ -683,9 +659,7 @@ impl Program {
             }
         };
 
-        if frame.profile_head.is_some() {
-            self.profile_reduction(frame.profile_head, 1);
-        }
+        self.profile_reduction(frame.profile_head, 1);
         let node = self.apply_strict_redex(frame.redex, node)?;
         Ok((node, 1))
     }
@@ -798,9 +772,7 @@ impl Program {
     ) -> Result<(NodeId, usize), EvalError> {
         let node = self.conversion_result_node(frame.kind, value);
 
-        if frame.profile_head.is_some() {
-            self.profile_reduction(frame.profile_head, 1);
-        }
+        self.profile_reduction(frame.profile_head, 1);
         let node = self.apply_strict_redex(frame.redex, node)?;
         Ok((node, 1))
     }

@@ -58,9 +58,7 @@ impl Program {
         }
         macro_rules! finish_reduction {
             ($node:expr, $reductions:expr) => {{
-                if profile_head.is_some() {
-                    self.profile_reduction(profile_head, $reductions);
-                }
+                self.profile_reduction(profile_head, $reductions);
                 return Ok(PersistentStep::Reduced {
                     node: $node,
                     reductions: $reductions,

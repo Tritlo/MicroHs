@@ -63,9 +63,7 @@ impl Program {
             macro_rules! finish_reduction {
                 ($node:expr, $reductions:expr) => {{
                     let reductions = carried_reductions + $reductions;
-                    if profile_head.is_some() {
-                        self.profile_reduction(profile_head, $reductions);
-                    }
+                    self.profile_reduction(profile_head, $reductions);
                     return Ok(StackStep::Reduced {
                         node: $node,
                         reductions,
@@ -81,9 +79,7 @@ impl Program {
             macro_rules! rewrite_continue_reductions {
                 ($used:expr, $node:expr, $reductions:expr) => {{
                     let node = self.apply_stack_rewrite(stack, $used, $node);
-                    if profile_head.is_some() {
-                        self.profile_reduction(profile_head, $reductions);
-                    }
+                    self.profile_reduction(profile_head, $reductions);
                     carried_reductions += $reductions;
                     if carried_reductions >= budget {
                         return Ok(StackStep::Reduced {
@@ -111,9 +107,7 @@ impl Program {
                     if profiling {
                         self.profile_stack_rewrite($used, wrote_indirection);
                     }
-                    if profile_head.is_some() {
-                        self.profile_reduction(profile_head, $reductions);
-                    }
+                    self.profile_reduction(profile_head, $reductions);
                     carried_reductions += $reductions;
                     if carried_reductions >= budget {
                         return Ok(StackStep::Reduced {
@@ -129,9 +123,7 @@ impl Program {
                     let fun = $fun;
                     let arg = $arg;
                     let node = self.apply_stack_app(stack, $used, fun, arg);
-                    if profile_head.is_some() {
-                        self.profile_reduction(profile_head, $reductions);
-                    }
+                    self.profile_reduction(profile_head, $reductions);
                     carried_reductions += $reductions;
                     if carried_reductions >= budget {
                         return Ok(StackStep::Reduced {
@@ -156,9 +148,7 @@ impl Program {
                         self.profile_stack_app_update($used);
                     }
                     self.set_app_cell_at(redex.index(), Cell::app(fun, arg));
-                    if profile_head.is_some() {
-                        self.profile_reduction(profile_head, $reductions);
-                    }
+                    self.profile_reduction(profile_head, $reductions);
                     carried_reductions += $reductions;
                     if carried_reductions >= budget {
                         return Ok(StackStep::Reduced {

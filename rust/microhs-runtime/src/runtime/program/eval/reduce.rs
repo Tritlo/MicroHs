@@ -101,9 +101,7 @@ impl Program {
         node: NodeId,
         reductions: usize,
     ) -> EvalLoopStep {
-        if profile_head.is_some() {
-            self.profile_reduction(profile_head, reductions);
-        }
+        self.profile_reduction(profile_head, reductions);
         EvalLoopStep { node, reductions }
     }
 
