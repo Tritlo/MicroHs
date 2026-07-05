@@ -518,7 +518,9 @@ impl Program {
                 Node::Float32(f32::from_bits(n as u32))
             }
             (ConversionFrameKind::Float32BitsToInt, ConversionValue::Float32(n)) => {
-                Node::Int((n.to_bits() as i32) as i64)
+                // Raw float bits are an unsigned 32-bit word; zero-extend so the sign bit
+                // (-0.0 = 0x8000_0000) survives the Word comparison in isNegZeroFloat32.
+                Node::Int(i64::from(n.to_bits()))
             }
             _ => unreachable!("conversion frame kind and value mismatch"),
         }

@@ -259,7 +259,10 @@ impl Program {
             }
             "fromFlt" => {
                 let n = self.eval_float32(args[0])?;
-                self.int((n.to_bits() as i32) as i64)
+                // Raw float bits are an unsigned 32-bit word; zero-extend to i64 so the
+                // sign bit (e.g. -0.0 = 0x8000_0000) survives the Word comparison in
+                // isNegZeroFloat32. Sign-extending here breaks negative-zero detection.
+                self.int(i64::from(n.to_bits()))
             }
             _ => return Ok(None),
         };
