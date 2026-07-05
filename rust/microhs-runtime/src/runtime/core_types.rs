@@ -443,7 +443,7 @@ pub(in crate::runtime) const IGNORED_IO_SHORTCUT_RECURSION_LIMIT: usize = 256;
 pub(in crate::runtime) const UTF8_ASCII_REFILL: usize = 1024;
 pub(in crate::runtime) const READ_ONLY_MEMORY_VIEW_MIN_LEN: usize = 8;
 #[cfg(not(target_os = "wasi"))]
-pub(in crate::runtime) const GC_NODE_INTERVAL: usize = 32 * 1024 * 1024;
+pub(in crate::runtime) const GC_NODE_INTERVAL: usize = 128 * 1024 * 1024;
 #[cfg(target_os = "wasi")]
 pub(in crate::runtime) const WASI_GC_NODE_INTERVAL: usize = 500_000;
 
