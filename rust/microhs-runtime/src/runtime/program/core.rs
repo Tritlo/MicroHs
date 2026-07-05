@@ -197,6 +197,7 @@ impl Program {
         self.nodes[index] = cell;
     }
 
+    #[inline(always)]
     pub(in crate::runtime) fn set_app_cell_at(&mut self, index: usize, cell: Cell) {
         debug_assert_eq!(self.nodes[index].tag(), CellTag::App);
         self.nodes[index] = cell;
@@ -306,7 +307,7 @@ impl Program {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(in crate::runtime) fn push_app_node(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
         self.gc_allocations_since_collect = self.gc_allocations_since_collect.saturating_add(1);
         let free_index = self.pop_free_node();

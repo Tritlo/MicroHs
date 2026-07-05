@@ -1,6 +1,6 @@
 # MicroHs Rust Matrix
 
-Updated: 2026-07-05
+Updated: 2026-07-06
 
 Working dashboard for the Rust rewrite of the MicroHs C runtime/evaluator. The
 compiler stays in Haskell; Rust consumes and executes compiler-produced `.comb`.
@@ -20,6 +20,7 @@ next rewrite work.
 | runtime scope | Rust replacement for the C runtime/evaluator and host support |
 | node layout | bench prints representation sizes; current default release output is `node_size_bytes=16`, `cell_size_bytes=8`, `node_id_size_bytes=4`, `prim_size_bytes=4`. The authoritative arena is the unconditional packed `Cell { word }`: 4-bit tag, u30 App fun/arg payloads, u30 Indir/Free/Cold payloads, 60-bit small `Int`/`ThreadId`, inline `Float32`, and cold-boxed wide scalars/payloads. `Node` stays the parse/debug facade for cold boxed payloads; no 16-byte cell implementation remains in the Rust runtime |
 | parity state | benchmark and smoke sinks match; Rust self-host compile produces byte-identical output. Current runtime uses unconditional 8-byte cells. Best current-source 128M full self-host gate remains the rev-5 profile cfg-gate/eval-module merge run: `53.636s`, `53.501s`, `53.813s` (median `53.636s`, avg `53.650s`), `3,659,074,926` steps, `31` GCs, median GC pause `8.655s`, high-water `138,068,148` cells, output SHA `29b8c5a55e0952bd25a9a06d5723033e0367ebaf53cfd598fa00f8e65a80d98a`, and `cell_size_bytes=8`. Latest source-organization simplification refresh after splitting `program/values` is byte-identical at `54.639s`, `53.878s`, `53.700s` (median `53.878s`, avg `54.072s`), `3,659,074,907` steps, `31` GCs, median GC pause `8.730s`, high-water `138,068,208`, same SHA, and `cmp=0` for all three; treat it as current-source refresh in the same full-gate band, not a new performance claim. Most recent fairer-memory 80Mi interval median is `55.926s` with high-water `88.15M` 8-byte cells and 49 GCs. Rev-7 measurement-only Rust PGO floor is byte-identical at median `45.473s` for 128M and `49.421s` for 80Mi; do not ship PGO. Fair A.2/A.3 comparison shows C also gains with heap and PGO: same-session C `-O3` default median `46.40s`, C `-O3` at `80,000,000` cells median `43.34s`, C `-O3` at `134,217,728` cells median `40.30s`, C PGO at `80,000,000` cells median `41.16s`, and C PGO at `134,217,728` cells median `38.62s`; fair 80Mi PGO peer is Rust-PGO@80Mi `1.20x` C-PGO@80M, and the 128M floor peer remains Rust-PGO@128M `1.18x` C-PGO@matched-heap, not a Rust win. Older historical gates remain recorded below |
+| latest accepted codegen-churn worktree | uncommitted inline-control bundle (`#[inline(always)]` on hot stack rewrite/app/descent helpers plus app-cell write/allocation helpers) is the new current worktree best: 128M full self-host 3x byte-identical at `51.407s`, `51.504s`, `51.779s` (median `51.504s`, avg `51.564s`), and 80Mi fair-memory 3x byte-identical at `53.668s`, `54.006s`, `53.650s` (median `53.668s`, avg `53.775s`). Still above non-PGO C (`46.40s` default heap), so codegen churn continues |
 
 ## Verification Gates
 
@@ -34,6 +35,7 @@ next rewrite work.
 | common benchmark sinks | latest targeted current refresh matches C sinks on all refreshed rows |
 | rare/smoke benchmark sinks | matching; no longer expanded here |
 | self-host `--help` proxy | sink-comparable with C using `--c-mhsbench-mode main` |
+| latest inline-control full gate | accepted in current uncommitted worktree: bounded 100M/32M A/B was base avg `1747.928ms` vs candidate avg `1647.961ms` (`-5.72%`). Fresh paired 128M full baseline was `55.845513s`; candidate 128M full samples were `51.406961s`, `51.504194s`, `51.779440s` (median `51.504194s`, `-7.77%` vs fresh baseline median point), all with north-star SHA and `cmp=0`. 80Mi fair-memory samples were `53.668268s`, `54.005517s`, `53.650358s` (median `53.668268s`), all with north-star SHA and `cmp=0` |
 | full self-host compile | best current-source 128M full self-host gate after the rev-5 profile cfg-gate and eval-module merge completed byte-identically in three candidate samples: `53.636s`, `53.501s`, `53.813s` (median `53.636s`, avg `53.650s`), `3,659,074,926` steps, `31` GCs, GC pauses `8.655s`, `8.613s`, `8.670s` (median `8.655s`, avg `8.646s`), high-water `138,068,148` cells, sink `661902`, `cell_size_bytes=8`, `cmp=0`, and SHA `29b8c5a55e0952bd25a9a06d5723033e0367ebaf53cfd598fa00f8e65a80d98a`. Paired pre-module-merge baseline from `01c0fe74` was `54.173s`, `53.697s`, `53.647s` (median `53.697s`, avg `53.839s`), so the source-organization merge is neutral/slightly positive in that session (`-0.11%` median). Latest `program/values` source-organization split refresh is `54.639s`, `53.878s`, `53.700s` (median `53.878s`, avg `54.072s`), byte-identical, with `3,659,074,907` steps, `31` GCs, median GC pause `8.730s`, avg GC pause `8.722s`, high-water `138,068,208`, sink `661902`, output size `661,784`, `cmp=0`, and SHA for all three. Fresh C oracle full self-host previously completed in `47.85s`; same-session A.2 GCC O3 default refresh is `46.90s`, `46.40s`, `46.23s` (median `46.40s`) with the same output SHA, A.3 C O3 at the `80,000,000`-cell heap is median `43.34s`, and C O3 at the matched `134,217,728`-cell speed heap is median `40.30s`. Tagged checkpoint remains `self-hosting-binary-match` at `673.8s`; use `timeout 900s` for full gates and profiling while structural/codegen probes can still regress above the smaller window |
 
 | latest benchmark scenario module split gate | `mhs_rust_bench/scenarios.rs` is now a thin root plus `scenarios/{pure,io,ffi,bfile}.rs`; the split keeps scenario generation grouped by benchmark domain instead of one 599-line dispatcher. Verification matched all 50 original size-3 scenario outputs by length/FNV snapshot, and passed `cargo fmt --check`, `cargo check --all-targets`, `cargo check --all-targets --features profile,gc-phase-profile`, `cargo test --lib` 41/41, release `mhs-rust-bench` build, and `git diff --check`. No self-host run: bench-harness input generation only, not runtime/evaluator code. Future runtime/perf self-host measurements during shared-server work should include a same-window C control row beside Rust for noise-control |
@@ -4378,6 +4380,202 @@ This is a no-code audit for the next structural heap step. Current GC can mark r
 | setup | after the performance-neutral simplification commits `65de0aaf`, `c0460495`, and `3755fadc`, rebuilt release `mhs-rust-bench` and ran `MHS_GC_NODE_INTERVAL=134217728`, `MHS_STEP_LIMIT=none`, `timeout 900s`, three full self-host samples. The source changes are feature/test/API-surface cleanup, so this is a same-band refresh rather than a claimed performance checkpoint |
 | 128M interval 3x | byte-identical outputs (`cmp=0`, SHA `29b8c5a55e0952bd25a9a06d5723033e0367ebaf53cfd598fa00f8e65a80d98a`) at `54.534s`, `55.307s`, `55.306s`; median `55.306s`, average `55.049s`. All samples used `3,659,074,736` steps, `31` GCs, high-water `138,068,132` cells, sink `661902`, and `cell_size_bytes=8`. GC pause samples were `8.781s`, `8.878s`, `8.897s`; median `8.878s`, average `8.852s` |
 | reading | Still byte-identical and in the current mid-50s band, but slower than the same-session `53.636s` best. Do not read this as a performance regression from cleanup: no default evaluator/allocator/GC logic changed materially, and prior 3x full gates already showed this level of ambient spread |
+
+## 2026-07-05 Cached Profiling Flag Probe
+
+| item | result |
+|---|---|
+| probe | rejected source-level codegen/simplification wibble: cache `profiling_enabled()` in active stack/fallback reducer locals and use the local flag for profile arg-materialization/fallback-entry sites. The source diff was reverted after measurement |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, `cargo test --manifest-path rust/microhs-runtime/Cargo.toml --lib` (41/41), and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | baseline ms: `1743.398`, `1671.474`, `1762.529`, `1947.797` (avg `1781.300`); candidate ms: `1673.448`, `1739.570`, `1781.869`, `1865.197` (avg `1765.021`, `-0.91%`). All samples used `100,811,779` steps, `3` GCs, sink `661902`, and `cell_size_bytes=8` |
+| reading | Mixed pair direction and sub-1% average are noise for this harness, not a keeper. No full self-host gate was run because the bounded result did not justify keeping the source change |
+
+## 2026-07-05 Reproducible Build-Codegen Bundle
+
+| item | result |
+|---|---|
+| probe | rejected build-level codegen wibbles against the current dirty worktree: FatLTO via `CARGO_PROFILE_RELEASE_LTO=fat`, LLVM inline threshold via `RUSTFLAGS=-Cllvm-args=-inline-threshold=275`, and the FatLTO+inline bundle. No source diff was kept |
+| screen | FatLTO quick/balanced 100M/32M was noise: nearby first row `1675.096ms` vs base `1724.178ms`, then balanced base avg `1765.557ms` vs FatLTO avg `1758.584ms` (`-0.39%`) with crossed pairs. FatLTO+inline was `1699.558ms` on the quick screen and not pursued |
+| inline bounded A/B | inline-threshold looked promising on 100M/32M: base avg `1910.413ms`, candidate avg `1714.605ms` (`-10.25%`), all with `100,807,543` steps, `3` GCs, sink `661902`, and `cell_size_bytes=8` |
+| inline 128M full gate | rejected by the hard gate. Baseline full was byte-identical at `55.575645s`, `3,659,454,876` steps, `31` GCs, `8.825607s` GC, high-water `138,057,544`, SHA `29b8c5a55e0952bd25a9a06d5723033e0367ebaf53cfd598fa00f8e65a80d98a`. Inline-threshold full was byte-identical at `55.600706s` (`+0.05%`), `3,659,454,971` steps, `31` GCs, `8.919098s` GC, high-water `138,057,554`, same SHA and `cmp=0` |
+| reading | This exactly repeats the known trap: a build/codegen knob can look excellent on 100M and vanish at full self-host. Do not ship `-inline-threshold=275`; keep using full self-host as the arbiter for codegen wins |
+
+## 2026-07-05 Stack Cold-Split Probe
+
+| item | result |
+|---|---|
+| probe | rejected source hot/cold split bundle: moved rare `stack_eval_step` `FFI`, `JsCall`, `JsWrap`, and runtime fallback materialization bodies into `#[cold] #[inline(never)]` helpers so the common `KnownPrim` combinator match would be smaller. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1730.523`, `1601.438`, `1659.094`, `1610.828` (avg `1650.471`); candidate ms: `1745.791`, `1693.891`, `1660.310`, `1644.586` (avg `1686.145`, `+2.16%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,778`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Outlining the rare materialization arms made the bounded hot path worse, likely from call/code-layout effects outweighing any I-cache shrink. Do not retry this narrow cold split without a larger dispatcher/body reshaping |
+
+## 2026-07-05 Hot Stack Inline-Control Bundle
+
+| item | result |
+|---|---|
+| probe | accepted source-level codegen bundle: changed hot helper annotations to `#[inline(always)]` for `Program::set_app_cell_at`, `Program::push_app_node`, `apply_stack_rewrite`, `apply_stack_frame_rewrite`, `apply_stack_redex_value`, `apply_stack_app`, and `descend_stack_from`. This targets PGO's inlining win directly without changing reducer logic |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, `cargo test --manifest-path rust/microhs-runtime/Cargo.toml --lib` (41/41), and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1820.460`, `1764.493`, `1627.065`, `1779.692` (avg `1747.928`); candidate ms: `1642.610`, `1840.818`, `1538.797`, `1569.618` (avg `1647.961`, `-5.72%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,784`, sink `661902`, and `cell_size_bytes=8` |
+| 128M full gate | accepted. Fresh baseline was byte-identical at `55.845513s`, `3,659,454,933` steps, `31` GCs, `8.863309s` GC, high-water `138,057,550`, SHA `29b8c5a55e0952bd25a9a06d5723033e0367ebaf53cfd598fa00f8e65a80d98a`. Candidate 3x was byte-identical at `51.406961s`, `51.504194s`, `51.779440s` (median `51.504194s`, avg `51.563532s`), `31` GCs, high-water `138,057,560`/`138,057,564`, sink `661902`, same SHA and `cmp=0` |
+| 80Mi fair-memory gate | candidate 3x was byte-identical at `53.668268s`, `54.005517s`, `53.650358s` (median `53.668268s`, avg `53.774714s`), `3,659,455,047` steps, `50` GCs, high-water `88,207,772`, sink `661902`, same SHA and `cmp=0` |
+| reading | Real keeper: it beats the previous current-source 128M best (`53.636s`) by about `4.0%` and the latest 80Mi fair-memory median (`55.926s`) by about `4.0%`. It still does not beat non-PGO C (`46.40s` default heap), so continue codegen churn from this worktree state |
+
+## 2026-07-05 EvalStack Accessor Inline-Control Probe
+
+| item | result |
+|---|---|
+| probe | rejected sibling inline-control bundle: added `#[inline(always)]` to `EvalStack` app/arg accessors and fixed-arity `take_argsN` methods. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1606.942`, `1749.057`, `1578.102`, `1686.693` (avg `1655.198`); candidate ms: `1666.935`, `1694.745`, `1799.910`, `1638.311` (avg `1699.975`, `+2.71%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,836`, sink `661902`, and `cell_size_bytes=8` |
+| reading | The accepted keeper wants the `Program` stack/app helpers inlined, but forcing the lower-level `EvalStack` accessors over-inlines or perturbs layout enough to lose. Keep this boundary compiler-chosen unless a later bundle changes the stack representation |
+
+## 2026-07-05 Trusted Resolver Inline-Control Probe
+
+| item | result |
+|---|---|
+| probe | rejected inline-control sibling: changed `cell_trusted`, `app_fun_trusted`, `resolve_whnf_trusted`, and `resolve_for_whnf` to `#[inline(always)]`. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1860.568`, `1646.470`, `1521.951`, `1886.195` (avg `1728.796`); candidate ms: `1634.898`, `1750.410`, `1642.937`, `1972.957` (avg `1750.301`, `+1.24%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,836`, sink `661902`, and `cell_size_bytes=8` |
+| reading | No standalone win from forcing resolver/read inlining after the hot-stack helper keeper. Leave these as ordinary `#[inline]`; the remaining gap is not exposed by simply forcing more of the trusted descent path into callers |
+
+## 2026-07-05 Inline-Threshold Retest After Hot-Helper Keeper
+
+| item | result |
+|---|---|
+| probe | rejected build-level retest: rebuilt current accepted hot-helper source with `RUSTFLAGS=-Cllvm-args=-inline-threshold=275` to see whether the accepted inline bundle changed the earlier build-knob result. No source diff |
+| 100M/32M bounded A/B | base ms: `1648.774`, `1557.196`, `1637.945`, `1588.946` (avg `1608.215`); candidate ms: `1836.949`, `1852.534`, `1560.032`, `1547.226` (avg `1699.185`, `+5.66%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,840`, sink `661902`, and `cell_size_bytes=8` |
+| reading | The global inline-threshold knob is even worse after the targeted source inlining keeper. Keep source-local inline decisions; do not ship the LLVM inline-threshold flag |
+
+## 2026-07-05 KnownPrim Dispatch-Order Probe
+
+| item | result |
+|---|---|
+| probe | rejected source layout probe: reordered the main `KnownPrim` rewrite match by old hot-head frequencies (`B`, `C`, `S'`, `C'`, `S`, `C'B`, `P`, `K`, then the rest) while preserving guard order within overlapping primitives. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1559.336`, `1571.774`, `1568.413`, `1598.320`, `1571.595`, `1555.292`, `1558.182`, `1547.115` (avg `1566.253`); candidate ms: `1596.304`, `1544.913`, `1550.161`, `1553.176`, `1564.487`, `1536.746`, `1595.673`, `1591.359` (avg `1566.602`, `+0.022%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,836`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Flat average and mixed pair direction (`5/8` favorable) are noise, not a codegen win. Preserve the original semantic/grouped dispatch order unless a later profile points to a narrower branch-layout change |
+
+## 2026-07-05 Descend Resolver-Loop Split Probe
+
+| item | result |
+|---|---|
+| probe | rejected source code-shape probe: split `descend_stack_from` into separate profiled and trusted resolver loops so the normal `reduce_main` path avoids a per-descent `profile_resolve` branch and `Result` wrapping. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1700.638`, `1549.711`, `1556.464`, `1545.230`, `1707.923`, `1643.936`, `1589.548`, `1612.737` (avg `1613.273`); candidate ms: `1621.024`, `1578.638`, `1602.112`, `1634.857`, `1580.267`, `1568.376`, `1703.422`, `1645.014` (avg `1616.714`, `+0.213%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,784`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Explicitly splitting the resolver branch did not expose the PGO win; the code-size/layout perturbation slightly lost and pair direction was only `3/8` favorable. Keep the compact `resolve_for_whnf` call inside descent |
+
+## 2026-07-05 App Wrapper Inline-Control Probe
+
+| item | result |
+|---|---|
+| probe | rejected source inline-control probe: changed the tiny allocation wrappers `Program::app` and `Program::app_with_site` from `#[inline]` to `#[inline(always)]` so hot `app_site!` calls could always see through the profiling branch into `push_app_node`. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1545.085`, `1622.999`, `1547.079`, `1568.725`, `1540.483`, `1618.986`, `1761.992`, `1659.077` (avg `1608.053`); candidate ms: `1587.667`, `1601.759`, `1628.418`, `1653.943`, `1564.877`, `1572.423`, `1548.397`, `1724.662` (avg `1610.268`, `+0.138%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,778`, sink `661902`, and `cell_size_bytes=8` |
+| reading | The wrappers are already cheap enough for LLVM to handle without forcing. The forced inline version had only `3/8` favorable pairs and no bounded win, so leave these wrappers compiler-chosen |
+
+## 2026-07-05 Frame Value Inline-Control Keeper
+
+| item | result |
+|---|---|
+| probe | accepted source-level codegen probe: changed `Program::apply_stack_frame_value` to `#[inline(always)]`. This small frame-finishing helper was still emitted as an out-of-line symbol in the accepted hot-helper binary; the candidate inlines it into frame completion without forcing the broader resolver path |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, `cargo test --manifest-path rust/microhs-runtime/Cargo.toml --lib` (41/41), candidate release `mhs-rust-bench` build, and `nm -C` confirmed `apply_stack_frame_value` no longer appears as a separate candidate symbol |
+| 100M/32M bounded A/B | base ms: `1920.256`, `1763.187`, `1561.799`, `1636.340`, `1636.418`, `1623.542`, `1599.013`, `1695.423`, `1681.851`, `1624.046`, `1736.773`, `1539.385`, `1520.666`, `1577.011`, `1556.636`, `1562.545` (avg `1639.681`); candidate ms: `1567.913`, `1623.123`, `1554.516`, `1587.407`, `1599.950`, `1555.749`, `1620.603`, `1631.188`, `1677.770`, `1605.730`, `1541.761`, `1535.118`, `1597.677`, `1556.690`, `1571.585`, `1554.963` (avg `1586.359`, `-3.252%`). Pair direction was `13/16` favorable; second half alone stayed favorable at base avg `1599.864` vs candidate avg `1580.162` (`-1.232%`, `6/8` favorable). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,856`/`33,949,858`, sink `661902`, and `cell_size_bytes=8` |
+| 128M full gate | accepted. Same-session baseline was byte-identical at `55.882618s`, `53.201803s`, `52.327634s` (median `53.201803s`, avg `53.804018s`), `31` GCs, high-water `138,057,558`/`138,057,562`, SHA `29b8c5a55e0952bd25a9a06d5723033e0367ebaf53cfd598fa00f8e65a80d98a`. Candidate 3x was byte-identical at `51.484784s`, `51.017860s`, `51.247058s` (median `51.247058s`, avg `51.249901s`, `-3.674%` median vs same-session baseline), `3,659,455,142` steps, `31` GCs, high-water `138,057,572`, sink `661902`, same SHA and `cmp=0` |
+| 80Mi fair-memory gate | same-session baseline was byte-identical at `54.571074s`, `55.134585s`, `54.122945s` (median `54.571074s`, avg `54.609535s`), `3,659,455,028` steps, `50` GCs, high-water `88,207,753`, same SHA. Candidate 3x was byte-identical at `53.735463s`, `54.315319s`, `54.484259s` (median `54.315319s`, avg `54.178347s`, `-0.469%` median), `3,659,455,123` steps, `50` GCs, high-water `88,207,735`, sink `661902`, same SHA and `cmp=0` |
+| reading | Keeper: unlike the broader resolver/accessor inlining probes, this one removes a small still-out-of-line frame-value helper and survives both full gates. It improves the current 128M speed gate but still leaves Rust well above non-PGO C default (`46.40s`), so continue codegen churn |
+
+## 2026-07-05 Finish-WHNF Frame Inline-Control Probe
+
+| item | result |
+|---|---|
+| probe | rejected source inline-control probe after the frame-value keeper: changed `Program::finish_whnf_stack_frame` to `#[inline(always)]` so the outer WHNF driver could see through the frame-pop/finish boundary. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1653.532`, `1528.960`, `1540.230`, `1588.316`, `1542.450`, `1542.852`, `1534.841`, `1515.181` (avg `1555.795`); candidate ms: `1591.988`, `1543.627`, `1629.755`, `1564.703`, `1554.472`, `1529.097`, `1607.395`, `1549.475` (avg `1571.314`, `+0.997%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,856`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Inlining the medium WHNF frame dispatcher bloats or perturbs the outer driver enough to lose; only `3/8` pairs were favorable. Keep `apply_stack_frame_value` inlined, but leave the larger frame-pop boundary out of line |
+
+## 2026-07-05 Resolve Wrapper Inline-Control Probe
+
+| item | result |
+|---|---|
+| probe | rejected narrow resolver inline-control probe after the frame-value keeper: changed only `Program::resolve_for_whnf` to `#[inline(always)]`, without forcing `cell_trusted`, `app_fun_trusted`, or `resolve_whnf_trusted`. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1665.012`, `1587.911`, `1536.247`, `1516.003`, `1539.869`, `1531.707`, `1526.656`, `1543.239` (avg `1555.830`); candidate ms: `1605.111`, `1746.007`, `1566.072`, `1620.214`, `1548.335`, `1552.345`, `1558.442`, `1535.284` (avg `1591.476`, `+2.291%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,864`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Even the narrow resolver wrapper inline loses after the frame-value keeper, with only `2/8` favorable pairs. Leave resolver inlining compiler-chosen; do not retry this path without a different representation change |
+
+## 2026-07-05 Fallback Eval Loop Cold-Layout Probe
+
+| item | result |
+|---|---|
+| probe | rejected source layout probe: marked the large out-of-line fallback reducer `Program::eval_loop_step` as `#[cold] #[inline(never)]` to see whether branch/layout hints around rare fallback entry helped the stack fast path. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1593.598`, `1540.194`, `1538.139`, `1568.268`, `1546.763`, `1528.374`, `1553.923`, `1532.077`, `1698.924`, `1527.718`, `1556.789`, `1528.557`, `1546.995`, `1571.533`, `1524.696`, `1555.349` (avg `1556.994`); candidate ms: `1551.240`, `1536.920`, `1544.018`, `1537.772`, `1518.668`, `1529.145`, `1597.747`, `1528.623`, `1544.879`, `1545.687`, `1587.692`, `1561.795`, `1580.718`, `1542.314`, `1583.146`, `1610.369` (avg `1556.296`, `-0.045%`). Pair direction was `7/16` favorable; the second half regressed at base avg `1563.820` vs candidate avg `1569.575` (`+0.368%`, `2/8` favorable) |
+| reading | Cold-marking the fallback reducer is not a keeper. The combined average is flat and the extension rejects it, so layout hints at this coarse boundary do not explain the remaining PGO/default gap |
+
+## 2026-07-05 App-Value Setter Inline-Control Probe
+
+| item | result |
+|---|---|
+| probe | rejected source inline-control probe: changed `Program::set_app_node_at` to `#[inline(always)]` after the frame-value keeper, trying to let value-frame and redex-value rewrites specialize the `Cell::from_node` conversion at call sites. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | 24-pair extended screen: base avg `1614.896ms`, candidate avg `1605.482ms` (`-0.583%`), but only `10/24` pairs were favorable. The first 16 pairs averaged base `1639.012ms` vs candidate `1607.198ms` (`-1.941%`, `8/16` favorable), then the final 8 pairs rejected the probe at base avg `1566.665ms` vs candidate avg `1602.049ms` (`+2.259%`, `2/8` favorable). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,856`/`33,949,858`, sink `661902`, and `cell_size_bytes=8` |
+| reading | The apparent average win depended on slow baseline outliers and did not survive the extension. Keep `apply_stack_frame_value` inlined, but leave the lower-level `set_app_node_at` helper compiler-chosen |
+
+## 2026-07-05 Cell Int Value Inline-Control Probe
+
+| item | result |
+|---|---|
+| probe | rejected narrow accessor inline-control probe after the frame-value keeper: changed only `Program::cell_int_value` to `#[inline(always)]` to see whether strict integer frames and immediate integer primitive paths benefited from call-site specialization. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1592.369`, `1556.297`, `1531.004`, `1555.399`, `1547.157`, `1548.650`, `1575.255`, `1546.823` (avg `1556.619`); candidate ms: `1641.718`, `1665.714`, `1571.967`, `1575.690`, `1641.022`, `1605.393`, `1618.300`, `1577.045` (avg `1612.106`, `+3.565%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,836`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Clear reject: `0/8` favorable. Like the broader accessor/resolver probes, forcing lower-level cell reads bloats or perturbs the hot code; keep these helpers ordinary `#[inline]` |
+
+## 2026-07-06 Frame Completion Cold-Layout Bundle
+
+| item | result |
+|---|---|
+| probe | accepted source layout bundle: kept the `apply_stack_frame_value` keeper, then marked both frame-completion dispatchers `Program::finish_ready_stack_frame` and `Program::finish_whnf_stack_frame` as `#[cold] #[inline(never)]`. This treats frame completion as a side path from the hot stack reducer without inlining the medium WHNF dispatcher |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, `cargo test --manifest-path rust/microhs-runtime/Cargo.toml --lib` (41/41), and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1711.199`, `1547.549`, `1547.534`, `1555.025`, `1556.535`, `1596.280`, `1550.936`, `2009.266`, `1614.757`, `1551.934`, `1567.464`, `1537.580`, `1591.483`, `1568.029`, `1611.353`, `1567.137` (avg `1605.254`); candidate ms: `1559.047`, `1577.886`, `1562.143`, `1549.792`, `1542.319`, `1572.360`, `1542.055`, `1526.002`, `1522.538`, `1526.967`, `1559.246`, `1545.206`, `1591.611`, `1516.558`, `1513.997`, `1551.211` (avg `1547.434`, `-3.602%`). Pair direction was `12/16` favorable; second half alone stayed favorable at base avg `1576.217` vs candidate avg `1540.917` (`-2.240%`, `6/8` favorable). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,840`/`33,949,856`, sink `661902`, and `cell_size_bytes=8` |
+| 128M full gate | accepted. Same-session baseline was byte-identical at `51.233259s`, `51.186869s`, `50.641603s` (median `51.186869s`, avg `51.020577s`), `3,659,454,895` steps, `31` GCs, high-water `138,057,546`, SHA `29b8c5a55e0952bd25a9a06d5723033e0367ebaf53cfd598fa00f8e65a80d98a`. Candidate 3x was byte-identical at `49.917325s`, `50.111951s`, `50.038950s` (median `50.038950s`, avg `50.022742s`, `-2.243%` median vs same-session baseline), same steps/GCs/high-water/sink, same SHA and `cmp=0` |
+| 80Mi fair-memory gate | same-session baseline was byte-identical at `53.876516s`, `54.674004s`, `53.817361s` (median `53.876516s`, avg `54.122627s`), `3,659,454,876` steps, `50` GCs, high-water `88,207,717`, same SHA. Candidate 3x was byte-identical at `52.718458s`, `52.811665s`, `52.822633s` (median `52.811665s`, avg `52.784252s`, `-1.976%` median), same steps/GCs/high-water/sink, same SHA and `cmp=0` |
+| reading | Keeper: unlike inlining the WHNF dispatcher, cold/out-of-line layout for the two frame-completion dispatchers survives both full gates. Current Rust default is now around `50.04s` at 128M and `52.81s` at 80Mi, still above non-PGO C default (`46.40s`), so keep churning |
+
+## 2026-07-06 Rethread Segment Cold-Layout Probe
+
+| item | result |
+|---|---|
+| probe | rejected adjacent cold-layout probe after the frame-completion keeper: marked `Program::rethread_stack_app_segment` as `#[cold] #[inline(never)]`, trying to move stack rethread repair out of the hot layout near WHNF/fallback frame return. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1589.603`, `1747.486`, `1497.133`, `1497.095`, `1512.937`, `1501.213`, `1520.981`, `1520.779` (avg `1548.403`); candidate ms: `1519.551`, `1536.965`, `1542.521`, `1545.813`, `1580.646`, `1493.653`, `1548.950`, `1531.998` (avg `1537.512`, `-0.703%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,784`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Reject despite the apparent average: only `3/8` pairs were favorable and the average depended on a slow baseline outlier. The frame-completion cold bundle is useful, but pushing adjacent rethread repair cold does not show a stable bounded win |
+
+## 2026-07-06 Current-Source PGO Oracle Refresh
+
+| item | result |
+|---|---|
+| setup | measurement-only PGO oracle after the frame-completion cold-layout keeper. Ran `rust/microhs-runtime/tools/native/build-selfhost-pgo.sh` with `MHS_PGO_DIR=/tmp/mhs-rust-pgo-framecold-20260706`, `MHS_GC_NODE_INTERVAL=134217728`, and `MHS_PGO_TRAIN_TIMEOUT=900s`; the PGO-use binary was `/tmp/mhs-rust-pgo-framecold-20260706/use/release/mhs-rust-bench`. This does not change source or release defaults |
+| training run | instrumented 128M full self-host completed byte-identically at `87.603342s`, `3,659,454,933` steps, `31` GCs, `10.678012s` GC pause, high-water `138,057,550`, sink `661902`, SHA `29b8c5a55e0952bd25a9a06d5723033e0367ebaf53cfd598fa00f8e65a80d98a` |
+| PGO 128M default 3x | byte-identical outputs at `49.565508s`, `49.158916s`, `49.511570s` (median `49.511570s`, avg `49.411998s`), `3,659,454,990` steps, `31` GCs, high-water `138,057,556`, sink `661902`, same SHA and `cmp=0` |
+| PGO 80Mi fair 3x | byte-identical outputs at `52.004879s`, `52.480572s`, `52.321845s` (median `52.321845s`, avg `52.269099s`), `3,659,454,971` steps, `50` GCs, high-water `88,207,740`, sink `661902`, same SHA and `cmp=0` |
+| reading | The source-level codegen keepers have collapsed most of the old Rust-default-vs-Rust-PGO gap: current default is about `50.04s` at 128M and `52.81s` at 80Mi versus PGO `49.51s` and `52.32s`. PGO is now only a small remaining oracle, and neither default nor PGO beats non-PGO C default (`46.40s`), so further progress likely needs a new source shape rather than more one-off PGO mimicry |
+
+## 2026-07-06 Strict Action Cold-Outline Probe
+
+| item | result |
+|---|---|
+| probe | rejected source layout probe after the frame-completion keeper: changed `RuntimePrim::strict_action` from `#[inline(always)]` to `#[cold] #[inline(never)]`, trying to shrink the hot stack evaluator by moving runtime strict-primitive classification out of line. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1779.985`, `1570.952`, `1694.749`, `1505.724`, `1561.738`, `1629.207`, `1721.892`, `1528.290` (avg `1624.067`); candidate ms: `1645.335`, `1846.012`, `1684.439`, `1683.314`, `1787.576`, `1723.056`, `1780.605`, `1746.596` (avg `1737.117`, `+6.961%`). Pair direction was only `2/8` favorable. All samples used `100,807,543` steps, `3` GCs, high-water `33,949,856`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Clear reject: unlike the older non-cold noinline probe, adding `#[cold]` makes the bounded slice decisively worse. Runtime strict-action classification stays inline; the remaining gap is not exposed by pushing this table/range classifier out of the hot body |
+
+## 2026-07-06 EvalStack Frame-Push Inline Probe
+
+| item | result |
+|---|---|
+| probe | rejected narrow inline-control bundle after the frame-completion keeper: added `#[inline(always)]` to `EvalStack::push_whnf_frame`, `push_int_frame`, `push_int64_frame`, `push_int64_shift_frame`, `push_float64_frame`, `push_float32_frame`, `push_bytes_frame`, and `push_conversion_frame`, trying to remove the still-out-of-line strict-frame push boundary without touching app/arg/take-args accessors. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed. `nm -C --size-sort` confirmed the frame-push helpers disappeared as standalone candidate symbols; `stack_eval_step` changed from `0xc1c8` to `0xc144`, while `finish_ready_stack_frame` grew from `0x156b` to `0x1699` |
+| 100M/32M bounded A/B | base ms: `1795.571`, `1577.521`, `1625.540`, `1557.112`, `1631.175`, `1535.169`, `1553.236`, `1533.640` (avg `1601.120`); candidate ms: `1634.358`, `1613.738`, `1599.540`, `1570.290`, `1630.582`, `1640.128`, `1586.144`, `1559.852` (avg `1604.329`, `+0.200%`). Pair direction was only `3/8` favorable. All samples used `100,807,543` steps, `3` GCs, high-water `33,949,840`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Reject: the symbol shape changed, but the bounded signal is flat-to-negative and depends on the first slow baseline to look interesting. Keep the frame push helpers compiler-chosen; do not combine this with the rejected accessor inline bundle without new evidence |
 
 ## Active Tradeoffs
 

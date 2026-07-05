@@ -54,6 +54,7 @@ impl Program {
             .ok_or_else(|| EvalError::DanglingIndirection(NodeId::from_index(index)))
     }
 
+    #[inline(always)]
     pub(in crate::runtime) fn apply_stack_rewrite(
         &mut self,
         stack: &mut EvalStack,
@@ -67,6 +68,7 @@ impl Program {
         self.apply_stack_frame_rewrite(stack, app_end, used, node)
     }
 
+    #[inline(always)]
     pub(in crate::runtime) fn apply_stack_frame_rewrite(
         &mut self,
         stack: &mut EvalStack,
@@ -89,6 +91,7 @@ impl Program {
         node
     }
 
+    #[inline(always)]
     pub(in crate::runtime) fn apply_stack_frame_value(
         &mut self,
         stack: &mut EvalStack,
@@ -108,6 +111,7 @@ impl Program {
         redex
     }
 
+    #[inline(always)]
     pub(in crate::runtime) fn apply_stack_redex_value(
         &mut self,
         redex: NodeId,
@@ -121,6 +125,7 @@ impl Program {
         redex
     }
 
+    #[inline(always)]
     pub(in crate::runtime) fn apply_stack_app(
         &mut self,
         stack: &mut EvalStack,
@@ -164,6 +169,7 @@ impl Program {
 
     /// Follow `App` links from `current`, pushing each application node onto the
     /// active spine until a non-application head is reached.
+    #[inline(always)]
     pub(in crate::runtime) fn descend_stack_from(
         &mut self,
         mut current: NodeId,
@@ -219,6 +225,8 @@ impl Program {
         Ok((node, 1))
     }
 
+    #[cold]
+    #[inline(never)]
     pub(in crate::runtime) fn finish_ready_stack_frame(
         &mut self,
         stack: &mut EvalStack,
@@ -454,6 +462,8 @@ impl Program {
         Ok(Some(result))
     }
 
+    #[cold]
+    #[inline(never)]
     pub(in crate::runtime) fn finish_whnf_stack_frame(
         &mut self,
         stack: &mut EvalStack,
