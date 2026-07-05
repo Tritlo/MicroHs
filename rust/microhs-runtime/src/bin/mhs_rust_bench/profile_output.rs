@@ -140,10 +140,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
         profile.profile.stack_app_update_apps
     );
     println!(
-        "profile_stack_app_update_allocations: {}",
-        profile.profile.stack_app_update_allocations
-    );
-    println!(
         "profile_stack_rethreads: {}",
         profile.profile.stack_rethreads
     );
@@ -256,10 +252,6 @@ fn print_phase_profile(profile: &ProfileBench, top: usize) {
     println!(
         "profile_stack_step_reduced: {}",
         profile.profile.stack_step_reduced
-    );
-    println!(
-        "profile_stack_step_force: {}",
-        profile.profile.stack_step_force
     );
     println!(
         "profile_stack_step_whnf: {}",
