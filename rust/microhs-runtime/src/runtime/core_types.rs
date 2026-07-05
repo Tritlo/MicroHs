@@ -726,6 +726,7 @@ pub struct Program {
     pub(in crate::runtime) compound_cache: CompoundCache,
     pub(in crate::runtime) small_ints: [Option<NodeId>; SMALL_INT_COUNT],
     pub(in crate::runtime) world: Option<NodeId>,
+    #[cfg(feature = "profile")]
     pub(in crate::runtime) profile: Option<EvalProfile>,
     pub(in crate::runtime) reduce_depth: usize,
 }

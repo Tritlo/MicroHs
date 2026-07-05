@@ -1,7 +1,13 @@
 //! Program-side hooks for evaluation and GC profiling counters.
 use super::*;
 
+#[cfg(feature = "profile")]
 impl Program {
+    #[inline]
+    pub(in crate::runtime) fn profiling_enabled(&self) -> bool {
+        self.profile.is_some()
+    }
+
     #[cold]
     pub(in crate::runtime) fn profile_head_key(&self, head: NodeId) -> String {
         match self.node_for_debug(head) {
@@ -66,12 +72,12 @@ impl Program {
             }
         }
         profile.max_spine_arity = profile.max_spine_arity.max(arity);
-        Some(head)
+        ProfileHead::from_node(head)
     }
 
     #[cold]
     pub(in crate::runtime) fn profile_reduction(&mut self, head: ProfileHead, reductions: usize) {
-        let Some(head) = head else {
+        let Some(head) = head.node() else {
             return;
         };
         let key = self.profile_head_key(head);
@@ -91,7 +97,7 @@ impl Program {
         next: NodeId,
         arity: usize,
     ) {
-        let Some(from) = from else {
+        let Some(from) = from.node() else {
             return;
         };
         let from_key = self.profile_head_key(from);
@@ -292,7 +298,7 @@ impl Program {
 
     #[cold]
     pub(in crate::runtime) fn profile_stack_fallback_head(&mut self, head: NodeId) {
-        if self.profile.is_some() {
+        if self.profiling_enabled() {
             let key = self.profile_head_key(head);
             if let Some(profile) = self.profile.as_mut() {
                 *profile.stack_fallback_heads.entry(key).or_insert(0) += 1;
@@ -317,4 +323,65 @@ impl Program {
                 .or_default() += 1;
         }
     }
+}
+
+#[cfg(not(feature = "profile"))]
+impl Program {
+    #[inline]
+    pub(in crate::runtime) fn profiling_enabled(&self) -> bool {
+        false
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn profile_step(&mut self, _head: NodeId, _arity: usize) -> ProfileHead {
+        ProfileHead::none()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn profile_reduction(&mut self, _head: ProfileHead, _reductions: usize) {
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn profile_resolve_chain(&mut self, _depth: usize) {}
+
+    #[inline]
+    pub(in crate::runtime) fn profile_shortcut(&mut self, _key: &'static str, _count: usize) {}
+
+    #[inline]
+    pub(in crate::runtime) fn profile_arg_materialization(&mut self, _nodes: usize) {}
+
+    #[inline]
+    pub(in crate::runtime) fn profile_stack_rewrite(
+        &mut self,
+        _used: usize,
+        _wrote_indirection: bool,
+    ) {
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn profile_stack_app_update(&mut self, _used: usize) {}
+
+    #[inline]
+    pub(in crate::runtime) fn profile_stack_descent_push(&mut self) {}
+
+    #[inline]
+    pub(in crate::runtime) fn profile_stack_arg_reads(&mut self, _reads: usize) {}
+
+    #[inline]
+    pub(in crate::runtime) fn profile_stack_arg_batch(&mut self) {}
+
+    #[inline]
+    pub(in crate::runtime) fn profile_persistent_force(&mut self) {}
+
+    #[inline]
+    pub(in crate::runtime) fn profile_persistent_fallback(&mut self) {}
+
+    #[inline]
+    pub(in crate::runtime) fn profile_stack_fallback_head(&mut self, _head: NodeId) {}
+
+    #[inline]
+    pub(in crate::runtime) fn profile_fallback_eval_loop_step(&mut self) {}
+
+    #[inline]
+    pub(in crate::runtime) fn profile_eval_frame_push(&mut self, _kind: &'static str) {}
 }

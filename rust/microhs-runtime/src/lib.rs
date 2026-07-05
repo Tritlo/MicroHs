@@ -4,6 +4,6 @@ pub mod runtime;
 mod wasm;
 
 pub use parse::{ParseError, parse_program};
-pub use runtime::{
-    EvalError, EvalProfile, GcStats, KnownPrim, Node, NodeId, Prim, Program, cell_size_bytes,
-};
+#[cfg(feature = "profile")]
+pub use runtime::EvalProfile;
+pub use runtime::{EvalError, GcStats, KnownPrim, Node, NodeId, Prim, Program, cell_size_bytes};

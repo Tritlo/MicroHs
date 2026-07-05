@@ -6,9 +6,9 @@ mod tests {
     use crate::runtime::{
         BFile, BFileKind, BytesBinOp, BytesFrame, BytesFrameKind, EvalFrame, EvalFrameStack,
         EvalSpine, EvalStack, FORCE_REDUCTION_LIMIT, IGNORED_IO_SHORTCUT_RECURSION_LIMIT, MpzValue,
-        PersistentSpine, StackFrame, StackWhnfFrame, StrictRedex, WeakNode, WhnfFrameKind,
-        bwt_decode, bwt_encode, lz77_compress, lz77_decompress, lzma_compress_payload,
-        lzma_decompress_payload, serialize_bytes_quoted,
+        PersistentSpine, ProfileHead, StackFrame, StackWhnfFrame, StrictRedex, WeakNode,
+        WhnfFrameKind, bwt_decode, bwt_encode, lz77_compress, lz77_decompress,
+        lzma_compress_payload, lzma_decompress_payload, serialize_bytes_quoted,
     };
     use crate::{EvalError, KnownPrim, Node, NodeId, ParseError, Prim, Program, parse_program};
 
@@ -40,6 +40,18 @@ mod tests {
 
         fn shifted(id: NodeId) -> NodeId {
             NodeId::from_index(id.index() + 1000)
+        }
+
+        fn profile_head(id: NodeId) -> ProfileHead {
+            #[cfg(feature = "profile")]
+            {
+                ProfileHead::from_node(id)
+            }
+            #[cfg(not(feature = "profile"))]
+            {
+                let _ = id;
+                ProfileHead::none()
+            }
         }
 
         let mut labels = HashMap::new();
@@ -92,7 +104,7 @@ mod tests {
                 used: 1,
                 apps: vec![id(26)],
             },
-            profile_head: Some(id(27)),
+            profile_head: profile_head(id(27)),
             kind: BytesFrameKind::BinFirst {
                 op: BytesBinOp::Append,
                 y: id(28),
@@ -110,7 +122,7 @@ mod tests {
             prev_app_base: 0,
             redex: id(36),
             used: 0,
-            profile_head: Some(id(37)),
+            profile_head: profile_head(id(37)),
             kind: WhnfFrameKind::IoStrict {
                 action: id(38),
                 value: id(39),
@@ -190,7 +202,10 @@ mod tests {
                     }
                     StrictRedex::Root(_) => panic!("expected spine redex"),
                 }
-                assert_eq!(frame.profile_head, Some(shifted(id(27))));
+                #[cfg(feature = "profile")]
+                assert_eq!(frame.profile_head.node(), Some(shifted(id(27))));
+                #[cfg(not(feature = "profile"))]
+                assert!(!frame.profile_head.is_some());
                 match &frame.kind {
                     BytesFrameKind::BinFirst { y, .. } => assert_eq!(*y, shifted(id(28))),
                     BytesFrameKind::BinSecond { .. } => panic!("expected BinFirst"),
@@ -207,7 +222,10 @@ mod tests {
         match &machine_stack.frames[0] {
             StackFrame::Whnf(frame) => {
                 assert_eq!(frame.redex, shifted(id(36)));
-                assert_eq!(frame.profile_head, Some(shifted(id(37))));
+                #[cfg(feature = "profile")]
+                assert_eq!(frame.profile_head.node(), Some(shifted(id(37))));
+                #[cfg(not(feature = "profile"))]
+                assert!(!frame.profile_head.is_some());
                 match &frame.kind {
                     WhnfFrameKind::IoStrict { action, value } => {
                         assert_eq!(*action, shifted(id(38)));

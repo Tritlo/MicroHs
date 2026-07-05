@@ -44,7 +44,7 @@ impl Program {
         &mut self,
         mut id: NodeId,
     ) -> Result<NodeId, EvalError> {
-        if self.profile.is_none() {
+        if !self.profiling_enabled() {
             return self.resolve(id);
         }
 

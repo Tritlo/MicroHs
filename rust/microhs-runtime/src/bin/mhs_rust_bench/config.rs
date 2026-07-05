@@ -1,7 +1,10 @@
 use super::c_compare::bench_c_mhsbench;
 use super::metrics::{mib_per_s, millis, nanos_millis, nanos_per_iter, print_gc_events};
+#[cfg(feature = "profile")]
 use super::profile_output::print_profile;
-use super::runner::{bench_eval, bench_parse, profile_eval};
+#[cfg(feature = "profile")]
+use super::runner::profile_eval;
+use super::runner::{bench_eval, bench_parse};
 use super::scenarios::make_scenario;
 use super::*;
 
@@ -68,6 +71,12 @@ pub(super) fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    #[cfg(not(feature = "profile"))]
+    if config.profile {
+        let _ = config.profile_top;
+        eprintln!("--profile requires rebuilding mhs-rust-bench with --features profile");
+        return ExitCode::from(2);
+    }
 
     let parse = bench_parse(&config.input, config.warmup_iters, config.iters);
     let eval = bench_eval(
@@ -163,14 +172,17 @@ pub(super) fn main() -> ExitCode {
     print_gc_events("gc_events", &eval.gc);
 
     if config.profile {
-        let profile = profile_eval(
-            &config.input,
-            config.mode,
-            &config.program_args,
-            config.executable_path.as_deref(),
-            config.step_limit,
-        );
-        print_profile(&profile, config.profile_top);
+        #[cfg(feature = "profile")]
+        {
+            let profile = profile_eval(
+                &config.input,
+                config.mode,
+                &config.program_args,
+                config.executable_path.as_deref(),
+                config.step_limit,
+            );
+            print_profile(&profile, config.profile_top);
+        }
     }
 
     if let Some(c_mhsbench) = &config.c_mhsbench {

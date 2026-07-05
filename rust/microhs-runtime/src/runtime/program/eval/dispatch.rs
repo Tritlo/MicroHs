@@ -23,7 +23,7 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: Float64FrameKind::BinFirst { op, y: value },
                 };
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_eval_frame_push("Float64");
                 }
                 stack.push(EvalFrame::Float64(next_frame));
@@ -61,7 +61,7 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: Float32FrameKind::BinFirst { op, y: value },
                 };
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_eval_frame_push("Float32");
                 }
                 stack.push(EvalFrame::Float32(next_frame));
@@ -133,7 +133,7 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: BytesFrameKind::BinFirst { op, y: value },
                 };
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_eval_frame_push("Bytes");
                 }
                 stack.push(EvalFrame::Bytes(next_frame));

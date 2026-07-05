@@ -1,6 +1,8 @@
 //! Runtime facade and internal module tree for MicroHs comb evaluation.
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+#[cfg(feature = "profile")]
+use std::collections::BTreeMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::mem::{MaybeUninit, size_of};
 #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
@@ -48,7 +50,9 @@ pub use self::core_types::{EvalError, JsCallNode, Node, Program};
 pub(crate) use self::host::JsValue;
 pub(crate) use self::ops::is_runtime_prim_name;
 pub use self::prims::{KnownPrim, NodeId, Prim};
-pub use self::profile::{EvalProfile, GcStats};
+#[cfg(feature = "profile")]
+pub use self::profile::EvalProfile;
+pub use self::profile::GcStats;
 
 pub fn cell_size_bytes() -> usize {
     size_of::<Cell>()

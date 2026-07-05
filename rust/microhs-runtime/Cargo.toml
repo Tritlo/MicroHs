@@ -6,7 +6,8 @@ license = "BSD-3-Clause"
 
 [features]
 default = []
-eval-phase-profile = []
+profile = []
+eval-phase-profile = ["profile"]
 gc-phase-profile = []
 moving-gc = []
 

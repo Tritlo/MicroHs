@@ -33,6 +33,7 @@ pub(super) struct EvalBench {
     pub(super) gc: GcStats,
 }
 
+#[cfg(feature = "profile")]
 pub(super) struct ProfileBench {
     pub(super) elapsed: Duration,
     pub(super) steps: usize,
@@ -162,6 +163,7 @@ fn eval_once(
     run
 }
 
+#[cfg(feature = "profile")]
 pub(super) fn profile_eval(
     input: &[u8],
     mode: BenchMode,

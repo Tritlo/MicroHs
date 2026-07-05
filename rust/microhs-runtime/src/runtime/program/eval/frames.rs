@@ -48,7 +48,7 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: IntFrameKind::BinFirst { op, y: value },
                 };
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_eval_frame_push("Int");
                 }
                 stack.push(EvalFrame::Int(next_frame));
@@ -110,7 +110,7 @@ impl Program {
                     profile_head: frame.profile_head,
                     kind: Int64FrameKind::BinFirst { op, y: value },
                 };
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_eval_frame_push("Int64");
                 }
                 stack.push(EvalFrame::Int64(next_frame));
@@ -197,7 +197,7 @@ impl Program {
         node: NodeId,
     ) -> NodeId {
         #[cfg(feature = "eval-phase-profile")]
-        let started = self.profile.is_some().then(Instant::now);
+        let started = self.profiling_enabled().then(Instant::now);
         debug_assert!(used > 0);
         debug_assert!(used <= app_end);
         let redex_index = app_end - used;
@@ -206,7 +206,7 @@ impl Program {
         if wrote_indirection {
             self.set_app_cell_at(redex.index(), Cell::indir(Some(node)));
         }
-        if self.profile.is_some() {
+        if self.profiling_enabled() {
             self.profile_stack_rewrite(used, wrote_indirection);
         }
         stack.apps.truncate(redex_index);
@@ -225,13 +225,13 @@ impl Program {
         value: Node,
     ) -> NodeId {
         #[cfg(feature = "eval-phase-profile")]
-        let started = self.profile.is_some().then(Instant::now);
+        let started = self.profiling_enabled().then(Instant::now);
         debug_assert!(used > 0);
         debug_assert!(used <= app_end);
         let redex_index = app_end - used;
         let redex = stack.app_unchecked(redex_index);
         self.set_app_node_at(redex.index(), value);
-        if self.profile.is_some() {
+        if self.profiling_enabled() {
             self.profile_stack_rewrite(used, false);
         }
         stack.apps.truncate(redex_index);
@@ -249,9 +249,9 @@ impl Program {
         value: Node,
     ) -> NodeId {
         #[cfg(feature = "eval-phase-profile")]
-        let started = self.profile.is_some().then(Instant::now);
+        let started = self.profiling_enabled().then(Instant::now);
         self.set_app_node_at(redex.index(), value);
-        if self.profile.is_some() {
+        if self.profiling_enabled() {
             self.profile_stack_rewrite(used, false);
         }
         #[cfg(feature = "eval-phase-profile")]
@@ -269,8 +269,8 @@ impl Program {
         arg: NodeId,
     ) -> NodeId {
         #[cfg(feature = "eval-phase-profile")]
-        let started = self.profile.is_some().then(Instant::now);
-        if self.profile.is_some() {
+        let started = self.profiling_enabled().then(Instant::now);
+        if self.profiling_enabled() {
             self.profile_stack_app_update(used);
         }
         let node = if used == 0 {
@@ -339,12 +339,12 @@ impl Program {
                     self.profile_reduction(frame.profile_head, 1);
                 }
                 #[cfg(feature = "eval-phase-profile")]
-                let started = self.profile.is_some().then(Instant::now);
+                let started = self.profiling_enabled().then(Instant::now);
                 let wrote_indirection = result != frame.redex;
                 if wrote_indirection {
                     self.set_app_cell_at(frame.redex.index(), Cell::indir(Some(result)));
                 }
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_stack_rewrite(frame.used, wrote_indirection);
                 }
                 #[cfg(feature = "eval-phase-profile")]
@@ -358,8 +358,8 @@ impl Program {
                     self.profile_reduction(frame.profile_head, 1);
                 }
                 #[cfg(feature = "eval-phase-profile")]
-                let started = self.profile.is_some().then(Instant::now);
-                if self.profile.is_some() {
+                let started = self.profiling_enabled().then(Instant::now);
+                if self.profiling_enabled() {
                     self.profile_stack_app_update(frame.used);
                 }
                 self.set_app_cell_at(frame.redex.index(), Cell::app(action, value));
@@ -444,7 +444,7 @@ impl Program {
                             frame.profile_head,
                             IntFrameKind::BinFirst { op, y: value },
                         );
-                        if self.profile.is_some() {
+                        if self.profiling_enabled() {
                             self.profile_eval_frame_push("Int");
                         }
                         return Ok(Some((x, 0)));
@@ -478,7 +478,7 @@ impl Program {
                             frame.profile_head,
                             Int64FrameKind::BinFirst { op, y: value },
                         );
-                        if self.profile.is_some() {
+                        if self.profiling_enabled() {
                             self.profile_eval_frame_push("Int64");
                         }
                         return Ok(Some((x, 0)));
@@ -531,7 +531,7 @@ impl Program {
                         y: value,
                     },
                 );
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_eval_frame_push("Int64");
                 }
                 (frame.x, 0)
@@ -545,7 +545,7 @@ impl Program {
                             frame.profile_head,
                             Float64FrameKind::BinFirst { op, y: value },
                         );
-                        if self.profile.is_some() {
+                        if self.profiling_enabled() {
                             self.profile_eval_frame_push("Float64");
                         }
                         return Ok(Some((x, 0)));
@@ -572,7 +572,7 @@ impl Program {
                             frame.profile_head,
                             Float32FrameKind::BinFirst { op, y: value },
                         );
-                        if self.profile.is_some() {
+                        if self.profiling_enabled() {
                             self.profile_eval_frame_push("Float32");
                         }
                         return Ok(Some((x, 0)));
@@ -599,7 +599,7 @@ impl Program {
                             frame.profile_head,
                             BytesFrameKind::BinFirst { op, y: current },
                         );
-                        if self.profile.is_some() {
+                        if self.profiling_enabled() {
                             self.profile_eval_frame_push("Bytes");
                         }
                         return Ok(Some((x, 0)));
@@ -680,10 +680,10 @@ impl Program {
             return Ok(None);
         };
 
-        let profile_head = if self.profile.is_some() {
+        let profile_head = if self.profiling_enabled() {
             self.profile_step(head, args.len())
         } else {
-            None
+            ProfileHead::none()
         };
         let redex = if args.len() == used {
             StrictRedex::Root(root)
@@ -903,7 +903,7 @@ impl Program {
                         y: value,
                     },
                 }));
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_eval_frame_push("Int64");
                 }
                 (next, 0)
@@ -1068,7 +1068,7 @@ impl Program {
                         continue;
                     }
                     PersistentStep::Fallback { root: next_root } => {
-                        if self.profile.is_some() {
+                        if self.profiling_enabled() {
                             self.profile_persistent_fallback();
                         }
                         root = next_root;
@@ -1081,7 +1081,7 @@ impl Program {
 
             if whnf_frames {
                 if let Some((frame, next)) = self.begin_whnf_force_frame(current)? {
-                    if self.profile.is_some() {
+                    if self.profiling_enabled() {
                         self.profile_eval_frame_push("Whnf");
                     }
                     frame_stack.push(EvalFrame::Whnf(frame));
@@ -1136,7 +1136,7 @@ impl Program {
         let persistent_spine = PersistentSpine::default();
         let mut scratch_args = Vec::new();
         let mut scratch_apps = Vec::new();
-        let profiling = self.profile.is_some();
+        let profiling = self.profiling_enabled();
 
         #[cfg(feature = "eval-phase-profile")]
         macro_rules! stack_phase_start {
@@ -1330,7 +1330,7 @@ impl Program {
                     if steps >= limit {
                         return Err(EvalError::StepLimit { limit });
                     }
-                    if self.profile.is_some() {
+                    if self.profiling_enabled() {
                         self.profile_persistent_fallback();
                     }
                     let root = if stack.app_len() == 0 {

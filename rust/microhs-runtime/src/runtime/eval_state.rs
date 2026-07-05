@@ -564,7 +564,51 @@ pub(in crate::runtime) struct EvalLoopStep {
     pub(in crate::runtime) reductions: usize,
 }
 
-pub(in crate::runtime) type ProfileHead = Option<NodeId>;
+#[cfg(feature = "profile")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::runtime) struct ProfileHead(pub(in crate::runtime) Option<NodeId>);
+
+#[cfg(not(feature = "profile"))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::runtime) struct ProfileHead;
+
+impl ProfileHead {
+    #[inline]
+    pub(in crate::runtime) fn none() -> Self {
+        #[cfg(feature = "profile")]
+        {
+            Self(None)
+        }
+        #[cfg(not(feature = "profile"))]
+        {
+            Self
+        }
+    }
+
+    #[cfg(feature = "profile")]
+    #[inline]
+    pub(in crate::runtime) fn from_node(id: NodeId) -> Self {
+        Self(Some(id))
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn is_some(&self) -> bool {
+        #[cfg(feature = "profile")]
+        {
+            self.0.is_some()
+        }
+        #[cfg(not(feature = "profile"))]
+        {
+            false
+        }
+    }
+
+    #[cfg(feature = "profile")]
+    #[inline]
+    pub(in crate::runtime) fn node(self) -> Option<NodeId> {
+        self.0
+    }
+}
 
 pub(in crate::runtime) struct WhnfFrame {
     pub(in crate::runtime) redex: StrictRedex,
