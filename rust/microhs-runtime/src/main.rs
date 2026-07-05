@@ -22,9 +22,17 @@ fn main() -> ExitCode {
     let mut file = None;
     let mut profile = false;
     let mut profile_top = 25usize;
+    let mut program_args: Vec<String> = Vec::new();
     let mut args = env::args();
     let program_name = args.next().unwrap_or_else(|| "mhs-rust".to_owned());
     while let Some(arg) = args.next() {
+        // Once the FILE is set, remaining tokens are the program's own argv (mhseval
+        // convention: `mhs-rust --main prog.comb arg0 arg1 ...`), so don't treat a
+        // leading '-' as an mhs-rust flag.
+        if file.is_some() {
+            program_args.push(arg);
+            continue;
+        }
         match arg.as_str() {
             "--dump" => mode = Mode::Dump,
             "--whnf" => mode = Mode::Whnf,
@@ -86,7 +94,15 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    program.set_program_args(vec![program_name.into_bytes()]);
+    // The trailing CLI tokens are the program's own argv (argv[0] = program name,
+    // argv[1..] = getArgs), matching mhseval / the bench harness. With no trailing
+    // tokens, expose just this binary's name so getProgName works.
+    let argv = if program_args.is_empty() {
+        vec![program_name.into_bytes()]
+    } else {
+        program_args.into_iter().map(String::into_bytes).collect()
+    };
+    program.set_program_args(argv);
     #[cfg(feature = "profile")]
     if profile {
         program.enable_profile();
