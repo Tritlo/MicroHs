@@ -111,8 +111,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
         "profile_stack_arg_batches: {}",
         profile.profile.stack_arg_batches
     );
-    #[cfg(feature = "eval-phase-profile")]
-    print_phase_profile(profile, top);
     println!(
         "profile_persistent_forces: {}",
         profile.profile.persistent_forces
@@ -162,13 +160,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
     for (site, count) in profile.profile.top_app_allocation_sites(top) {
         println!("  {site}: {count}");
     }
-    #[cfg(feature = "eval-phase-profile")]
-    {
-        println!("profile_app_allocation_resolved_site_shapes:");
-        for (site, count) in profile.profile.top_app_allocation_resolved_site_shapes(top) {
-            println!("  {site}: {count}");
-        }
-    }
     println!("profile_eval_frame_push_kinds:");
     for (kind, count) in profile.profile.top_eval_frame_push_kinds(top) {
         println!("  {kind}: {count}");
@@ -176,117 +167,5 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
     println!("profile_stack_fallback_heads:");
     for (head, count) in profile.profile.top_stack_fallback_heads(top) {
         println!("  {head}: {count}");
-    }
-}
-
-#[cfg(feature = "eval-phase-profile")]
-fn print_phase_profile(profile: &ProfileBench, top: usize) {
-    println!(
-        "profile_stack_loop_iterations: {}",
-        profile.profile.stack_loop_iterations
-    );
-    println!(
-        "profile_stack_ready_checks: {}",
-        profile.profile.stack_ready_checks
-    );
-    println!(
-        "profile_stack_ready_successes: {}",
-        profile.profile.stack_ready_successes
-    );
-    println!(
-        "profile_stack_eval_step_calls: {}",
-        profile.profile.stack_eval_step_calls
-    );
-    println!(
-        "profile_stack_step_reduced: {}",
-        profile.profile.stack_step_reduced
-    );
-    println!(
-        "profile_stack_step_whnf: {}",
-        profile.profile.stack_step_whnf
-    );
-    println!(
-        "profile_stack_step_fallback: {}",
-        profile.profile.stack_step_fallback
-    );
-    println!(
-        "profile_stack_gc_check_ms: {:.3}",
-        nanos_millis(profile.profile.stack_gc_check_nanos)
-    );
-    println!(
-        "profile_stack_resolve_ms: {:.3}",
-        nanos_millis(profile.profile.stack_resolve_nanos)
-    );
-    println!(
-        "profile_stack_ready_frame_ms: {:.3}",
-        nanos_millis(profile.profile.stack_ready_frame_nanos)
-    );
-    println!(
-        "profile_stack_descent_ms: {:.3}",
-        nanos_millis(profile.profile.stack_descent_nanos)
-    );
-    println!(
-        "profile_stack_eval_step_ms: {:.3}",
-        nanos_millis(profile.profile.stack_eval_step_nanos)
-    );
-    println!(
-        "profile_stack_whnf_finish_ms: {:.3}",
-        nanos_millis(profile.profile.stack_whnf_finish_nanos)
-    );
-    println!(
-        "profile_stack_arg_read_ms: {:.3}",
-        nanos_millis(profile.profile.stack_arg_read_nanos)
-    );
-    println!(
-        "profile_stack_app_alloc_ms: {:.3}",
-        nanos_millis(profile.profile.stack_app_alloc_nanos)
-    );
-    println!(
-        "profile_app_alloc_reused: {}",
-        profile.profile.app_alloc_reused
-    );
-    println!(
-        "profile_app_alloc_fresh: {}",
-        profile.profile.app_alloc_fresh
-    );
-    println!(
-        "profile_app_alloc_free_pop_ms: {:.3}",
-        nanos_millis(profile.profile.app_alloc_free_pop_nanos)
-    );
-    println!(
-        "profile_app_alloc_reused_write_ms: {:.3}",
-        nanos_millis(profile.profile.app_alloc_reused_write_nanos)
-    );
-    println!(
-        "profile_app_alloc_fresh_push_ms: {:.3}",
-        nanos_millis(profile.profile.app_alloc_fresh_push_nanos)
-    );
-    println!(
-        "profile_stack_apply_rewrite_ms: {:.3}",
-        nanos_millis(profile.profile.stack_apply_rewrite_nanos)
-    );
-    println!(
-        "profile_stack_apply_app_ms: {:.3}",
-        nanos_millis(profile.profile.stack_apply_app_nanos)
-    );
-    println!(
-        "profile_stack_force_frame_ms: {:.3}",
-        nanos_millis(profile.profile.stack_force_frame_nanos)
-    );
-    println!(
-        "profile_stack_inner_descent_ms: {:.3}",
-        nanos_millis(profile.profile.stack_inner_descent_nanos)
-    );
-    println!("profile_stack_head_arities:");
-    for (head, count) in profile.profile.top_stack_head_arities(top) {
-        println!("  {head}: {count}");
-    }
-    println!("profile_stack_head_arity_classes:");
-    for (head, count) in profile.profile.top_stack_head_arity_classes(top) {
-        println!("  {head}: {count}");
-    }
-    println!("profile_stack_continue_next_heads:");
-    for (transition, count) in profile.profile.top_stack_continue_next_heads(top) {
-        println!("  {transition}: {count}");
     }
 }

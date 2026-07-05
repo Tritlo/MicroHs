@@ -328,16 +328,9 @@ impl Program {
     #[inline]
     pub(in crate::runtime) fn app(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
         if self.profiling_enabled() {
-            self.app_alloc_bookkeeping_cold("<generic app()>", fun, arg);
+            self.app_alloc_bookkeeping_cold("<generic app()>");
         }
-        #[cfg(feature = "eval-phase-profile")]
-        let started = self.profiling_enabled().then(Instant::now);
-        let node = self.push_app_node(fun, arg);
-        #[cfg(feature = "eval-phase-profile")]
-        if let Some(started) = started {
-            self.profile_stack_app_alloc_time(started.elapsed().as_nanos());
-        }
-        node
+        self.push_app_node(fun, arg)
     }
 
     #[inline]
@@ -348,65 +341,27 @@ impl Program {
         arg: NodeId,
     ) -> NodeId {
         if self.profiling_enabled() {
-            self.app_alloc_bookkeeping_cold(key, fun, arg);
+            self.app_alloc_bookkeeping_cold(key);
         }
-        #[cfg(feature = "eval-phase-profile")]
-        let started = self.profiling_enabled().then(Instant::now);
-        let node = self.push_app_node(fun, arg);
-        #[cfg(feature = "eval-phase-profile")]
-        if let Some(started) = started {
-            self.profile_stack_app_alloc_time(started.elapsed().as_nanos());
-        }
-        node
+        self.push_app_node(fun, arg)
     }
 
     #[cfg(feature = "profile")]
     #[cold]
     #[inline(never)]
-    pub(in crate::runtime) fn app_alloc_bookkeeping_cold(
-        &mut self,
-        key: &'static str,
-        _fun: NodeId,
-        _arg: NodeId,
-    ) {
-        #[cfg(feature = "eval-phase-profile")]
-        let resolved_site_shape = self.profiling_enabled().then(|| {
-            let fun_shape = self.profile_resolved_node_shape_key(_fun);
-            let arg_shape = self.profile_resolved_node_shape_key(_arg);
-            let mut shape =
-                String::with_capacity(key.len() + fun_shape.len() + arg_shape.len() + 6);
-            shape.push_str(key);
-            shape.push_str(": ");
-            shape.push_str(&fun_shape);
-            shape.push(' ');
-            shape.push_str(&arg_shape);
-            shape
-        });
+    pub(in crate::runtime) fn app_alloc_bookkeeping_cold(&mut self, key: &'static str) {
         if let Some(profile) = self.profile.as_mut() {
             profile.app_allocations += 1;
             *profile
                 .app_allocation_sites
                 .entry(key.to_owned())
                 .or_default() += 1;
-            #[cfg(feature = "eval-phase-profile")]
-            if let Some(resolved_site_shape) = resolved_site_shape {
-                *profile
-                    .app_allocation_resolved_site_shapes
-                    .entry(resolved_site_shape)
-                    .or_default() += 1;
-            }
         }
     }
 
     #[cfg(not(feature = "profile"))]
     #[inline]
-    pub(in crate::runtime) fn app_alloc_bookkeeping_cold(
-        &mut self,
-        _key: &'static str,
-        _fun: NodeId,
-        _arg: NodeId,
-    ) {
-    }
+    pub(in crate::runtime) fn app_alloc_bookkeeping_cold(&mut self, _key: &'static str) {}
 
     pub(in crate::runtime) fn prim(&mut self, name: &str) -> NodeId {
         let cached = match name {

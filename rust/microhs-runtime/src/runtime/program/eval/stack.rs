@@ -22,13 +22,7 @@ impl Program {
                             reductions: carried_reductions,
                         });
                     }
-                    #[cfg(feature = "eval-phase-profile")]
-                    let started = profiling.then(Instant::now);
                     head = self.descend_stack_from(next, stack, profile_resolve, profiling)?;
-                    #[cfg(feature = "eval-phase-profile")]
-                    if let Some(started) = started {
-                        self.profile_stack_inner_descent_time(started.elapsed().as_nanos());
-                    }
                     continue 'eval;
                 }
             }
@@ -45,14 +39,7 @@ impl Program {
                     if profiling {
                         self.profile_stack_arg_reads(1);
                     }
-                    #[cfg(feature = "eval-phase-profile")]
-                    let started = profiling.then(Instant::now);
                     let arg = stack.arg(&self.nodes, $idx);
-                    #[cfg(feature = "eval-phase-profile")]
-                    if let Some(started) = started {
-                        let nanos = started.elapsed().as_nanos();
-                        self.profile_stack_arg_read_time(nanos);
-                    }
                     arg
                 }};
             }
@@ -62,14 +49,7 @@ impl Program {
                         self.profile_stack_arg_batch();
                         self.profile_stack_arg_reads($reads);
                     }
-                    #[cfg(feature = "eval-phase-profile")]
-                    let started = profiling.then(Instant::now);
                     let args = stack.$method(&self.nodes);
-                    #[cfg(feature = "eval-phase-profile")]
-                    if let Some(started) = started {
-                        let nanos = started.elapsed().as_nanos();
-                        self.profile_stack_arg_read_time(nanos);
-                    }
                     args
                 }};
             }
@@ -94,25 +74,13 @@ impl Program {
             }
             macro_rules! rewrite_step {
                 ($used:expr, $node:expr, $reductions:expr) => {{
-                    #[cfg(feature = "eval-phase-profile")]
-                    let started = profiling.then(Instant::now);
                     let node = self.apply_stack_rewrite(stack, $used, $node);
-                    #[cfg(feature = "eval-phase-profile")]
-                    if let Some(started) = started {
-                        self.profile_stack_apply_rewrite_time(started.elapsed().as_nanos());
-                    }
                     finish_reduction!(node, $reductions);
                 }};
             }
             macro_rules! rewrite_continue_reductions {
                 ($used:expr, $node:expr, $reductions:expr) => {{
-                    #[cfg(feature = "eval-phase-profile")]
-                    let started = profiling.then(Instant::now);
                     let node = self.apply_stack_rewrite(stack, $used, $node);
-                    #[cfg(feature = "eval-phase-profile")]
-                    if let Some(started) = started {
-                        self.profile_stack_apply_rewrite_time(started.elapsed().as_nanos());
-                    }
                     if profile_head.is_some() {
                         self.profile_reduction(profile_head, $reductions);
                     }
@@ -128,25 +96,12 @@ impl Program {
             }
             macro_rules! continue_with {
                 ($node:expr) => {{
-                    #[cfg(feature = "eval-phase-profile")]
-                    let started = profiling.then(Instant::now);
                     head = self.descend_stack_from($node, stack, profile_resolve, profiling)?;
-                    #[cfg(feature = "eval-phase-profile")]
-                    if let Some(started) = started {
-                        let nanos = started.elapsed().as_nanos();
-                        self.profile_stack_inner_descent_time(nanos);
-                    }
-                    #[cfg(feature = "eval-phase-profile")]
-                    if profiling {
-                        self.profile_stack_continue_next_head(profile_head, head, stack.app_len());
-                    }
                     continue 'eval;
                 }};
             }
             macro_rules! goind_taken {
                 ($redex:expr, $used:expr, $node:expr, $reductions:expr) => {{
-                    #[cfg(feature = "eval-phase-profile")]
-                    let started = profiling.then(Instant::now);
                     let redex = $redex;
                     let node = $node;
                     let wrote_indirection = node != redex;
@@ -155,11 +110,6 @@ impl Program {
                     }
                     if profiling {
                         self.profile_stack_rewrite($used, wrote_indirection);
-                    }
-                    #[cfg(feature = "eval-phase-profile")]
-                    if let Some(started) = started {
-                        let nanos = started.elapsed().as_nanos();
-                        self.profile_stack_apply_rewrite_time(nanos);
                     }
                     if profile_head.is_some() {
                         self.profile_reduction(profile_head, $reductions);
@@ -178,13 +128,7 @@ impl Program {
                 ($used:expr, $fun:expr, $arg:expr, $reductions:expr) => {{
                     let fun = $fun;
                     let arg = $arg;
-                    #[cfg(feature = "eval-phase-profile")]
-                    let update_started = profiling.then(Instant::now);
                     let node = self.apply_stack_app(stack, $used, fun, arg);
-                    #[cfg(feature = "eval-phase-profile")]
-                    if let Some(started) = update_started {
-                        self.profile_stack_apply_app_time(started.elapsed().as_nanos());
-                    }
                     if profile_head.is_some() {
                         self.profile_reduction(profile_head, $reductions);
                     }
@@ -199,18 +143,7 @@ impl Program {
                         self.profile_stack_descent_push();
                     }
                     stack.push_app(node);
-                    #[cfg(feature = "eval-phase-profile")]
-                    let started = profiling.then(Instant::now);
                     head = self.descend_stack_from(fun, stack, profile_resolve, profiling)?;
-                    #[cfg(feature = "eval-phase-profile")]
-                    if let Some(started) = started {
-                        let nanos = started.elapsed().as_nanos();
-                        self.profile_stack_inner_descent_time(nanos);
-                    }
-                    #[cfg(feature = "eval-phase-profile")]
-                    if profiling {
-                        self.profile_stack_continue_next_head(profile_head, head, stack.app_len());
-                    }
                     continue 'eval;
                 }};
             }
@@ -219,17 +152,10 @@ impl Program {
                     let redex = $redex;
                     let fun = $fun;
                     let arg = $arg;
-                    #[cfg(feature = "eval-phase-profile")]
-                    let started = profiling.then(Instant::now);
                     if profiling {
                         self.profile_stack_app_update($used);
                     }
                     self.set_app_cell_at(redex.index(), Cell::app(fun, arg));
-                    #[cfg(feature = "eval-phase-profile")]
-                    if let Some(started) = started {
-                        let nanos = started.elapsed().as_nanos();
-                        self.profile_stack_apply_app_time(nanos);
-                    }
                     if profile_head.is_some() {
                         self.profile_reduction(profile_head, $reductions);
                     }
@@ -244,18 +170,7 @@ impl Program {
                         self.profile_stack_descent_push();
                     }
                     stack.push_app(redex);
-                    #[cfg(feature = "eval-phase-profile")]
-                    let started = profiling.then(Instant::now);
                     head = self.descend_stack_from(fun, stack, profile_resolve, profiling)?;
-                    #[cfg(feature = "eval-phase-profile")]
-                    if let Some(started) = started {
-                        let nanos = started.elapsed().as_nanos();
-                        self.profile_stack_inner_descent_time(nanos);
-                    }
-                    #[cfg(feature = "eval-phase-profile")]
-                    if profiling {
-                        self.profile_stack_continue_next_head(profile_head, head, stack.app_len());
-                    }
                     continue 'eval;
                 }};
             }
@@ -278,14 +193,7 @@ impl Program {
                         self.profile_persistent_force();
                         self.profile_eval_frame_push($profile_kind);
                     }
-                    #[cfg(feature = "eval-phase-profile")]
-                    let started = profiling.then(Instant::now);
                     stack.$push(app_end, $used, profile_head, kind);
-                    #[cfg(feature = "eval-phase-profile")]
-                    if let Some(started) = started {
-                        let nanos = started.elapsed().as_nanos();
-                        self.profile_stack_force_frame_time(nanos);
-                    }
                     continue_with!(next);
                 }};
             }
@@ -383,36 +291,22 @@ impl Program {
                                     self.profile_persistent_force();
                                     self.profile_eval_frame_push("Int");
                                 }
-                                #[cfg(feature = "eval-phase-profile")]
-                                let started = profiling.then(Instant::now);
                                 stack.push_int_frame(
                                     redex,
                                     profile_head,
                                     IntFrameKind::BinFirst { op, y: y_value },
                                 );
-                                #[cfg(feature = "eval-phase-profile")]
-                                if let Some(started) = started {
-                                    let nanos = started.elapsed().as_nanos();
-                                    self.profile_stack_force_frame_time(nanos);
-                                }
                                 continue_with!(x);
                             }
                             if profiling {
                                 self.profile_persistent_force();
                                 self.profile_eval_frame_push("Int");
                             }
-                            #[cfg(feature = "eval-phase-profile")]
-                            let started = profiling.then(Instant::now);
                             stack.push_int_frame(
                                 redex,
                                 profile_head,
                                 IntFrameKind::BinSecond { op, x },
                             );
-                            #[cfg(feature = "eval-phase-profile")]
-                            if let Some(started) = started {
-                                let nanos = started.elapsed().as_nanos();
-                                self.profile_stack_force_frame_time(nanos);
-                            }
                             continue_with!(y);
                         }
                         StrictPrimitiveAction::IntUn(op) => {
@@ -421,14 +315,7 @@ impl Program {
                                 self.profile_persistent_force();
                                 self.profile_eval_frame_push("Int");
                             }
-                            #[cfg(feature = "eval-phase-profile")]
-                            let started = profiling.then(Instant::now);
                             stack.push_int_frame(redex, profile_head, IntFrameKind::Un { op });
-                            #[cfg(feature = "eval-phase-profile")]
-                            if let Some(started) = started {
-                                let nanos = started.elapsed().as_nanos();
-                                self.profile_stack_force_frame_time(nanos);
-                            }
                             continue_with!(x);
                         }
                         StrictPrimitiveAction::Int64Bin(op) => {
@@ -440,14 +327,7 @@ impl Program {
                                     self.profile_persistent_force();
                                     self.profile_eval_frame_push("Int64Shift");
                                 }
-                                #[cfg(feature = "eval-phase-profile")]
-                                let started = profiling.then(Instant::now);
                                 stack.push_int64_shift_frame(app_end, 2, profile_head, op, x);
-                                #[cfg(feature = "eval-phase-profile")]
-                                if let Some(started) = started {
-                                    let nanos = started.elapsed().as_nanos();
-                                    self.profile_stack_force_frame_time(nanos);
-                                }
                                 continue_with!(next);
                             } else if op.driver_marker_safe() {
                                 force_step!(
@@ -562,19 +442,12 @@ impl Program {
                         self.profile_persistent_force();
                         self.profile_eval_frame_push("Whnf");
                     }
-                    #[cfg(feature = "eval-phase-profile")]
-                    let started = profiling.then(Instant::now);
                     stack.push_whnf_frame(
                         redex,
                         2,
                         profile_head,
                         WhnfFrameKind::IoStrict { action, value },
                     );
-                    #[cfg(feature = "eval-phase-profile")]
-                    if let Some(started) = started {
-                        let nanos = started.elapsed().as_nanos();
-                        self.profile_stack_force_frame_time(nanos);
-                    }
                     continue_with!(value);
                 }
                 Seq if args_len >= 2 => {
@@ -583,14 +456,7 @@ impl Program {
                         self.profile_persistent_force();
                         self.profile_eval_frame_push("Whnf");
                     }
-                    #[cfg(feature = "eval-phase-profile")]
-                    let started = profiling.then(Instant::now);
                     stack.push_whnf_frame(redex, 2, profile_head, WhnfFrameKind::Seq { result });
-                    #[cfg(feature = "eval-phase-profile")]
-                    if let Some(started) = started {
-                        let nanos = started.elapsed().as_nanos();
-                        self.profile_stack_force_frame_time(nanos);
-                    }
                     continue_with!(x);
                 }
                 IsInt if args_len >= 1 => {
@@ -599,14 +465,7 @@ impl Program {
                         self.profile_persistent_force();
                         self.profile_eval_frame_push("Whnf");
                     }
-                    #[cfg(feature = "eval-phase-profile")]
-                    let started = profiling.then(Instant::now);
                     stack.push_whnf_frame(redex, 1, profile_head, WhnfFrameKind::IsInt);
-                    #[cfg(feature = "eval-phase-profile")]
-                    if let Some(started) = started {
-                        let nanos = started.elapsed().as_nanos();
-                        self.profile_stack_force_frame_time(nanos);
-                    }
                     continue_with!(x);
                 }
                 _ => {}

@@ -214,16 +214,6 @@ impl Cell {
         self.option_id_word1()
     }
 
-    #[inline]
-    #[cfg(feature = "eval-phase-profile")]
-    pub(in crate::runtime) fn prim_name(self) -> Option<&'static str> {
-        match self.tag() {
-            CellTag::KnownPrim => Some(decode_known_prim(self.payload0() as u16).name()),
-            CellTag::RuntimePrim => Some(RuntimePrim(self.payload0() as u16).name()),
-            _ => None,
-        }
-    }
-
     pub(in crate::runtime) fn app_fields(self) -> Option<(NodeId, NodeId)> {
         self.has_tag(CellTag::App)
             .then(|| (self.id_payload(), self.id_word1()))

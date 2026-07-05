@@ -7,7 +7,6 @@ license = "BSD-3-Clause"
 [features]
 default = []
 profile = []
-eval-phase-profile = ["profile"]
 gc-phase-profile = []
 
 [dependencies]

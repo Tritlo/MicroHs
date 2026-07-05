@@ -57,62 +57,6 @@ pub struct EvalProfile {
     pub stack_descent_pushes: usize,
     pub stack_arg_reads: usize,
     pub stack_arg_batches: usize,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_loop_iterations: usize,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_ready_checks: usize,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_ready_successes: usize,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_eval_step_calls: usize,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_step_reduced: usize,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_step_whnf: usize,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_step_fallback: usize,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_gc_check_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_resolve_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_ready_frame_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_descent_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_eval_step_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_whnf_finish_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_arg_read_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_app_alloc_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_apply_rewrite_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_apply_app_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_force_frame_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_inner_descent_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub app_alloc_reused: usize,
-    #[cfg(feature = "eval-phase-profile")]
-    pub app_alloc_fresh: usize,
-    #[cfg(feature = "eval-phase-profile")]
-    pub app_alloc_free_pop_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub app_alloc_reused_write_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub app_alloc_fresh_push_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_head_arities: HashMap<String, usize>,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_head_arity_classes: HashMap<String, usize>,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_continue_next_heads: HashMap<String, usize>,
-    #[cfg(feature = "eval-phase-profile")]
-    pub app_allocation_resolved_site_shapes: HashMap<String, usize>,
     pub persistent_forces: usize,
     pub persistent_fallbacks: usize,
     pub fallback_eval_loop_steps: usize,
@@ -155,42 +99,6 @@ impl EvalProfile {
     pub fn top_stack_fallback_heads(&self, limit: usize) -> Vec<(&str, usize)> {
         sorted_profile_counts(&self.stack_fallback_heads, limit)
     }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_stack_head_arities(&self, limit: usize) -> Vec<(&str, usize)> {
-        sorted_profile_counts(&self.stack_head_arities, limit)
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_stack_head_arity_classes(&self, limit: usize) -> Vec<(&str, usize)> {
-        sorted_profile_counts(&self.stack_head_arity_classes, limit)
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_stack_continue_next_heads(&self, limit: usize) -> Vec<(&str, usize)> {
-        sorted_profile_counts(&self.stack_continue_next_heads, limit)
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_app_allocation_resolved_site_shapes(&self, limit: usize) -> Vec<(&str, usize)> {
-        sorted_profile_counts(&self.app_allocation_resolved_site_shapes, limit)
-    }
-}
-
-#[cfg(feature = "eval-phase-profile")]
-pub(in crate::runtime) fn profile_known_reducing_arity(known: KnownPrim) -> Option<usize> {
-    use KnownPrim::*;
-    Some(match known {
-        I | Ord | Chr | Y | IoPerformIo | Raise | Rnf | IsInt => 1,
-        A | K | U | BPrime | Z | R | K2 | K3 | K4 | Tag(_) | Seq | IoStrict | IoThen => 2,
-        S | B | C | P | J | L | KK | KA | CPrimeB | IoBind | IoReturn | IoLazyBind => 3,
-        SPrime | CPrime | O | IoAtomic | IoPp | IoPrint | IoSerialize | IoDeserialize => 4,
-        Tuple(fields) => usize::from(fields) + 1,
-        Catch | CatchR | Dynsym | Thnum | IoGc | IoGetArgRef | IoGetMaskingState | IoNewMVar
-        | IoPutMVar | IoReadMVar | IoSetMaskingState | IoStderr | IoStdin | IoStdout | IoStats
-        | IoTakeMVar | IoThid | IoThreadStatus | IoTryPutMVar | IoTryReadMVar | IoTryTakeMVar
-        | IoYield => return None,
-    })
 }
 
 #[cfg(feature = "profile")]
@@ -205,36 +113,6 @@ pub(in crate::runtime) fn sorted_profile_counts(
     counts.sort_unstable_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
     counts.truncate(limit);
     counts
-}
-
-#[cfg(feature = "eval-phase-profile")]
-pub(in crate::runtime) fn cold_profile_key(node: &Node) -> &'static str {
-    match node {
-        Node::ForeignPtr(_) => "ForeignPtr",
-        Node::Weak(_) => "Weak",
-        Node::MVar(_) => "MVar",
-        Node::BigInt(_) => "BigInt",
-        Node::Bytes(_) => "Bytes",
-        Node::BytesView(_) => "BytesView",
-        Node::MutableBytes(_) => "MutableBytes",
-        Node::Array(_) => "Array",
-        Node::Ffi(_) => "Ffi",
-        Node::JsCall(_) => "JsCall",
-        Node::JsWrap { .. } => "JsWrap",
-        Node::FunPtr(_) => "FunPtr",
-        Node::Tick(_) => "Tick",
-        Node::App(_, _)
-        | Node::Indir(_)
-        | Node::Free(_)
-        | Node::Prim(_)
-        | Node::Int(_)
-        | Node::Int64(_)
-        | Node::Float64(_)
-        | Node::Float32(_)
-        | Node::ThreadId(_)
-        | Node::Ptr(_)
-        | Node::RawFunPtr(_) => "Hot",
-    }
 }
 
 pub(in crate::runtime) fn serialization_shareable_node(node: &Node) -> bool {
