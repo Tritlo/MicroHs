@@ -361,9 +361,10 @@ impl Program {
         parsed: Program,
     ) -> Result<NodeId, EvalError> {
         let root = parsed.root();
-        let nodes = parsed.nodes();
-        let mut remap = Vec::with_capacity(nodes.len());
-        for node in &nodes {
+        let node_count = parsed.node_count();
+        let mut remap = Vec::with_capacity(node_count);
+        for index in 0..node_count {
+            let node = parsed.node_for_debug(NodeId::from_index(index));
             let id = match node {
                 Node::App(_, _)
                 | Node::Indir(_)
@@ -372,12 +373,13 @@ impl Program {
                 | Node::Weak(_)
                 | Node::Array(_) => self.push_node(Node::Indir(None)),
                 Node::Free(_) => return Err(EvalError::InvalidByteString),
-                node => self.push_value_node(node.clone()),
+                node => self.push_value_node(node),
             };
             remap.push(id);
         }
 
-        for (index, node) in nodes.into_iter().enumerate() {
+        for index in 0..node_count {
+            let node = parsed.node_for_debug(NodeId::from_index(index));
             let target = remap[index];
             let node = match node {
                 Node::App(fun, arg) => Node::App(
