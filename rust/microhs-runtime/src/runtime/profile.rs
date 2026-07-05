@@ -53,8 +53,6 @@ pub struct EvalProfile {
     pub stack_rewrite_indirections: usize,
     pub stack_app_updates: usize,
     pub stack_app_update_apps: usize,
-    pub stack_rethreads: usize,
-    pub stack_rethread_apps: usize,
     pub stack_descent_pushes: usize,
     pub stack_arg_reads: usize,
     pub stack_arg_batches: usize,
