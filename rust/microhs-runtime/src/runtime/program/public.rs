@@ -1,6 +1,9 @@
 //! Public Program API for reduction, profiling, and runtime configuration.
 use super::*;
 
+/// Reductions a thread runs before the scheduler may switch to another (C's `SLICE`).
+const REDUCTION_SLICE: usize = 100_000;
+
 impl Program {
     pub(in crate::runtime) fn resolve(&self, mut id: NodeId) -> Result<NodeId, EvalError> {
         loop {
@@ -87,10 +90,29 @@ impl Program {
         // key of a weak pointer that has gone out of scope — are never collected, so
         // weak pointers never die and their finalizers never run.
         self.root = root;
-        let reductions = self.reductions;
-        let root = self.reduce_node_whnf(root, limit)?;
-        self.root = root;
-        Ok((root, self.reductions - reductions))
+        let start = self.reductions;
+        // Drive the computation in reduction slices. On StepLimit the local eval stack
+        // is discarded, but every completed reduction is memoized in the graph (redexes
+        // rewritten to indirections) and `self.root` advances to the continuation, so
+        // re-reducing resumes from the frontier without replaying side effects. Slicing
+        // is the substrate the cooperative scheduler needs; with a single thread it is
+        // transparent (same reductions, same effects).
+        loop {
+            let used = self.reductions - start;
+            let remaining = limit.saturating_sub(used);
+            if remaining == 0 {
+                return Err(EvalError::StepLimit { limit });
+            }
+            let slice = REDUCTION_SLICE.min(remaining);
+            match self.reduce_node_whnf(self.root, slice) {
+                Ok(root) => {
+                    self.root = root;
+                    return Ok((root, self.reductions - start));
+                }
+                Err(EvalError::StepLimit { .. }) => continue,
+                Err(err) => return Err(err),
+            }
+        }
     }
 
     pub fn reduction_count(&self) -> usize {
