@@ -97,27 +97,6 @@ pub(super) fn bench_eval(
             gc.total_sweep_nanos = gc
                 .total_sweep_nanos
                 .saturating_add(run.gc.total_sweep_nanos);
-            gc.young_profile_last_slots = run.gc.young_profile_last_slots;
-            gc.young_profile_last_live = run.gc.young_profile_last_live;
-            gc.young_profile_last_dead = run.gc.young_profile_last_dead;
-            gc.young_profile_last_old_to_young_sources =
-                run.gc.young_profile_last_old_to_young_sources;
-            gc.young_profile_last_old_to_young_edges = run.gc.young_profile_last_old_to_young_edges;
-            gc.young_profile_total_slots = gc
-                .young_profile_total_slots
-                .saturating_add(run.gc.young_profile_total_slots);
-            gc.young_profile_total_live = gc
-                .young_profile_total_live
-                .saturating_add(run.gc.young_profile_total_live);
-            gc.young_profile_total_dead = gc
-                .young_profile_total_dead
-                .saturating_add(run.gc.young_profile_total_dead);
-            gc.young_profile_total_old_to_young_sources = gc
-                .young_profile_total_old_to_young_sources
-                .saturating_add(run.gc.young_profile_total_old_to_young_sources);
-            gc.young_profile_total_old_to_young_edges = gc
-                .young_profile_total_old_to_young_edges
-                .saturating_add(run.gc.young_profile_total_old_to_young_edges);
         }
         gc.last_allocations_since_collect = run.gc.last_allocations_since_collect;
         gc.current_allocations_since_collect = run.gc.current_allocations_since_collect;

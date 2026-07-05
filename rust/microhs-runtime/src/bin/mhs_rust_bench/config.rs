@@ -151,46 +151,6 @@ pub(super) fn main() -> ExitCode {
             "gc_total_sweep_ms: {:.3}",
             nanos_millis(eval.gc.total_sweep_nanos)
         );
-        println!(
-            "gc_young_profile_last_slots: {}",
-            eval.gc.young_profile_last_slots
-        );
-        println!(
-            "gc_young_profile_last_live: {}",
-            eval.gc.young_profile_last_live
-        );
-        println!(
-            "gc_young_profile_last_dead: {}",
-            eval.gc.young_profile_last_dead
-        );
-        println!(
-            "gc_young_profile_last_old_to_young_sources: {}",
-            eval.gc.young_profile_last_old_to_young_sources
-        );
-        println!(
-            "gc_young_profile_last_old_to_young_edges: {}",
-            eval.gc.young_profile_last_old_to_young_edges
-        );
-        println!(
-            "gc_young_profile_total_slots: {}",
-            eval.gc.young_profile_total_slots
-        );
-        println!(
-            "gc_young_profile_total_live: {}",
-            eval.gc.young_profile_total_live
-        );
-        println!(
-            "gc_young_profile_total_dead: {}",
-            eval.gc.young_profile_total_dead
-        );
-        println!(
-            "gc_young_profile_total_old_to_young_sources: {}",
-            eval.gc.young_profile_total_old_to_young_sources
-        );
-        println!(
-            "gc_young_profile_total_old_to_young_edges: {}",
-            eval.gc.young_profile_total_old_to_young_edges
-        );
     }
     println!(
         "gc_last_allocations_since_collect: {}",

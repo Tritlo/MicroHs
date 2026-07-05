@@ -13,7 +13,7 @@ pub(super) fn print_gc_events(label: &str, gc: &GcStats) {
     for event in &gc.events {
         #[cfg(feature = "gc-phase-profile")]
         println!(
-            "  collection={} pause_ms={:.3} mark_ms={:.3} sweep_ms={:.3} live_nodes={} free_nodes={} arena_nodes={} freed_nodes={} allocations_since_collect={} young_slots={} young_live={} young_dead={} old_to_young_sources={} old_to_young_edges={}",
+            "  collection={} pause_ms={:.3} mark_ms={:.3} sweep_ms={:.3} live_nodes={} free_nodes={} arena_nodes={} freed_nodes={} allocations_since_collect={}",
             event.collection,
             nanos_millis(event.pause_nanos),
             nanos_millis(event.mark_nanos),
@@ -22,12 +22,7 @@ pub(super) fn print_gc_events(label: &str, gc: &GcStats) {
             event.free_nodes,
             event.arena_nodes,
             event.freed_nodes,
-            event.allocations_since_collect,
-            event.young_profile_slots,
-            event.young_profile_live,
-            event.young_profile_dead,
-            event.young_profile_old_to_young_sources,
-            event.young_profile_old_to_young_edges
+            event.allocations_since_collect
         );
         #[cfg(not(feature = "gc-phase-profile"))]
         println!(
