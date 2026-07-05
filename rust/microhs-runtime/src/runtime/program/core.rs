@@ -2,7 +2,7 @@
 use super::*;
 
 impl Program {
-    pub fn new(nodes: Vec<Node>, root: NodeId, labels: HashMap<usize, NodeId>) -> Self {
+    pub(crate) fn new(nodes: Vec<Node>, root: NodeId, labels: HashMap<usize, NodeId>) -> Self {
         #[cfg(target_os = "wasi")]
         let default_gc_node_interval = WASI_GC_NODE_INTERVAL;
         #[cfg(not(target_os = "wasi"))]
@@ -314,10 +314,6 @@ impl Program {
         self.js_program_handle = Some(handle);
     }
 
-    pub fn label(&self, label: usize) -> Option<NodeId> {
-        self.labels.get(&label).copied()
-    }
-
     #[inline]
     pub(in crate::runtime) fn pop_free_node(&mut self) -> Option<usize> {
         if self.free_nodes == 0 {
@@ -347,7 +343,7 @@ impl Program {
         self.free_nodes += 1;
     }
 
-    pub fn push_node(&mut self, node: Node) -> NodeId {
+    pub(in crate::runtime) fn push_node(&mut self, node: Node) -> NodeId {
         if self.profile.is_some() {
             self.profile_node_allocation(&node);
         }
