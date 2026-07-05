@@ -4502,6 +4502,15 @@ This is a no-code audit for the next structural heap step. Current GC can mark r
 | 100M/32M bounded A/B | base ms: `1665.012`, `1587.911`, `1536.247`, `1516.003`, `1539.869`, `1531.707`, `1526.656`, `1543.239` (avg `1555.830`); candidate ms: `1605.111`, `1746.007`, `1566.072`, `1620.214`, `1548.335`, `1552.345`, `1558.442`, `1535.284` (avg `1591.476`, `+2.291%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,864`, sink `661902`, and `cell_size_bytes=8` |
 | reading | Even the narrow resolver wrapper inline loses after the frame-value keeper, with only `2/8` favorable pairs. Leave resolver inlining compiler-chosen; do not retry this path without a different representation change |
 
+## 2026-07-05 Fallback Eval Loop Cold-Layout Probe
+
+| item | result |
+|---|---|
+| probe | rejected source layout probe: marked the large out-of-line fallback reducer `Program::eval_loop_step` as `#[cold] #[inline(never)]` to see whether branch/layout hints around rare fallback entry helped the stack fast path. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1593.598`, `1540.194`, `1538.139`, `1568.268`, `1546.763`, `1528.374`, `1553.923`, `1532.077`, `1698.924`, `1527.718`, `1556.789`, `1528.557`, `1546.995`, `1571.533`, `1524.696`, `1555.349` (avg `1556.994`); candidate ms: `1551.240`, `1536.920`, `1544.018`, `1537.772`, `1518.668`, `1529.145`, `1597.747`, `1528.623`, `1544.879`, `1545.687`, `1587.692`, `1561.795`, `1580.718`, `1542.314`, `1583.146`, `1610.369` (avg `1556.296`, `-0.045%`). Pair direction was `7/16` favorable; the second half regressed at base avg `1563.820` vs candidate avg `1569.575` (`+0.368%`, `2/8` favorable) |
+| reading | Cold-marking the fallback reducer is not a keeper. The combined average is flat and the extension rejects it, so layout hints at this coarse boundary do not explain the remaining PGO/default gap |
+
 ## Active Tradeoffs
 
 | item | reading |
