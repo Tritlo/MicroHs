@@ -684,6 +684,9 @@ pub struct Program {
     pub(in crate::runtime) free_head: Option<NodeId>,
     pub(in crate::runtime) free_nodes: usize,
     pub(in crate::runtime) gc_node_interval: usize,
+    /// Set by `performGC` (IO.gc) to force a full collection at the next top-level
+    /// step boundary, regardless of the allocation threshold.
+    pub(in crate::runtime) force_gc: bool,
     pub(in crate::runtime) gc_allocations_since_collect: usize,
     pub(in crate::runtime) gc_last_allocations_since_collect: usize,
     pub(in crate::runtime) gc_collections: usize,

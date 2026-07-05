@@ -47,6 +47,7 @@ impl Program {
             free_head: None,
             free_nodes: 0,
             gc_node_interval,
+            force_gc: false,
             gc_allocations_since_collect: 0,
             gc_last_allocations_since_collect: 0,
             gc_collections: 0,

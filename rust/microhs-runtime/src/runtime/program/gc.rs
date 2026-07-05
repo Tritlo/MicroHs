@@ -552,11 +552,20 @@ impl Program {
             freed_nodes: freed,
             allocations_since_collect,
         });
+        // Queue dead weaks' finalizers but do not run them here: like the C runtime,
+        // they run at the next cooperative scheduling point (`yield`) so that a weak
+        // observed dead by `deRefWeak` runs its finalizer only afterwards.
         self.pending_weak_finalizers.extend(weak_finalizers);
+        Ok(freed)
+    }
+
+    /// Run and clear any finalizers queued by dead weak pointers. Invoked at
+    /// cooperative scheduling points (`IO.yield`).
+    pub(in crate::runtime) fn run_pending_weak_finalizers(&mut self) -> Result<(), EvalError> {
         while let Some(finalizer) = self.pending_weak_finalizers.pop() {
             self.reduce_node_whnf(finalizer, FORCE_REDUCTION_LIMIT)?;
         }
-        Ok(freed)
+        Ok(())
     }
 
     pub(in crate::runtime) fn maybe_collect_garbage_between_steps(
@@ -567,15 +576,18 @@ impl Program {
         scratch_apps: &[NodeId],
         machine_stack: Option<&EvalStack>,
     ) -> Result<(), EvalError> {
-        if self.gc_node_interval == 0 {
-            return Ok(());
-        }
         if self.reduce_depth != 1 {
             return Ok(());
         }
-        if self.gc_allocations_since_collect < self.gc_node_interval {
-            return Ok(());
+        if !self.force_gc {
+            if self.gc_node_interval == 0 {
+                return Ok(());
+            }
+            if self.gc_allocations_since_collect < self.gc_node_interval {
+                return Ok(());
+            }
         }
+        self.force_gc = false;
         self.collect_garbage_between_steps(
             current_root,
             eval_spine,
