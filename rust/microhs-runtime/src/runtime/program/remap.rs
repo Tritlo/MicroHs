@@ -3,6 +3,7 @@
 use super::*;
 
 impl Program {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::runtime) fn remap_node_ids_for_moving_gc(
         &mut self,
         current_root: &mut NodeId,
@@ -21,6 +22,71 @@ impl Program {
             remap_node_payload_ids(node, &mut remap);
         }
 
+        self.remap_non_heap_node_ids_for_moving_gc(
+            current_root,
+            frame_stack,
+            eval_spine,
+            persistent_spine,
+            scratch_args,
+            scratch_apps,
+            machine_stack,
+            remap,
+        );
+    }
+
+    pub(in crate::runtime) fn remap_selected_heap_node_ids_for_moving_gc(
+        &mut self,
+        old_young_sources: &[usize],
+        nursery_start: usize,
+        current_root: &mut NodeId,
+        frame_stack: &mut EvalFrameStack,
+        eval_spine: &mut EvalSpine,
+        persistent_spine: &mut PersistentSpine,
+        scratch_args: &mut [NodeId],
+        scratch_apps: &mut [NodeId],
+        machine_stack: Option<&mut EvalStack>,
+        mut remap: impl FnMut(NodeId) -> NodeId,
+    ) {
+        for index in old_young_sources.iter().copied() {
+            remap_cell_and_cold_payload_node_ids(
+                &mut self.nodes,
+                &mut self.cold_nodes,
+                index,
+                &mut remap,
+            );
+        }
+        for index in nursery_start..self.nodes.len() {
+            remap_cell_and_cold_payload_node_ids(
+                &mut self.nodes,
+                &mut self.cold_nodes,
+                index,
+                &mut remap,
+            );
+        }
+
+        self.remap_non_heap_node_ids_for_moving_gc(
+            current_root,
+            frame_stack,
+            eval_spine,
+            persistent_spine,
+            scratch_args,
+            scratch_apps,
+            machine_stack,
+            remap,
+        );
+    }
+
+    fn remap_non_heap_node_ids_for_moving_gc(
+        &mut self,
+        current_root: &mut NodeId,
+        frame_stack: &mut EvalFrameStack,
+        eval_spine: &mut EvalSpine,
+        persistent_spine: &mut PersistentSpine,
+        scratch_args: &mut [NodeId],
+        scratch_apps: &mut [NodeId],
+        machine_stack: Option<&mut EvalStack>,
+        mut remap: impl FnMut(NodeId) -> NodeId,
+    ) {
         remap_id(&mut self.root, &mut remap);
         remap_id(current_root, &mut remap);
         for id in self.labels.values_mut() {
@@ -114,6 +180,24 @@ fn remap_cell_node_ids(cell: &mut Cell, remap: &mut impl FnMut(NodeId) -> NodeId
         | CellTag::Float32
         | CellTag::ThreadId
         | CellTag::Cold => {}
+    }
+}
+
+fn remap_cell_and_cold_payload_node_ids(
+    nodes: &mut [Cell],
+    cold_nodes: &mut [Option<Node>],
+    index: usize,
+    remap: &mut impl FnMut(NodeId) -> NodeId,
+) {
+    let Some(cell) = nodes.get_mut(index) else {
+        return;
+    };
+    let cold = cell.cold_index();
+    remap_cell_node_ids(cell, remap);
+    if let Some(cold) = cold {
+        if let Some(Some(node)) = cold_nodes.get_mut(cold) {
+            remap_node_payload_ids(node, remap);
+        }
     }
 }
 

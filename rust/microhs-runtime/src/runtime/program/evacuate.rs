@@ -14,6 +14,7 @@ impl Program {
         scratch_args: &mut [NodeId],
         scratch_apps: &mut [NodeId],
         machine_stack: Option<&mut EvalStack>,
+        old_young_sources: &[usize],
     ) -> usize {
         assert_eq!(
             marked.len(),
@@ -65,7 +66,9 @@ impl Program {
             .retain(|id| id.index() < nursery_start || young_remap.contains_key(&id.index()));
         self.gc_mark_work.clear();
 
-        self.remap_node_ids_for_moving_gc(
+        self.remap_selected_heap_node_ids_for_moving_gc(
+            old_young_sources,
+            nursery_start,
             current_root,
             frame_stack,
             eval_spine,
