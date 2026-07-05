@@ -683,6 +683,8 @@ pub struct Program {
     pub(in crate::runtime) free_nodes: usize,
     pub(in crate::runtime) gc_node_interval: usize,
     pub(in crate::runtime) gc_allocations_since_collect: usize,
+    #[cfg(feature = "moving-gc")]
+    pub(in crate::runtime) gc_nursery_start: usize,
     pub(in crate::runtime) gc_last_allocations_since_collect: usize,
     pub(in crate::runtime) gc_collections: usize,
     pub(in crate::runtime) gc_freed_nodes_total: usize,
