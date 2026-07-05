@@ -101,138 +101,6 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    pub(in crate::runtime) fn profile_stack_eval_step_head_time(
-        &mut self,
-        head: ProfileHead,
-        nanos: u128,
-    ) {
-        let Some(head) = head else {
-            return;
-        };
-        let started = Instant::now();
-        let key = self.profile_head_key(head);
-        let Some(profile) = self.profile.as_mut() else {
-            return;
-        };
-        *profile.stack_eval_step_head_nanos.entry(key).or_default() += nanos;
-        profile.profile_stack_head_time_nanos = profile
-            .profile_stack_head_time_nanos
-            .saturating_add(started.elapsed().as_nanos());
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    #[cold]
-    pub(in crate::runtime) fn profile_stack_arg_read_head_time(
-        &mut self,
-        head: ProfileHead,
-        nanos: u128,
-    ) {
-        let Some(head) = head else {
-            return;
-        };
-        let started = Instant::now();
-        let key = self.profile_head_key(head);
-        let Some(profile) = self.profile.as_mut() else {
-            return;
-        };
-        *profile.stack_arg_read_head_nanos.entry(key).or_default() += nanos;
-        profile.profile_stack_head_time_nanos = profile
-            .profile_stack_head_time_nanos
-            .saturating_add(started.elapsed().as_nanos());
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    #[cold]
-    pub(in crate::runtime) fn profile_stack_apply_rewrite_head_time(
-        &mut self,
-        head: ProfileHead,
-        nanos: u128,
-    ) {
-        let Some(head) = head else {
-            return;
-        };
-        let started = Instant::now();
-        let key = self.profile_head_key(head);
-        let Some(profile) = self.profile.as_mut() else {
-            return;
-        };
-        *profile
-            .stack_apply_rewrite_head_nanos
-            .entry(key)
-            .or_default() += nanos;
-        profile.profile_stack_head_time_nanos = profile
-            .profile_stack_head_time_nanos
-            .saturating_add(started.elapsed().as_nanos());
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    #[cold]
-    pub(in crate::runtime) fn profile_stack_apply_app_head_time(
-        &mut self,
-        head: ProfileHead,
-        nanos: u128,
-    ) {
-        let Some(head) = head else {
-            return;
-        };
-        let started = Instant::now();
-        let key = self.profile_head_key(head);
-        let Some(profile) = self.profile.as_mut() else {
-            return;
-        };
-        *profile.stack_apply_app_head_nanos.entry(key).or_default() += nanos;
-        profile.profile_stack_head_time_nanos = profile
-            .profile_stack_head_time_nanos
-            .saturating_add(started.elapsed().as_nanos());
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    #[cold]
-    pub(in crate::runtime) fn profile_stack_force_frame_head_time(
-        &mut self,
-        head: ProfileHead,
-        nanos: u128,
-    ) {
-        let Some(head) = head else {
-            return;
-        };
-        let started = Instant::now();
-        let key = self.profile_head_key(head);
-        let Some(profile) = self.profile.as_mut() else {
-            return;
-        };
-        *profile.stack_force_frame_head_nanos.entry(key).or_default() += nanos;
-        profile.profile_stack_head_time_nanos = profile
-            .profile_stack_head_time_nanos
-            .saturating_add(started.elapsed().as_nanos());
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    #[cold]
-    pub(in crate::runtime) fn profile_stack_inner_descent_head_time(
-        &mut self,
-        head: ProfileHead,
-        nanos: u128,
-    ) {
-        let Some(head) = head else {
-            return;
-        };
-        let started = Instant::now();
-        let key = self.profile_head_key(head);
-        let Some(profile) = self.profile.as_mut() else {
-            return;
-        };
-        *profile
-            .stack_inner_descent_head_nanos
-            .entry(key)
-            .or_default() += nanos;
-        profile.profile_stack_head_time_nanos = profile
-            .profile_stack_head_time_nanos
-            .saturating_add(started.elapsed().as_nanos());
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    #[cold]
     pub(in crate::runtime) fn profile_stack_continue_next_head(
         &mut self,
         from: ProfileHead,
@@ -242,7 +110,6 @@ impl Program {
         let Some(from) = from else {
             return;
         };
-        let started = Instant::now();
         let from_key = self.profile_head_key(from);
         let next_key = self.profile_head_key(next);
         let mut key = String::with_capacity(from_key.len() + next_key.len() + 16);
@@ -255,9 +122,6 @@ impl Program {
             return;
         };
         *profile.stack_continue_next_heads.entry(key).or_default() += 1;
-        profile.profile_stack_head_time_nanos = profile
-            .profile_stack_head_time_nanos
-            .saturating_add(started.elapsed().as_nanos());
     }
 
     #[cfg(feature = "eval-phase-profile")]

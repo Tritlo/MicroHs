@@ -293,10 +293,6 @@ fn print_phase_profile(profile: &ProfileBench, top: usize) {
         "profile_profile_reduction_ms: {:.3}",
         nanos_millis(profile.profile.profile_reduction_nanos)
     );
-    println!(
-        "profile_profile_stack_head_time_ms: {:.3}",
-        nanos_millis(profile.profile.profile_stack_head_time_nanos)
-    );
     println!("profile_stack_head_arities:");
     for (head, count) in profile.profile.top_stack_head_arities(top) {
         println!("  {head}: {count}");
@@ -308,29 +304,5 @@ fn print_phase_profile(profile: &ProfileBench, top: usize) {
     println!("profile_stack_continue_next_heads:");
     for (transition, count) in profile.profile.top_stack_continue_next_heads(top) {
         println!("  {transition}: {count}");
-    }
-    println!("profile_stack_eval_step_head_ms:");
-    for (head, nanos) in profile.profile.top_stack_eval_step_head_times(top) {
-        println!("  {head}: {:.3}", nanos_millis(nanos));
-    }
-    println!("profile_stack_arg_read_head_ms:");
-    for (head, nanos) in profile.profile.top_stack_arg_read_head_times(top) {
-        println!("  {head}: {:.3}", nanos_millis(nanos));
-    }
-    println!("profile_stack_apply_rewrite_head_ms:");
-    for (head, nanos) in profile.profile.top_stack_apply_rewrite_head_times(top) {
-        println!("  {head}: {:.3}", nanos_millis(nanos));
-    }
-    println!("profile_stack_apply_app_head_ms:");
-    for (head, nanos) in profile.profile.top_stack_apply_app_head_times(top) {
-        println!("  {head}: {:.3}", nanos_millis(nanos));
-    }
-    println!("profile_stack_force_frame_head_ms:");
-    for (head, nanos) in profile.profile.top_stack_force_frame_head_times(top) {
-        println!("  {head}: {:.3}", nanos_millis(nanos));
-    }
-    println!("profile_stack_inner_descent_head_ms:");
-    for (head, nanos) in profile.profile.top_stack_inner_descent_head_times(top) {
-        println!("  {head}: {:.3}", nanos_millis(nanos));
     }
 }

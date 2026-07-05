@@ -111,18 +111,6 @@ pub struct EvalProfile {
     #[cfg(feature = "eval-phase-profile")]
     pub profile_reduction_nanos: u128,
     #[cfg(feature = "eval-phase-profile")]
-    pub profile_stack_head_time_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_arg_read_head_nanos: HashMap<String, u128>,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_apply_rewrite_head_nanos: HashMap<String, u128>,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_apply_app_head_nanos: HashMap<String, u128>,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_force_frame_head_nanos: HashMap<String, u128>,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_inner_descent_head_nanos: HashMap<String, u128>,
-    #[cfg(feature = "eval-phase-profile")]
     pub stack_head_arities: HashMap<String, usize>,
     #[cfg(feature = "eval-phase-profile")]
     pub stack_head_arity_classes: HashMap<String, usize>,
@@ -145,8 +133,6 @@ pub struct EvalProfile {
     pub app_allocation_sites: HashMap<String, usize>,
     pub eval_frame_push_kinds: HashMap<String, usize>,
     pub stack_fallback_heads: HashMap<String, usize>,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_eval_step_head_nanos: HashMap<String, u128>,
 }
 
 impl EvalProfile {
@@ -172,36 +158,6 @@ impl EvalProfile {
 
     pub fn top_stack_fallback_heads(&self, limit: usize) -> Vec<(&str, usize)> {
         sorted_profile_counts(&self.stack_fallback_heads, limit)
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_stack_eval_step_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
-        sorted_profile_times(&self.stack_eval_step_head_nanos, limit)
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_stack_arg_read_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
-        sorted_profile_times(&self.stack_arg_read_head_nanos, limit)
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_stack_apply_rewrite_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
-        sorted_profile_times(&self.stack_apply_rewrite_head_nanos, limit)
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_stack_apply_app_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
-        sorted_profile_times(&self.stack_apply_app_head_nanos, limit)
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_stack_force_frame_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
-        sorted_profile_times(&self.stack_force_frame_head_nanos, limit)
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_stack_inner_descent_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
-        sorted_profile_times(&self.stack_inner_descent_head_nanos, limit)
     }
 
     #[cfg(feature = "eval-phase-profile")]
@@ -245,20 +201,6 @@ pub(in crate::runtime) fn sorted_profile_counts(
     map: &HashMap<String, usize>,
     limit: usize,
 ) -> Vec<(&str, usize)> {
-    let mut counts: Vec<_> = map
-        .iter()
-        .map(|(key, value)| (key.as_str(), *value))
-        .collect();
-    counts.sort_unstable_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
-    counts.truncate(limit);
-    counts
-}
-
-#[cfg(feature = "eval-phase-profile")]
-pub(in crate::runtime) fn sorted_profile_times(
-    map: &HashMap<String, u128>,
-    limit: usize,
-) -> Vec<(&str, u128)> {
     let mut counts: Vec<_> = map
         .iter()
         .map(|(key, value)| (key.as_str(), *value))
