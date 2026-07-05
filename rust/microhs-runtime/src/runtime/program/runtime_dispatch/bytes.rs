@@ -7,10 +7,7 @@ impl Program {
         name: &str,
         args: &[NodeId],
     ) -> Result<Option<(usize, NodeId)>, EvalError> {
-        match self.bytes_op_inner(name, args) {
-            Ok(result) => Ok(result),
-            Err(err) => Err(self.trace_invalid_op_error("bytes_op", name, args, err)),
-        }
+        self.bytes_op_inner(name, args)
     }
 
     pub(in crate::runtime) fn bytes_op_inner(
@@ -18,18 +15,6 @@ impl Program {
         name: &str,
         args: &[NodeId],
     ) -> Result<Option<(usize, NodeId)>, EvalError> {
-        macro_rules! invalid_bytes {
-            ($($arg:tt)*) => {{
-                if std::env::var_os("MHS_TRACE_INVALID_BYTES").is_some() {
-                    eprintln!(
-                        "invalid bytes op {name}: reductions={}",
-                        self.reductions,
-                    );
-                    eprintln!($($arg)*);
-                }
-                EvalError::InvalidByteString
-            }};
-        }
         if let Some(op) = BytesBinOp::from_prim(name) {
             let x = self.eval_bytes_id(args[0])?;
             let y = self.eval_bytes_id(args[1])?;
@@ -90,11 +75,9 @@ impl Program {
             "bsread" if args.len() >= 3 => {
                 let bytes = self.eval_bytes_id(args[0])?;
                 let index = int_to_usize(self.eval_int(args[1])?)?;
-                let (len, storage_len) = self.byte_prim_lengths(bytes)?;
+                let (_, storage_len) = self.byte_prim_lengths(bytes)?;
                 if index >= storage_len {
-                    return Err(invalid_bytes!(
-                        "bsread bytes={bytes:?} index={index} len={len} storage_len={storage_len}"
-                    ));
+                    return Err(EvalError::InvalidByteString);
                 }
                 let byte = self.read_byte_unchecked_prim(bytes, index)?;
                 let byte = self.int(byte as i64);
@@ -103,11 +86,9 @@ impl Program {
             "bsread" => {
                 let bytes = self.eval_bytes_id(args[0])?;
                 let index = int_to_usize(self.eval_int(args[1])?)?;
-                let (len, storage_len) = self.byte_prim_lengths(bytes)?;
+                let (_, storage_len) = self.byte_prim_lengths(bytes)?;
                 if index >= storage_len {
-                    return Err(invalid_bytes!(
-                        "bsread bytes={bytes:?} index={index} len={len} storage_len={storage_len}"
-                    ));
+                    return Err(EvalError::InvalidByteString);
                 }
                 let byte = self.read_byte_unchecked_prim(bytes, index)?;
                 Some((2, self.int(byte as i64)))
@@ -116,11 +97,9 @@ impl Program {
                 let bytes = self.eval_bytes_id(args[0])?;
                 let index = int_to_usize(self.eval_int(args[1])?)?;
                 let byte = self.eval_int(args[2])? as u8;
-                let (len, storage_len) = self.byte_prim_lengths(bytes)?;
+                let (_, storage_len) = self.byte_prim_lengths(bytes)?;
                 if index >= storage_len {
-                    return Err(invalid_bytes!(
-                        "bswrite bytes={bytes:?} index={index} len={len} storage_len={storage_len}"
-                    ));
+                    return Err(EvalError::InvalidByteString);
                 }
                 self.write_byte_unchecked_prim(bytes, index, byte)?;
                 let unit = self.prim("I");
@@ -130,11 +109,9 @@ impl Program {
                 let bytes = self.eval_bytes_id(args[0])?;
                 let index = int_to_usize(self.eval_int(args[1])?)?;
                 let byte = self.eval_int(args[2])? as u8;
-                let (len, storage_len) = self.byte_prim_lengths(bytes)?;
+                let (_, storage_len) = self.byte_prim_lengths(bytes)?;
                 if index >= storage_len {
-                    return Err(invalid_bytes!(
-                        "bswrite bytes={bytes:?} index={index} len={len} storage_len={storage_len}"
-                    ));
+                    return Err(EvalError::InvalidByteString);
                 }
                 self.write_byte_unchecked_prim(bytes, index, byte)?;
                 Some((3, self.prim("I")))
@@ -181,7 +158,7 @@ impl Program {
                 let bytes = self.bytes(bytes_id)?;
                 let len = bytes.len();
                 if index >= len {
-                    return Err(invalid_bytes!("bsindex index={index} len={len}"));
+                    return Err(EvalError::InvalidByteString);
                 }
                 let byte = bytes[index];
                 Some((2, self.int(byte as i64)))
@@ -190,14 +167,11 @@ impl Program {
                 let bytes_id = self.eval_bytes_id(args[0])?;
                 let offset = int_to_usize(self.eval_int(args[1])?)?;
                 let len = int_to_usize(self.eval_int(args[2])?)?;
-                let bytes = self.bytes(bytes_id)?;
-                let bytes_len = bytes.len();
+                let bytes_len = self.bytes(bytes_id)?.len();
                 offset
                     .checked_add(len)
-                    .filter(|end| *end <= bytes.len())
-                    .ok_or_else(|| {
-                        invalid_bytes!("bssubstr offset={offset} len={len} bytes_len={bytes_len}")
-                    })?;
+                    .filter(|end| *end <= bytes_len)
+                    .ok_or(EvalError::InvalidByteString)?;
                 let node = self.byte_slice_node(bytes_id, offset, len)?;
                 Some((3, self.push_node(node)))
             }
@@ -211,10 +185,7 @@ impl Program {
         name: &str,
         args: &[NodeId],
     ) -> Result<Option<(usize, NodeId)>, EvalError> {
-        match self.bytes_unop_inner(name, args) {
-            Ok(result) => Ok(result),
-            Err(err) => Err(self.trace_invalid_op_error("bytes_unop", name, args, err)),
-        }
+        self.bytes_unop_inner(name, args)
     }
 
     pub(in crate::runtime) fn bytes_unop_inner(

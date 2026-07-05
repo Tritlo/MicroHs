@@ -21,10 +21,7 @@ impl Program {
         name: &str,
         args: &[NodeId],
     ) -> Result<Option<(usize, NodeId)>, EvalError> {
-        match self.foreign_ptr_op_inner(name, args) {
-            Ok(result) => Ok(result),
-            Err(err) => Err(self.trace_invalid_op_error("foreign_ptr_op", name, args, err)),
-        }
+        self.foreign_ptr_op_inner(name, args)
     }
 
     pub(in crate::runtime) fn foreign_ptr_op_inner(
@@ -70,10 +67,7 @@ impl Program {
         name: &str,
         args: &[NodeId],
     ) -> Result<Option<(usize, NodeId)>, EvalError> {
-        match self.foreign_ptr_unop_inner(name, args) {
-            Ok(result) => Ok(result),
-            Err(err) => Err(self.trace_invalid_op_error("foreign_ptr_unop", name, args, err)),
-        }
+        self.foreign_ptr_unop_inner(name, args)
     }
 
     pub(in crate::runtime) fn foreign_ptr_unop_inner(

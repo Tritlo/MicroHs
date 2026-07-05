@@ -33,11 +33,7 @@ impl Program {
                 let bytes = self.bytes(base)?;
                 let end = offset.checked_add(len).ok_or(EvalError::Overflow)?;
                 if end > bytes.len() {
-                    return Err(trace_invalid_bytes!(
-                        self,
-                        "read pointer too short ptr={ptr} len={len} available={}",
-                        bytes.len().saturating_sub(offset)
-                    ));
+                    return Err(EvalError::InvalidByteString);
                 }
                 Ok(Some(BFileKind::ReadOnlyMemoryView {
                     base,

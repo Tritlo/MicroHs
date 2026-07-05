@@ -1,4 +1,4 @@
-//! Optional runtime tracing for invalid byte expectations.
+//! Runtime node summaries for diagnostics and error payloads.
 use super::*;
 
 impl Program {
@@ -46,29 +46,5 @@ impl Program {
             Node::FunPtr(name) => format!("{id:?}:FunPtr({name})"),
             Node::Tick(bytes) => format!("{id:?}:Tick(len={})", bytes.len()),
         }
-    }
-
-    pub(in crate::runtime) fn trace_invalid_op_error(
-        &self,
-        domain: &str,
-        name: &str,
-        args: &[NodeId],
-        err: EvalError,
-    ) -> EvalError {
-        if matches!(err, EvalError::InvalidByteString)
-            && std::env::var_os("MHS_TRACE_INVALID_BYTES").is_some()
-        {
-            eprintln!(
-                "invalid bytes context: domain={domain} name={name} reductions={}",
-                self.reductions
-            );
-            for (idx, arg) in args.iter().take(8).enumerate() {
-                eprintln!("  arg{idx}: {}", self.node_trace_summary(*arg));
-            }
-            if args.len() > 8 {
-                eprintln!("  ... {} more args", args.len() - 8);
-            }
-        }
-        err
     }
 }

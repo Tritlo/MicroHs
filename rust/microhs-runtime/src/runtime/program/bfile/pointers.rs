@@ -79,26 +79,20 @@ impl Program {
 
     pub(in crate::runtime) fn decode_pointer(&self, ptr: i64) -> Result<(usize, usize), EvalError> {
         if ptr <= 0 {
-            return Err(trace_invalid_bytes!(self, "decode_pointer ptr={ptr}"));
+            return Err(EvalError::InvalidByteString);
         }
-        let slot_word = usize::try_from(ptr >> 32)
-            .map_err(|_| trace_invalid_bytes!(self, "decode_pointer block ptr={ptr}"))?;
+        let slot_word = usize::try_from(ptr >> 32).map_err(|_| EvalError::InvalidByteString)?;
         if slot_word == 0 {
-            return Err(trace_invalid_bytes!(
-                self,
-                "decode_pointer zero slot ptr={ptr}"
-            ));
+            return Err(EvalError::InvalidByteString);
         }
-        let offset = usize::try_from(ptr & 0xffff_ffff)
-            .map_err(|_| trace_invalid_bytes!(self, "decode_pointer offset ptr={ptr}"))?;
+        let offset =
+            usize::try_from(ptr & 0xffff_ffff).map_err(|_| EvalError::InvalidByteString)?;
         let slot = slot_word - 1;
-        let block = self.node_pointers.get(slot).copied().ok_or_else(|| {
-            trace_invalid_bytes!(
-                self,
-                "decode_pointer missing node slot ptr={ptr} slot={slot} slots={}",
-                self.node_pointers.len()
-            )
-        })?;
+        let block = self
+            .node_pointers
+            .get(slot)
+            .copied()
+            .ok_or(EvalError::InvalidByteString)?;
         Ok((block.index(), offset))
     }
 
@@ -107,31 +101,22 @@ impl Program {
         ptr: i64,
     ) -> Result<(usize, usize), EvalError> {
         if ptr < ALLOCATION_PTR_BASE || ptr >= 0 {
-            return Err(trace_invalid_bytes!(
-                self,
-                "decode_allocation_pointer ptr={ptr}"
-            ));
+            return Err(EvalError::InvalidByteString);
         }
         let raw = ptr
             .checked_sub(ALLOCATION_PTR_BASE)
             .ok_or(EvalError::Overflow)?;
         let slot = usize::try_from(raw / ALLOCATION_PTR_STRIDE)
-            .map_err(|_| trace_invalid_bytes!(self, "allocation slot ptr={ptr} raw={raw}"))?;
+            .map_err(|_| EvalError::InvalidByteString)?;
         let offset = usize::try_from(raw % ALLOCATION_PTR_STRIDE)
-            .map_err(|_| trace_invalid_bytes!(self, "allocation offset ptr={ptr} raw={raw}"))?;
+            .map_err(|_| EvalError::InvalidByteString)?;
         let bytes = self
             .allocations
             .get(slot)
             .and_then(Option::as_ref)
-            .ok_or_else(|| {
-                trace_invalid_bytes!(self, "allocation missing ptr={ptr} slot={slot}")
-            })?;
+            .ok_or(EvalError::InvalidByteString)?;
         if offset > bytes.len() {
-            return Err(trace_invalid_bytes!(
-                self,
-                "allocation offset out of range ptr={ptr} slot={slot} offset={offset} len={}",
-                bytes.len()
-            ));
+            return Err(EvalError::InvalidByteString);
         }
         Ok((slot, offset))
     }
@@ -170,9 +155,7 @@ impl Program {
             .allocations
             .get(slot)
             .and_then(Option::as_ref)
-            .ok_or_else(|| {
-                trace_invalid_bytes!(self, "allocation read missing ptr={ptr} slot={slot}")
-            })?;
+            .ok_or(EvalError::InvalidByteString)?;
         Ok(Some(&bytes[offset..]))
     }
 
@@ -182,11 +165,7 @@ impl Program {
         }
         let (base, offset) = self.decode_pointer(ptr)?;
         if base >= self.nodes.len() {
-            return Err(trace_invalid_bytes!(
-                self,
-                "pointer base missing ptr={ptr} base={base} offset={offset} nodes={}",
-                self.nodes.len()
-            ));
+            return Err(EvalError::InvalidByteString);
         };
         let node_id = NodeId::from_index(base);
         let bytes = match self.cold_node(node_id) {
@@ -199,28 +178,12 @@ impl Program {
                     .offset
                     .checked_add(offset)
                     .ok_or(EvalError::Overflow)?;
-                return bytes.get(offset..).ok_or_else(|| {
-                    trace_invalid_bytes!(
-                        self,
-                        "foreign pointer offset out of range ptr={ptr} base={base} offset={offset} len={}",
-                        bytes.len()
-                    )
-                });
+                return bytes.get(offset..).ok_or(EvalError::InvalidByteString);
             }
-            _ => {
-                return Err(trace_invalid_bytes!(
-                    self,
-                    "pointer base not bytes ptr={ptr} base={base} offset={offset} kind={}",
-                    self.profile_head_key(NodeId::from_index(base))
-                ));
-            }
+            _ => return Err(EvalError::InvalidByteString),
         };
         if offset > bytes.len() {
-            return Err(trace_invalid_bytes!(
-                self,
-                "pointer offset out of range ptr={ptr} base={base} offset={offset} len={}",
-                bytes.len()
-            ));
+            return Err(EvalError::InvalidByteString);
         }
         Ok(&bytes[offset..])
     }
@@ -239,10 +202,7 @@ impl Program {
                 .len()
                 .saturating_sub(offset);
             if available < write_len {
-                return Err(trace_invalid_bytes!(
-                    self,
-                    "allocation write too short ptr={ptr} slot={slot} offset={offset} write_len={write_len} available={available}"
-                ));
+                return Err(EvalError::InvalidByteString);
             }
             let dst = self.allocations[slot]
                 .as_mut()
@@ -252,11 +212,7 @@ impl Program {
         }
         let (base, offset) = self.decode_pointer(ptr)?;
         if base >= self.nodes.len() {
-            return Err(trace_invalid_bytes!(
-                self,
-                "write pointer base missing ptr={ptr} base={base} offset={offset} nodes={}",
-                self.nodes.len()
-            ));
+            return Err(EvalError::InvalidByteString);
         }
         let write_len = bytes.len();
         let node_id = NodeId::from_index(base);
@@ -264,27 +220,18 @@ impl Program {
             let current = self.bytes(node_id)?;
             let available = current.len().saturating_sub(offset);
             if offset > current.len() || available < write_len {
-                return Err(trace_invalid_bytes!(
-                    self,
-                    "write bytes view out of range ptr={ptr} base={base} offset={offset} write_len={write_len} len={}",
-                    current.len()
-                ));
+                return Err(EvalError::InvalidByteString);
             }
             let mut owned = current.to_vec();
             owned[offset..offset + write_len].copy_from_slice(bytes);
             self.set_node_at(node_id.index(), Node::bytes(owned));
             return Ok(());
         }
-        let kind = self.profile_head_key(NodeId::from_index(base));
         let is_mutable_bytes = match self.cold_node(node_id) {
             Some(Node::Bytes(dst)) => {
                 let available = dst.len().saturating_sub(offset);
                 if offset > dst.len() || available < write_len {
-                    return Err(trace_invalid_bytes!(
-                        self,
-                        "write bytes out of range ptr={ptr} base={base} offset={offset} write_len={write_len} len={}",
-                        dst.len()
-                    ));
+                    return Err(EvalError::InvalidByteString);
                 }
                 false
             }
@@ -292,20 +239,11 @@ impl Program {
                 let storage_len = dst.bytes.len();
                 let available = storage_len.saturating_sub(offset);
                 if offset > storage_len || available < write_len {
-                    return Err(trace_invalid_bytes!(
-                        self,
-                        "write mutable bytes out of range ptr={ptr} base={base} offset={offset} write_len={write_len} storage_len={storage_len}"
-                    ));
+                    return Err(EvalError::InvalidByteString);
                 }
                 true
             }
-            _ => {
-                return Err(trace_invalid_bytes!(
-                    self,
-                    "write pointer base not bytes ptr={ptr} base={base} offset={offset} kind={}",
-                    kind
-                ));
-            }
+            _ => return Err(EvalError::InvalidByteString),
         };
         let dst = match self.cold_node_mut(node_id) {
             Some(Node::Bytes(dst)) if !is_mutable_bytes => &mut dst[offset..offset + write_len],
@@ -413,13 +351,7 @@ impl Program {
         len: usize,
     ) -> Result<Vec<u8>, EvalError> {
         let bytes = self.pointer_bytes(ptr)?;
-        let bytes = bytes.get(..len).ok_or_else(|| {
-            trace_invalid_bytes!(
-                self,
-                "read pointer too short ptr={ptr} len={len} available={}",
-                bytes.len()
-            )
-        })?;
+        let bytes = bytes.get(..len).ok_or(EvalError::InvalidByteString)?;
         Ok(bytes.to_vec())
     }
 

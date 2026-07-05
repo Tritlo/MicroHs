@@ -123,16 +123,12 @@ impl Program {
     pub(in crate::runtime) fn eval_pointer_value(&mut self, id: NodeId) -> Result<i64, EvalError> {
         let root = self.resolve(id)?;
         if let Some(value) = self.pointer_value_from_whnf(root) {
-            self.trace_suspicious_pointer_value(root, value);
             return Ok(value);
         }
         let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
         let root = self.resolve(root)?;
-        let value = self
-            .pointer_value_from_whnf(root)
-            .ok_or(EvalError::ExpectedPointer(root))?;
-        self.trace_suspicious_pointer_value(root, value);
-        Ok(value)
+        self.pointer_value_from_whnf(root)
+            .ok_or(EvalError::ExpectedPointer(root))
     }
 
     pub(in crate::runtime) fn pointer_value_from_whnf(&self, root: NodeId) -> Option<i64> {
@@ -152,39 +148,6 @@ impl Program {
         match cell.prim() {
             Some(prim) => std_handle_ptr(prim.name()),
             _ => None,
-        }
-    }
-
-    pub(in crate::runtime) fn trace_suspicious_pointer_value(&self, root: NodeId, ptr: i64) {
-        if std::env::var_os("MHS_TRACE_INVALID_BYTES").is_none() {
-            return;
-        }
-        if ptr >= 0 || handle_from_ptr(ptr).is_some() {
-            return;
-        }
-        let suspicious = if ptr < BFILE_PTR_BASE {
-            true
-        } else if ptr < DIR_PTR_BASE {
-            self.decode_bfile_pointer(ptr)
-                .ok()
-                .and_then(|slot| self.bfiles.get(slot))
-                .and_then(Option::as_ref)
-                .is_none()
-        } else if ptr < ALLOCATION_PTR_BASE {
-            self.decode_dir_pointer(ptr)
-                .ok()
-                .and_then(|slot| self.dirs.get(slot))
-                .and_then(Option::as_ref)
-                .is_none()
-        } else {
-            self.decode_allocation_pointer(ptr).is_err()
-        };
-        if suspicious {
-            eprintln!(
-                "suspicious pointer value: reductions={} ptr={ptr} root={}",
-                self.reductions,
-                self.node_trace_summary(root)
-            );
         }
     }
 

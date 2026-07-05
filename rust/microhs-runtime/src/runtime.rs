@@ -31,16 +31,6 @@ impl BrowserDuration {
     }
 }
 
-macro_rules! trace_invalid_bytes {
-    ($program:expr, $($arg:tt)*) => {{
-        if std::env::var_os("MHS_TRACE_INVALID_BYTES").is_some() {
-            eprintln!("invalid bytes: reductions={}", $program.reductions);
-            eprintln!($($arg)*);
-        }
-        EvalError::InvalidByteString
-    }};
-}
-
 mod codecs;
 mod core_types;
 mod eval_state;
