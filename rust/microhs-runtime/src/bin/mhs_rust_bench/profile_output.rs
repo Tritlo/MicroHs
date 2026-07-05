@@ -266,18 +266,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
         for (site, count) in profile.profile.top_app_allocation_resolved_site_shapes(top) {
             println!("  {site}: {count}");
         }
-        println!("profile_eval_whnf_value_calls:");
-        for (kind, count) in profile.profile.top_eval_whnf_value_calls(top) {
-            println!("  {kind}: {count}");
-        }
-        println!("profile_eval_whnf_value_slow:");
-        for (kind, count) in profile.profile.top_eval_whnf_value_slow(top) {
-            println!("  {kind}: {count}");
-        }
-        println!("profile_reduce_node_whnf_entry_shapes:");
-        for (shape, count) in profile.profile.top_reduce_node_whnf_entry_shapes(top) {
-            println!("  {shape}: {count}");
-        }
     }
     println!("profile_eval_frame_push_kinds:");
     for (kind, count) in profile.profile.top_eval_frame_push_kinds(top) {

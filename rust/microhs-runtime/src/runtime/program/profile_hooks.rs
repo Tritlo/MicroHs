@@ -314,41 +314,6 @@ impl Program {
     }
 
     #[cfg(feature = "eval-phase-profile")]
-    pub(in crate::runtime) fn profile_eval_whnf_value(
-        &mut self,
-        kind: &'static str,
-        immediate: bool,
-    ) {
-        let Some(profile) = self.profile.as_mut() else {
-            return;
-        };
-        *profile
-            .eval_whnf_value_calls
-            .entry(kind.to_owned())
-            .or_default() += 1;
-        if !immediate {
-            *profile
-                .eval_whnf_value_slow
-                .entry(kind.to_owned())
-                .or_default() += 1;
-        }
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub(in crate::runtime) fn profile_reduce_node_whnf_entry(&mut self, root: NodeId) {
-        if self.profile.is_none() {
-            return;
-        }
-        let shape = self.profile_resolved_node_shape_key(root);
-        if let Some(profile) = self.profile.as_mut() {
-            *profile
-                .reduce_node_whnf_entry_shapes
-                .entry(shape)
-                .or_default() += 1;
-        }
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
     pub(in crate::runtime) fn profile_cell_shape_key(&self, cell: Cell) -> &'static str {
         match cell.tag() {
             CellTag::App => "App",
