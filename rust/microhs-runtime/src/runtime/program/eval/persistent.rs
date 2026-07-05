@@ -11,9 +11,6 @@ impl Program {
         if spine.len() == used {
             return StrictRedex::Root(root);
         }
-        if self.profile.is_some() {
-            self.profile_strict_redex_snapshot(spine.len());
-        }
         StrictRedex::Spine {
             root,
             used,
@@ -77,11 +74,6 @@ impl Program {
                     let redex = spine.app($used - 1);
                     if node != redex {
                         self.set_app_cell_at(redex.index(), Cell::indir(Some(node)));
-                    }
-                    if $used < spine.len() {
-                        if self.profile.is_some() {
-                            self.profile_remaining_app_scan(spine.len() - $used);
-                        }
                     }
                     if $used < spine.len() && !spine.remaining_apps_contain($used, node) {
                         let app = spine.app($used);

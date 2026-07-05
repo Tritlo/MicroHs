@@ -692,9 +692,6 @@ impl Program {
         let redex = if args.len() == used {
             StrictRedex::Root(root)
         } else {
-            if self.profile.is_some() {
-                self.profile_strict_redex_snapshot(args.len());
-            }
             StrictRedex::Spine {
                 root,
                 used,

@@ -87,9 +87,6 @@ impl Program {
         if spine.len() == used {
             return StrictRedex::Root(root);
         }
-        if self.profile.is_some() {
-            self.profile_strict_redex_snapshot(spine.len());
-        }
         spine.write_apps_head_order(scratch_apps);
         StrictRedex::Spine {
             root,

@@ -235,22 +235,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
         profile.profile.fallback_eval_loop_steps
     );
     println!(
-        "profile_strict_redex_snapshots: {}",
-        profile.profile.strict_redex_snapshots
-    );
-    println!(
-        "profile_strict_redex_snapshot_apps: {}",
-        profile.profile.strict_redex_snapshot_apps
-    );
-    println!(
-        "profile_remaining_app_scans: {}",
-        profile.profile.remaining_app_scans
-    );
-    println!(
-        "profile_remaining_app_scan_apps: {}",
-        profile.profile.remaining_app_scan_apps
-    );
-    println!(
         "profile_eval_frame_pushes: {}",
         profile.profile.eval_frame_pushes
     );
