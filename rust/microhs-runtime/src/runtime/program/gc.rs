@@ -362,19 +362,6 @@ impl Program {
         target
     }
 
-    #[cfg(feature = "eval-phase-profile")]
-    pub(in crate::runtime) fn gc_profile_resolved_id(&self, id: NodeId) -> Option<NodeId> {
-        let mut current = id;
-        for _ in 0..self.nodes.len() {
-            let cell = *self.nodes.get(current.index())?;
-            if !cell.has_tag(CellTag::Indir) {
-                return (!cell.has_tag(CellTag::Free)).then_some(current);
-            }
-            current = cell.option_id_word1()?;
-        }
-        None
-    }
-
     pub(in crate::runtime) fn mark_reachable(
         &mut self,
         marked: &mut [bool],

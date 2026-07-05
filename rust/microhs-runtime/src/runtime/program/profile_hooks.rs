@@ -41,36 +41,9 @@ impl Program {
     #[cold]
     pub(in crate::runtime) fn profile_step(&mut self, head: NodeId, arity: usize) -> ProfileHead {
         let key = self.profile_head_key(head);
-        #[cfg(feature = "eval-phase-profile")]
-        let known_head = self.cell(head).prim();
         let profile = self.profile.as_mut().expect("profile checked");
         profile.step_attempts += 1;
         *profile.head_attempts.entry(key.clone()).or_default() += 1;
-        #[cfg(feature = "eval-phase-profile")]
-        {
-            let mut arity_key = String::with_capacity(key.len() + 8);
-            arity_key.push_str(&key);
-            arity_key.push('@');
-            arity_key.push_str(&arity.to_string());
-            *profile.stack_head_arities.entry(arity_key).or_default() += 1;
-            if let Some(Prim::Known(known)) = known_head {
-                if let Some(required) = profile_known_reducing_arity(known) {
-                    let class = match arity.cmp(&required) {
-                        std::cmp::Ordering::Less => "under",
-                        std::cmp::Ordering::Equal => "exact",
-                        std::cmp::Ordering::Greater => "extra",
-                    };
-                    let mut class_key = String::with_capacity(key.len() + class.len() + 1);
-                    class_key.push_str(&key);
-                    class_key.push('@');
-                    class_key.push_str(class);
-                    *profile
-                        .stack_head_arity_classes
-                        .entry(class_key)
-                        .or_default() += 1;
-                }
-            }
-        }
         profile.max_spine_arity = profile.max_spine_arity.max(arity);
         ProfileHead::from_node(head)
     }
@@ -87,121 +60,6 @@ impl Program {
         profile.successful_steps += 1;
         profile.reductions += reductions;
         *profile.head_reductions.entry(key).or_default() += reductions;
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    #[cold]
-    pub(in crate::runtime) fn profile_stack_continue_next_head(
-        &mut self,
-        from: ProfileHead,
-        next: NodeId,
-        arity: usize,
-    ) {
-        let Some(from) = from.node() else {
-            return;
-        };
-        let from_key = self.profile_head_key(from);
-        let next_key = self.profile_head_key(next);
-        let mut key = String::with_capacity(from_key.len() + next_key.len() + 16);
-        key.push_str(&from_key);
-        key.push_str("->");
-        key.push_str(&next_key);
-        key.push('@');
-        key.push_str(&arity.to_string());
-        let Some(profile) = self.profile.as_mut() else {
-            return;
-        };
-        *profile.stack_continue_next_heads.entry(key).or_default() += 1;
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub(in crate::runtime) fn profile_resolved_node_shape_key(&self, id: NodeId) -> String {
-        let Some(id) = self.gc_profile_resolved_id(id) else {
-            return "Free".to_owned();
-        };
-        let cell = self.cell(id);
-        match cell.tag() {
-            CellTag::App => {
-                let fun = cell.id_payload();
-                let fun = self.gc_profile_resolved_id(fun).unwrap_or(fun);
-                match self.cell(fun).prim() {
-                    Some(prim) => format!("App({})", prim.name()),
-                    None => format!("App({})", self.profile_cell_shape_key(self.cell(fun))),
-                }
-            }
-            CellTag::Cold => self
-                .cold_node(id)
-                .map(cold_profile_key)
-                .unwrap_or("Cold")
-                .to_owned(),
-            _ => self.profile_cell_shape_key(cell).to_owned(),
-        }
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub(in crate::runtime) fn profile_cell_shape_key(&self, cell: Cell) -> &'static str {
-        match cell.tag() {
-            CellTag::App => "App",
-            CellTag::Indir => "Indir",
-            CellTag::Free => "Free",
-            CellTag::KnownPrim | CellTag::RuntimePrim => {
-                cell.prim_name().expect("primitive tag must decode")
-            }
-            CellTag::Int => "Int",
-            CellTag::Float32 => "Float32",
-            CellTag::ThreadId => "ThreadId",
-            CellTag::Cold => "Cold",
-        }
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    #[cold]
-    pub(in crate::runtime) fn profile_stack_arg_read_time(&mut self, nanos: u128) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.stack_arg_read_nanos = profile.stack_arg_read_nanos.saturating_add(nanos);
-        }
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    #[cold]
-    pub(in crate::runtime) fn profile_stack_app_alloc_time(&mut self, nanos: u128) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.stack_app_alloc_nanos = profile.stack_app_alloc_nanos.saturating_add(nanos);
-        }
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    #[cold]
-    pub(in crate::runtime) fn profile_stack_apply_rewrite_time(&mut self, nanos: u128) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.stack_apply_rewrite_nanos =
-                profile.stack_apply_rewrite_nanos.saturating_add(nanos);
-        }
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    #[cold]
-    pub(in crate::runtime) fn profile_stack_apply_app_time(&mut self, nanos: u128) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.stack_apply_app_nanos = profile.stack_apply_app_nanos.saturating_add(nanos);
-        }
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    #[cold]
-    pub(in crate::runtime) fn profile_stack_force_frame_time(&mut self, nanos: u128) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.stack_force_frame_nanos = profile.stack_force_frame_nanos.saturating_add(nanos);
-        }
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    #[cold]
-    pub(in crate::runtime) fn profile_stack_inner_descent_time(&mut self, nanos: u128) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.stack_inner_descent_nanos =
-                profile.stack_inner_descent_nanos.saturating_add(nanos);
-        }
     }
 
     #[cold]

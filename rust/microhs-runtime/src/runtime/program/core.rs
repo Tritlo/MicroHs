@@ -306,54 +306,14 @@ impl Program {
     #[inline]
     pub(in crate::runtime) fn push_app_node(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
         self.gc_allocations_since_collect = self.gc_allocations_since_collect.saturating_add(1);
-        #[cfg(feature = "eval-phase-profile")]
-        let profiling = self.profiling_enabled();
-        #[cfg(feature = "eval-phase-profile")]
-        let pop_started = profiling.then(Instant::now);
         let free_index = self.pop_free_node();
-        #[cfg(feature = "eval-phase-profile")]
-        if let Some(started) = pop_started {
-            if let Some(profile) = self.profile.as_mut() {
-                profile.app_alloc_free_pop_nanos = profile
-                    .app_alloc_free_pop_nanos
-                    .saturating_add(started.elapsed().as_nanos());
-            }
-        }
         if let Some(index) = free_index {
-            #[cfg(feature = "eval-phase-profile")]
-            if let Some(profile) = self.profile.as_mut() {
-                profile.app_alloc_reused = profile.app_alloc_reused.saturating_add(1);
-            }
-            #[cfg(feature = "eval-phase-profile")]
-            let write_started = profiling.then(Instant::now);
             debug_assert_eq!(self.nodes[index].tag(), CellTag::Free);
             self.nodes[index] = Cell::app(fun, arg);
             let id = NodeId::from_index(index);
-            #[cfg(feature = "eval-phase-profile")]
-            if let Some(started) = write_started {
-                if let Some(profile) = self.profile.as_mut() {
-                    profile.app_alloc_reused_write_nanos = profile
-                        .app_alloc_reused_write_nanos
-                        .saturating_add(started.elapsed().as_nanos());
-                }
-            }
             id
         } else {
-            #[cfg(feature = "eval-phase-profile")]
-            if let Some(profile) = self.profile.as_mut() {
-                profile.app_alloc_fresh = profile.app_alloc_fresh.saturating_add(1);
-            }
-            #[cfg(feature = "eval-phase-profile")]
-            let push_started = profiling.then(Instant::now);
             let id = self.push_cell(Cell::app(fun, arg));
-            #[cfg(feature = "eval-phase-profile")]
-            if let Some(started) = push_started {
-                if let Some(profile) = self.profile.as_mut() {
-                    profile.app_alloc_fresh_push_nanos = profile
-                        .app_alloc_fresh_push_nanos
-                        .saturating_add(started.elapsed().as_nanos());
-                }
-            }
             id
         }
     }

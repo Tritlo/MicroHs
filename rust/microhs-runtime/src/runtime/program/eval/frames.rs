@@ -196,8 +196,6 @@ impl Program {
         used: usize,
         node: NodeId,
     ) -> NodeId {
-        #[cfg(feature = "eval-phase-profile")]
-        let started = self.profiling_enabled().then(Instant::now);
         debug_assert!(used > 0);
         debug_assert!(used <= app_end);
         let redex_index = app_end - used;
@@ -210,10 +208,6 @@ impl Program {
             self.profile_stack_rewrite(used, wrote_indirection);
         }
         stack.apps.truncate(redex_index);
-        #[cfg(feature = "eval-phase-profile")]
-        if let Some(started) = started {
-            self.profile_stack_apply_rewrite_time(started.elapsed().as_nanos());
-        }
         node
     }
 
@@ -224,8 +218,6 @@ impl Program {
         used: usize,
         value: Node,
     ) -> NodeId {
-        #[cfg(feature = "eval-phase-profile")]
-        let started = self.profiling_enabled().then(Instant::now);
         debug_assert!(used > 0);
         debug_assert!(used <= app_end);
         let redex_index = app_end - used;
@@ -235,10 +227,6 @@ impl Program {
             self.profile_stack_rewrite(used, false);
         }
         stack.apps.truncate(redex_index);
-        #[cfg(feature = "eval-phase-profile")]
-        if let Some(started) = started {
-            self.profile_stack_apply_rewrite_time(started.elapsed().as_nanos());
-        }
         redex
     }
 
@@ -248,15 +236,9 @@ impl Program {
         used: usize,
         value: Node,
     ) -> NodeId {
-        #[cfg(feature = "eval-phase-profile")]
-        let started = self.profiling_enabled().then(Instant::now);
         self.set_app_node_at(redex.index(), value);
         if self.profiling_enabled() {
             self.profile_stack_rewrite(used, false);
-        }
-        #[cfg(feature = "eval-phase-profile")]
-        if let Some(started) = started {
-            self.profile_stack_apply_rewrite_time(started.elapsed().as_nanos());
         }
         redex
     }
@@ -268,8 +250,6 @@ impl Program {
         fun: NodeId,
         arg: NodeId,
     ) -> NodeId {
-        #[cfg(feature = "eval-phase-profile")]
-        let started = self.profiling_enabled().then(Instant::now);
         if self.profiling_enabled() {
             self.profile_stack_app_update(used);
         }
@@ -284,10 +264,6 @@ impl Program {
             stack.apps.truncate(redex_index);
             redex
         };
-        #[cfg(feature = "eval-phase-profile")]
-        if let Some(started) = started {
-            self.profile_stack_apply_app_time(started.elapsed().as_nanos());
-        }
         node
     }
 
@@ -338,8 +314,6 @@ impl Program {
                 if frame.profile_head.is_some() {
                     self.profile_reduction(frame.profile_head, 1);
                 }
-                #[cfg(feature = "eval-phase-profile")]
-                let started = self.profiling_enabled().then(Instant::now);
                 let wrote_indirection = result != frame.redex;
                 if wrote_indirection {
                     self.set_app_cell_at(frame.redex.index(), Cell::indir(Some(result)));
@@ -347,26 +321,16 @@ impl Program {
                 if self.profiling_enabled() {
                     self.profile_stack_rewrite(frame.used, wrote_indirection);
                 }
-                #[cfg(feature = "eval-phase-profile")]
-                if let Some(started) = started {
-                    self.profile_stack_apply_rewrite_time(started.elapsed().as_nanos());
-                }
                 return Ok((result, 1));
             }
             WhnfFrameKind::IoStrict { action, value } => {
                 if frame.profile_head.is_some() {
                     self.profile_reduction(frame.profile_head, 1);
                 }
-                #[cfg(feature = "eval-phase-profile")]
-                let started = self.profiling_enabled().then(Instant::now);
                 if self.profiling_enabled() {
                     self.profile_stack_app_update(frame.used);
                 }
                 self.set_app_cell_at(frame.redex.index(), Cell::app(action, value));
-                #[cfg(feature = "eval-phase-profile")]
-                if let Some(started) = started {
-                    self.profile_stack_apply_app_time(started.elapsed().as_nanos());
-                }
                 return Ok((frame.redex, 1));
             }
             WhnfFrameKind::IsInt => {
@@ -1124,64 +1088,7 @@ impl Program {
         let mut scratch_apps = Vec::new();
         let profiling = self.profiling_enabled();
 
-        #[cfg(feature = "eval-phase-profile")]
-        macro_rules! stack_phase_start {
-            () => {
-                profiling.then(Instant::now)
-            };
-        }
-        #[cfg(not(feature = "eval-phase-profile"))]
-        macro_rules! stack_phase_start {
-            () => {
-                ()
-            };
-        }
-        #[cfg(feature = "eval-phase-profile")]
-        macro_rules! record_stack_time {
-            ($field:ident, $started:expr) => {{
-                if let Some(started) = $started {
-                    if let Some(profile) = self.profile.as_mut() {
-                        profile.$field =
-                            profile.$field.saturating_add(started.elapsed().as_nanos());
-                    }
-                }
-            }};
-        }
-        #[cfg(not(feature = "eval-phase-profile"))]
-        macro_rules! record_stack_time {
-            ($field:ident, $started:expr) => {{
-                let _ = &$started;
-            }};
-        }
-        #[cfg(feature = "eval-phase-profile")]
-        macro_rules! profile_stack_counter {
-            ($field:ident) => {{
-                if let Some(profile) = self.profile.as_mut() {
-                    profile.$field = profile.$field.saturating_add(1);
-                }
-            }};
-        }
-        #[cfg(not(feature = "eval-phase-profile"))]
-        macro_rules! profile_stack_counter {
-            ($field:ident) => {};
-        }
-        macro_rules! profile_stack_step_result {
-            ($step:expr) => {{
-                #[cfg(feature = "eval-phase-profile")]
-                {
-                    profile_stack_counter!(stack_eval_step_calls);
-                    match &$step {
-                        StackStep::Reduced { .. } => profile_stack_counter!(stack_step_reduced),
-                        StackStep::Whnf { .. } => profile_stack_counter!(stack_step_whnf),
-                        StackStep::Fallback { .. } => profile_stack_counter!(stack_step_fallback),
-                    }
-                }
-            }};
-        }
-
         while steps < limit {
-            profile_stack_counter!(stack_loop_iterations);
-            let gc_started = stack_phase_start!();
             self.maybe_collect_garbage_between_steps(
                 current,
                 &fallback_frame_stack,
@@ -1191,20 +1098,13 @@ impl Program {
                 &scratch_apps,
                 Some(&stack),
             )?;
-            record_stack_time!(stack_gc_check_nanos, gc_started);
 
-            let resolve_started = stack_phase_start!();
             current = self.resolve_for_whnf(current, profile_resolve)?;
-            record_stack_time!(stack_resolve_nanos, resolve_started);
 
             if stack.app_len() == 0 {
-                profile_stack_counter!(stack_ready_checks);
-                let ready_started = stack_phase_start!();
                 if let Some((next, reductions)) =
                     self.finish_ready_stack_frame(&mut stack, current)?
                 {
-                    record_stack_time!(stack_ready_frame_nanos, ready_started);
-                    profile_stack_counter!(stack_ready_successes);
                     steps += reductions;
                     self.reductions += reductions;
                     if steps >= limit {
@@ -1213,10 +1113,8 @@ impl Program {
                     current = next;
                     continue;
                 }
-                record_stack_time!(stack_ready_frame_nanos, ready_started);
             }
 
-            let descent_started = stack_phase_start!();
             while let Some(fun) = self.app_fun_trusted(current) {
                 if profiling {
                     self.profile_stack_descent_push();
@@ -1224,16 +1122,11 @@ impl Program {
                 stack.push_app(current);
                 current = self.resolve_for_whnf(fun, profile_resolve)?;
             }
-            record_stack_time!(stack_descent_nanos, descent_started);
 
             if stack.app_len() == 0 {
-                profile_stack_counter!(stack_ready_checks);
-                let ready_started = stack_phase_start!();
                 if let Some((next, reductions)) =
                     self.finish_ready_stack_frame(&mut stack, current)?
                 {
-                    record_stack_time!(stack_ready_frame_nanos, ready_started);
-                    profile_stack_counter!(stack_ready_successes);
                     steps += reductions;
                     self.reductions += reductions;
                     if steps >= limit {
@@ -1242,10 +1135,8 @@ impl Program {
                     current = next;
                     continue;
                 }
-                record_stack_time!(stack_ready_frame_nanos, ready_started);
             }
 
-            let step_started = stack_phase_start!();
             let step = self.stack_eval_step(
                 current,
                 &mut stack,
@@ -1253,8 +1144,6 @@ impl Program {
                 limit - steps,
                 profile_resolve,
             )?;
-            record_stack_time!(stack_eval_step_nanos, step_started);
-            profile_stack_step_result!(step);
 
             match step {
                 StackStep::Reduced { node, reductions } => {
@@ -1275,7 +1164,6 @@ impl Program {
                     if steps >= limit {
                         return Err(EvalError::StepLimit { limit });
                     }
-                    let whnf_started = stack_phase_start!();
                     let value = if stack.has_frame_below_apps() {
                         self.rethread_stack_app_segment(&mut stack, head)?
                     } else {
@@ -1284,10 +1172,8 @@ impl Program {
                     let Some((next, reductions)) =
                         self.finish_whnf_stack_frame(&mut stack, value)?
                     else {
-                        record_stack_time!(stack_whnf_finish_nanos, whnf_started);
                         return Ok((value, steps));
                     };
-                    record_stack_time!(stack_whnf_finish_nanos, whnf_started);
                     steps += reductions;
                     self.reductions += reductions;
                     if steps >= limit {
