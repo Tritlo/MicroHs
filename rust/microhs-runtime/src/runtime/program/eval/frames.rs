@@ -574,6 +574,12 @@ impl Program {
         let profiling = self.profiling_enabled();
 
         while steps < limit {
+            // A fork (or other scheduler event) asked the current thread to yield so an
+            // otherwise-unbounded single-thread slice can return to the scheduler. This
+            // is a normal step boundary, so re-reducing later resumes from the frontier.
+            if self.reschedule_now {
+                return Err(EvalError::StepLimit { limit });
+            }
             self.maybe_collect_garbage_between_steps(
                 current,
                 &eval_spine,
