@@ -404,9 +404,6 @@ impl Program {
                     action,
                     fallback_name,
                 } => {
-                    if profiling {
-                        self.profile_strict_primitive_dispatch(args_len, action);
-                    }
                     match action {
                         StrictPrimitiveAction::IntBin(op) => {
                             let (redex, x, y) = take_args!(2, take_args2);

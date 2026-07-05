@@ -200,9 +200,6 @@ impl Program {
             }
             PersistentHead::Known(known) => known,
             PersistentHead::Other(action) => {
-                if self.profile.is_some() {
-                    self.profile_strict_primitive_dispatch(args_len, action);
-                }
                 match action {
                     StrictPrimitiveAction::IntBin(op) => {
                         let x = arg!(0);
