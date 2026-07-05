@@ -1,3 +1,4 @@
+//! BFILE allocation and standard handle setup.
 use super::*;
 
 impl Program {

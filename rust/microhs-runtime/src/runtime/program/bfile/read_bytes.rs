@@ -1,3 +1,4 @@
+//! Byte-at-a-time BFILE read filters and decoders.
 use super::*;
 
 impl Program {

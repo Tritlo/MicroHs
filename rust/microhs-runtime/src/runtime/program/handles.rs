@@ -1,3 +1,4 @@
+//! Stable pointer, weak pointer, foreign pointer, and MVar helpers.
 use super::*;
 
 impl Program {

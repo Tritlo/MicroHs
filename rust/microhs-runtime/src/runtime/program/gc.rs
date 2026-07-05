@@ -1,3 +1,4 @@
+//! Mark-sweep GC over the node arena and cold payload tables.
 use super::*;
 
 impl Program {

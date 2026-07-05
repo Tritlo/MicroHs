@@ -1,3 +1,4 @@
+//! WHNF driver and strict-frame forcing machinery.
 use super::*;
 
 impl Program {

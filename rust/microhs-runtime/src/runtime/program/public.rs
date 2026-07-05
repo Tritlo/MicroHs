@@ -1,3 +1,4 @@
+//! Public Program API for reduction, profiling, and runtime configuration.
 use super::*;
 
 impl Program {

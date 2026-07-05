@@ -1,3 +1,4 @@
+//! Rendering and byte/string serialization helpers.
 use super::*;
 
 pub(in crate::runtime) fn c_string_len(bytes: &[u8]) -> usize {

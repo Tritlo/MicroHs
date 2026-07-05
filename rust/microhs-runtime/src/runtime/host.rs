@@ -1,3 +1,4 @@
+//! Host support modules for filesystem, FFI, rendering, and platform glue.
 use super::*;
 
 mod bigint;

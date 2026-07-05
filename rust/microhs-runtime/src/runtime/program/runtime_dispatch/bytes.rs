@@ -1,3 +1,4 @@
+//! Bytestring and mutable-bytes runtime primitive dispatch.
 use super::*;
 
 impl Program {

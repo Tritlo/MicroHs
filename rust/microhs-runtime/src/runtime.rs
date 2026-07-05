@@ -1,3 +1,4 @@
+//! Runtime facade and internal module tree for MicroHs comb evaluation.
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;

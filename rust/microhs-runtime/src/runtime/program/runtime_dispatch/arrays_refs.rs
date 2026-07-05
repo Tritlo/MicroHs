@@ -1,3 +1,4 @@
+//! Array, mutable reference, MVar, stable pointer, and weak pointer primitives.
 use super::*;
 
 impl Program {

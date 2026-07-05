@@ -1,3 +1,4 @@
+//! Minimal bigint operations used by MicroHs integer FFI primitives.
 use super::*;
 
 pub(in crate::runtime) const MPZ_BASE: u32 = 1_000_000_000;

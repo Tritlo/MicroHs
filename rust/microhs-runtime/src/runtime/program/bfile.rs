@@ -1,3 +1,4 @@
+//! BFILE implementation modules for memory, native, and transformed streams.
 use super::*;
 
 mod block_io;

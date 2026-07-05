@@ -1,3 +1,4 @@
+//! Reducer helper operations for stack and fallback evaluation.
 use super::*;
 
 impl Program {

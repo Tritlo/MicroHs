@@ -1,3 +1,4 @@
+//! Pointer decoding and memory access for node, allocation, and BFILE pointers.
 use super::*;
 
 impl Program {

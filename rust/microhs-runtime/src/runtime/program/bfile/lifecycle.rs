@@ -1,3 +1,4 @@
+//! BFILE open, close, flush, seek, and mode lifecycle operations.
 use super::*;
 
 impl Program {

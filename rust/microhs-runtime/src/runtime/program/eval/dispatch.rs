@@ -1,3 +1,4 @@
+//! Strict primitive frame completion and eval-time primitive helpers.
 use super::*;
 
 impl Program {

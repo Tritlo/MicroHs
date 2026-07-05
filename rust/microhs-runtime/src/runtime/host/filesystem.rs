@@ -1,3 +1,4 @@
+//! Host filesystem, directory, environment, and native file operations.
 use super::*;
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]

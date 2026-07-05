@@ -1,3 +1,4 @@
+//! UTF-8 stdin/stdout/stderr helpers for BFILE-backed IO.
 use super::*;
 
 impl Program {
