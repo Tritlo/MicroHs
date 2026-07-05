@@ -91,6 +91,7 @@ impl Program {
             compound_cache: CompoundCache::default(),
             small_ints,
             world: None,
+            #[cfg(feature = "profile")]
             profile: None,
             reduce_depth: 0,
         }
@@ -242,10 +243,12 @@ impl Program {
         self.executable_path = path;
     }
 
+    #[cfg(feature = "profile")]
     pub fn enable_profile(&mut self) {
         self.profile = Some(EvalProfile::default());
     }
 
+    #[cfg(feature = "profile")]
     pub fn take_profile(&mut self) -> Option<EvalProfile> {
         self.profile.take()
     }
@@ -311,7 +314,7 @@ impl Program {
     pub(in crate::runtime) fn push_app_node(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
         self.gc_allocations_since_collect = self.gc_allocations_since_collect.saturating_add(1);
         #[cfg(feature = "eval-phase-profile")]
-        let profiling = self.profile.is_some();
+        let profiling = self.profiling_enabled();
         #[cfg(feature = "eval-phase-profile")]
         let pop_started = profiling.then(Instant::now);
         #[cfg(feature = "moving-gc")]

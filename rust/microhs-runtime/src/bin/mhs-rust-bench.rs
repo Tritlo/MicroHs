@@ -6,8 +6,10 @@ use std::process::Command;
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(feature = "profile")]
+use microhs_runtime::EvalProfile;
 use microhs_runtime::{
-    EvalError, EvalProfile, GcStats, Node, NodeId, Prim, Program, cell_size_bytes, parse_program,
+    EvalError, GcStats, Node, NodeId, Prim, Program, cell_size_bytes, parse_program,
 };
 
 #[path = "mhs_rust_bench/c_compare.rs"]
@@ -20,6 +22,7 @@ mod config;
 mod metrics;
 
 #[path = "mhs_rust_bench/profile_output.rs"]
+#[cfg(feature = "profile")]
 mod profile_output;
 
 #[path = "mhs_rust_bench/runner.rs"]

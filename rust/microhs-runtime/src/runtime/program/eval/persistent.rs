@@ -40,10 +40,10 @@ impl Program {
         budget: usize,
     ) -> Result<PersistentStep, EvalError> {
         let args_len = spine.len();
-        let profile_head = if self.profile.is_some() {
+        let profile_head = if self.profiling_enabled() {
             self.profile_step(head, args_len)
         } else {
-            None
+            ProfileHead::none()
         };
 
         macro_rules! arg {
@@ -111,7 +111,7 @@ impl Program {
                 let kind = $kind;
                 let next = $next;
                 let redex = self.strict_redex_from_persistent_spine(redex_root, $used, spine);
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_persistent_force();
                     self.profile_eval_frame_push(stringify!($variant));
                 }
@@ -129,7 +129,7 @@ impl Program {
                 let x = $x;
                 let next = $next;
                 let redex = self.strict_redex_from_persistent_spine(redex_root, $used, spine);
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_persistent_force();
                     self.profile_eval_frame_push("Int64Shift");
                 }
@@ -162,7 +162,7 @@ impl Program {
 
         let known = match head_dispatch {
             PersistentHead::Ffi(name) => {
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_arg_materialization(args_len);
                 }
                 spine.write_args_head_order(&self.nodes, scratch_args)?;
@@ -174,7 +174,7 @@ impl Program {
                 rewrite_step!(used, node, 1);
             }
             PersistentHead::JsCall { tags, body } => {
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_arg_materialization(args_len);
                 }
                 spine.write_args_head_order(&self.nodes, scratch_args)?;
@@ -187,7 +187,7 @@ impl Program {
                 rewrite_step!(used, node, 1);
             }
             PersistentHead::JsWrap { tags } => {
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_arg_materialization(args_len);
                 }
                 spine.write_args_head_order(&self.nodes, scratch_args)?;

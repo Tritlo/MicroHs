@@ -82,6 +82,14 @@ fn remap_option_id(id: &mut Option<NodeId>, remap: &mut impl FnMut(NodeId) -> No
     }
 }
 
+#[cfg(feature = "profile")]
+fn remap_profile_head(head: &mut ProfileHead, remap: &mut impl FnMut(NodeId) -> NodeId) {
+    remap_option_id(&mut head.0, remap);
+}
+
+#[cfg(not(feature = "profile"))]
+fn remap_profile_head(_head: &mut ProfileHead, _remap: &mut impl FnMut(NodeId) -> NodeId) {}
+
 fn remapped_option_id(
     id: Option<NodeId>,
     remap: &mut impl FnMut(NodeId) -> NodeId,
@@ -265,42 +273,42 @@ fn remap_eval_frame_node_ids(frame: &mut EvalFrame, remap: &mut impl FnMut(NodeI
     match frame {
         EvalFrame::Whnf(frame) => {
             remap_strict_redex_node_ids(&mut frame.redex, remap);
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
             remap_whnf_frame_kind_node_ids(&mut frame.kind, remap);
         }
         EvalFrame::Int(frame) => {
             remap_strict_redex_node_ids(&mut frame.redex, remap);
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
             remap_int_frame_kind_node_ids(&mut frame.kind, remap);
         }
         EvalFrame::Int64(frame) => {
             remap_strict_redex_node_ids(&mut frame.redex, remap);
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
             remap_int64_frame_kind_node_ids(&mut frame.kind, remap);
         }
         EvalFrame::Int64Shift(frame) => {
             remap_strict_redex_node_ids(&mut frame.redex, remap);
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
             remap_id(&mut frame.x, remap);
         }
         EvalFrame::Float64(frame) => {
             remap_strict_redex_node_ids(&mut frame.redex, remap);
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
             remap_float64_frame_kind_node_ids(&mut frame.kind, remap);
         }
         EvalFrame::Float32(frame) => {
             remap_strict_redex_node_ids(&mut frame.redex, remap);
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
             remap_float32_frame_kind_node_ids(&mut frame.kind, remap);
         }
         EvalFrame::Bytes(frame) => {
             remap_strict_redex_node_ids(&mut frame.redex, remap);
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
             remap_bytes_frame_kind_node_ids(&mut frame.kind, remap);
         }
         EvalFrame::Conversion(frame) => {
             remap_strict_redex_node_ids(&mut frame.redex, remap);
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
         }
     }
 }
@@ -345,36 +353,36 @@ fn remap_stack_frame_node_ids(frame: &mut StackFrame, remap: &mut impl FnMut(Nod
     match frame {
         StackFrame::Whnf(frame) => {
             remap_id(&mut frame.redex, remap);
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
             remap_whnf_frame_kind_node_ids(&mut frame.kind, remap);
         }
         StackFrame::Int(frame) => {
             remap_id(&mut frame.redex, remap);
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
             remap_int_frame_kind_node_ids(&mut frame.kind, remap);
         }
         StackFrame::Int64(frame) => {
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
             remap_int64_frame_kind_node_ids(&mut frame.kind, remap);
         }
         StackFrame::Int64Shift(frame) => {
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
             remap_id(&mut frame.x, remap);
         }
         StackFrame::Float64(frame) => {
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
             remap_float64_frame_kind_node_ids(&mut frame.kind, remap);
         }
         StackFrame::Float32(frame) => {
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
             remap_float32_frame_kind_node_ids(&mut frame.kind, remap);
         }
         StackFrame::Bytes(frame) => {
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
             remap_bytes_frame_kind_node_ids(&mut frame.kind, remap);
         }
         StackFrame::Conversion(frame) => {
-            remap_option_id(&mut frame.profile_head, remap);
+            remap_profile_head(&mut frame.profile_head, remap);
         }
     }
 }

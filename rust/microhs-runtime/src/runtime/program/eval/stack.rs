@@ -12,7 +12,7 @@ impl Program {
     ) -> Result<StackStep, EvalError> {
         let mut carried_reductions = 0;
         'eval: loop {
-            let profiling = self.profile.is_some();
+            let profiling = self.profiling_enabled();
             if stack.app_len() == 0 {
                 if let Some((next, reductions)) = self.finish_ready_stack_frame(stack, head)? {
                     carried_reductions += reductions;
@@ -37,7 +37,7 @@ impl Program {
             let profile_head = if profiling {
                 self.profile_step(head, args_len)
             } else {
-                None
+                ProfileHead::none()
             };
 
             macro_rules! arg {
@@ -316,7 +316,7 @@ impl Program {
 
             let known = match head_dispatch {
                 EvalHead::Ffi(name) => {
-                    if self.profile.is_some() {
+                    if self.profiling_enabled() {
                         self.profile_arg_materialization(args_len);
                     }
                     stack.write_args_head_order(&self.nodes, scratch_args)?;
@@ -330,7 +330,7 @@ impl Program {
                     rewrite_step!(used, node, 1);
                 }
                 EvalHead::JsCall { tags, body } => {
-                    if self.profile.is_some() {
+                    if self.profiling_enabled() {
                         self.profile_arg_materialization(args_len);
                     }
                     stack.write_args_head_order(&self.nodes, scratch_args)?;
@@ -345,7 +345,7 @@ impl Program {
                     rewrite_step!(used, node, 1);
                 }
                 EvalHead::JsWrap { tags } => {
-                    if self.profile.is_some() {
+                    if self.profiling_enabled() {
                         self.profile_arg_materialization(args_len);
                     }
                     stack.write_args_head_order(&self.nodes, scratch_args)?;
@@ -520,7 +520,7 @@ impl Program {
                     }
                     if let Some(name) = fallback_name {
                         let materialized_args = args_len.min(FALLBACK_PRIM_ARG_PREFIX);
-                        if self.profile.is_some() {
+                        if self.profiling_enabled() {
                             self.profile_arg_materialization(materialized_args);
                         }
                         stack.write_args_head_order_prefix(

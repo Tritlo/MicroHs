@@ -327,11 +327,11 @@ impl Program {
 
     #[inline]
     pub(in crate::runtime) fn app(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
-        if self.profile.is_some() {
+        if self.profiling_enabled() {
             self.app_alloc_bookkeeping_cold("<generic app()>", fun, arg);
         }
         #[cfg(feature = "eval-phase-profile")]
-        let started = self.profile.is_some().then(Instant::now);
+        let started = self.profiling_enabled().then(Instant::now);
         let node = self.push_app_node(fun, arg);
         #[cfg(feature = "eval-phase-profile")]
         if let Some(started) = started {
@@ -347,11 +347,11 @@ impl Program {
         fun: NodeId,
         arg: NodeId,
     ) -> NodeId {
-        if self.profile.is_some() {
+        if self.profiling_enabled() {
             self.app_alloc_bookkeeping_cold(key, fun, arg);
         }
         #[cfg(feature = "eval-phase-profile")]
-        let started = self.profile.is_some().then(Instant::now);
+        let started = self.profiling_enabled().then(Instant::now);
         let node = self.push_app_node(fun, arg);
         #[cfg(feature = "eval-phase-profile")]
         if let Some(started) = started {
@@ -360,6 +360,7 @@ impl Program {
         node
     }
 
+    #[cfg(feature = "profile")]
     #[cold]
     #[inline(never)]
     pub(in crate::runtime) fn app_alloc_bookkeeping_cold(
@@ -369,7 +370,7 @@ impl Program {
         _arg: NodeId,
     ) {
         #[cfg(feature = "eval-phase-profile")]
-        let resolved_site_shape = self.profile.is_some().then(|| {
+        let resolved_site_shape = self.profiling_enabled().then(|| {
             let fun_shape = self.profile_resolved_node_shape_key(_fun);
             let arg_shape = self.profile_resolved_node_shape_key(_arg);
             let mut shape =
@@ -395,6 +396,16 @@ impl Program {
                     .or_default() += 1;
             }
         }
+    }
+
+    #[cfg(not(feature = "profile"))]
+    #[inline]
+    pub(in crate::runtime) fn app_alloc_bookkeeping_cold(
+        &mut self,
+        _key: &'static str,
+        _fun: NodeId,
+        _arg: NodeId,
+    ) {
     }
 
     pub(in crate::runtime) fn prim(&mut self, name: &str) -> NodeId {

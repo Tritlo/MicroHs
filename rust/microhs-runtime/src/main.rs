@@ -3,7 +3,9 @@ use std::fs;
 use std::io::Write as _;
 use std::process::ExitCode;
 
-use microhs_runtime::{EvalError, EvalProfile, parse_program};
+#[cfg(feature = "profile")]
+use microhs_runtime::EvalProfile;
+use microhs_runtime::{EvalError, parse_program};
 
 enum Mode {
     Dump,
@@ -61,6 +63,12 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
+    #[cfg(not(feature = "profile"))]
+    if profile {
+        eprintln!("--profile requires rebuilding mhs-rust with --features profile");
+        return ExitCode::from(2);
+    }
+
     let bytes = match fs::read(&file) {
         Ok(bytes) => bytes,
         Err(err) => {
@@ -77,6 +85,7 @@ fn main() -> ExitCode {
         }
     };
     program.set_program_args(vec![program_name.into_bytes()]);
+    #[cfg(feature = "profile")]
     if profile {
         program.enable_profile();
     }
@@ -84,25 +93,19 @@ fn main() -> ExitCode {
     match mode {
         Mode::Dump => {
             println!("{}", program.render(program.root()));
-            if let Some(profile) = program.take_profile() {
-                print_profile(&profile, profile_top);
-            }
+            maybe_print_profile(&mut program, profile_top);
             ExitCode::SUCCESS
         }
         Mode::Whnf => match program.reduce_whnf(10_000) {
             Ok((root, steps)) => {
                 println!("{}", program.render(root));
                 eprintln!("{steps} reductions");
-                if let Some(profile) = program.take_profile() {
-                    print_profile(&profile, profile_top);
-                }
+                maybe_print_profile(&mut program, profile_top);
                 ExitCode::SUCCESS
             }
             Err(err) => {
                 let code = report_eval_error(&mut program, &file, err);
-                if let Some(profile) = program.take_profile() {
-                    print_profile(&profile, profile_top);
-                }
+                maybe_print_profile(&mut program, profile_top);
                 code
             }
         },
@@ -142,6 +145,17 @@ fn print_uncaught_exception(program_name: &str, message: &[u8]) {
     let _ = stderr.write_all(b"\n");
 }
 
+#[cfg(feature = "profile")]
+fn maybe_print_profile(program: &mut microhs_runtime::Program, profile_top: usize) {
+    if let Some(profile) = program.take_profile() {
+        print_profile(&profile, profile_top);
+    }
+}
+
+#[cfg(not(feature = "profile"))]
+fn maybe_print_profile(_program: &mut microhs_runtime::Program, _profile_top: usize) {}
+
+#[cfg(feature = "profile")]
 fn print_profile(profile: &EvalProfile, top: usize) {
     eprintln!("profile_step_attempts: {}", profile.step_attempts);
     eprintln!("profile_successful_steps: {}", profile.successful_steps);

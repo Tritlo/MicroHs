@@ -38,15 +38,15 @@ impl Program {
         frame_stack: &mut EvalFrameStack,
         strict_markers: bool,
     ) -> Result<Option<EvalLoopStep>, EvalError> {
-        if self.profile.is_some() {
+        if self.profiling_enabled() {
             self.profile_fallback_eval_loop_step();
         }
         let head = self.fill_eval_spine(root, spine)?;
         let args_len = spine.len();
-        let profile_head = if self.profile.is_some() {
+        let profile_head = if self.profiling_enabled() {
             self.profile_step(head, args_len)
         } else {
-            None
+            ProfileHead::none()
         };
 
         macro_rules! arg {
@@ -76,7 +76,7 @@ impl Program {
         macro_rules! strict_marker_step {
             ($used:expr, $variant:ident, $frame:ident, $kind:expr, $next:expr) => {{
                 let redex = self.strict_redex_from_eval_spine(root, $used, spine, scratch_apps);
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_eval_frame_push(stringify!($variant));
                 }
                 frame_stack.push(EvalFrame::$variant($frame {
@@ -93,7 +93,7 @@ impl Program {
         macro_rules! strict_int64_shift_marker_step {
             ($used:expr, $op:expr, $x:expr, $next:expr) => {{
                 let redex = self.strict_redex_from_eval_spine(root, $used, spine, scratch_apps);
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_eval_frame_push("Int64Shift");
                 }
                 frame_stack.push(EvalFrame::Int64Shift(Int64ShiftFrame {
@@ -136,7 +136,7 @@ impl Program {
 
         let (known, strict_action, fallback_name) = match head_dispatch {
             EvalHead::Ffi(name) => {
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_arg_materialization(args_len);
                 }
                 spine.write_args_head_order(scratch_args);
@@ -146,7 +146,7 @@ impl Program {
                 rewrite_step!(used, node, 1);
             }
             EvalHead::JsCall { tags, body } => {
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_arg_materialization(args_len);
                 }
                 spine.write_args_head_order(scratch_args);
@@ -157,7 +157,7 @@ impl Program {
                 rewrite_step!(used, node, 1);
             }
             EvalHead::JsWrap { tags } => {
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_arg_materialization(args_len);
                 }
                 spine.write_args_head_order(scratch_args);
@@ -636,7 +636,7 @@ impl Program {
             _ if args_len >= 2 && fallback_name.is_some() => {
                 let name = fallback_name.expect("fallback name checked above");
                 let materialized_args = args_len.min(FALLBACK_PRIM_ARG_PREFIX);
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_arg_materialization(materialized_args);
                 }
                 spine.write_args_head_order_prefix(scratch_args, FALLBACK_PRIM_ARG_PREFIX);
@@ -645,7 +645,7 @@ impl Program {
             _ if args_len >= 1 && fallback_name.is_some() => {
                 let name = fallback_name.expect("fallback name checked above");
                 let materialized_args = args_len.min(FALLBACK_PRIM_ARG_PREFIX);
-                if self.profile.is_some() {
+                if self.profiling_enabled() {
                     self.profile_arg_materialization(materialized_args);
                 }
                 spine.write_args_head_order_prefix(scratch_args, FALLBACK_PRIM_ARG_PREFIX);

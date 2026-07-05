@@ -40,6 +40,7 @@ pub struct GcEventStats {
     pub allocations_since_collect: usize,
 }
 
+#[cfg(feature = "profile")]
 #[derive(Clone, Debug, Default)]
 pub struct EvalProfile {
     pub step_attempts: usize,
@@ -129,6 +130,7 @@ pub struct EvalProfile {
     pub stack_fallback_heads: HashMap<String, usize>,
 }
 
+#[cfg(feature = "profile")]
 impl EvalProfile {
     pub fn top_head_attempts(&self, limit: usize) -> Vec<(&str, usize)> {
         sorted_profile_counts(&self.head_attempts, limit)
@@ -191,6 +193,7 @@ pub(in crate::runtime) fn profile_known_reducing_arity(known: KnownPrim) -> Opti
     })
 }
 
+#[cfg(feature = "profile")]
 pub(in crate::runtime) fn sorted_profile_counts(
     map: &HashMap<String, usize>,
     limit: usize,
