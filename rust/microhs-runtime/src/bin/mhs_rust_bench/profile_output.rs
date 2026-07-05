@@ -285,14 +285,6 @@ fn print_phase_profile(profile: &ProfileBench, top: usize) {
         "profile_stack_inner_descent_ms: {:.3}",
         nanos_millis(profile.profile.stack_inner_descent_nanos)
     );
-    println!(
-        "profile_profile_step_ms: {:.3}",
-        nanos_millis(profile.profile.profile_step_nanos)
-    );
-    println!(
-        "profile_profile_reduction_ms: {:.3}",
-        nanos_millis(profile.profile.profile_reduction_nanos)
-    );
     println!("profile_stack_head_arities:");
     for (head, count) in profile.profile.top_stack_head_arities(top) {
         println!("  {head}: {count}");
