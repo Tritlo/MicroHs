@@ -81,23 +81,7 @@ impl Program {
                 ($key:literal, $fun:expr, $arg:expr) => {{
                     let fun = $fun;
                     let arg = $arg;
-                    #[cfg(feature = "eval-phase-profile")]
-                    {
-                        if profiling {
-                            self.profile_stack_app_opportunities($key, fun, arg);
-                        }
-                    }
                     self.app_with_site($key, fun, arg)
-                }};
-            }
-            macro_rules! profile_rewrite_args {
-                ($head:literal, $(($label:literal, $node:expr)),+ $(,)?) => {{
-                    #[cfg(feature = "eval-phase-profile")]
-                    {
-                        if profiling {
-                            self.profile_stack_rewrite_arg_pattern($head, &[$(($label, $node)),+]);
-                        }
-                    }
                 }};
             }
             macro_rules! record_stack_head_time {
@@ -223,12 +207,6 @@ impl Program {
                     let fun = $fun;
                     let arg = $arg;
                     #[cfg(feature = "eval-phase-profile")]
-                    {
-                        if profiling {
-                            self.profile_stack_app_opportunities("<app_step>", fun, arg);
-                        }
-                    }
-                    #[cfg(feature = "eval-phase-profile")]
                     let update_started = profiling.then(Instant::now);
                     let node = self.apply_stack_app(stack, $used, fun, arg);
                     #[cfg(feature = "eval-phase-profile")]
@@ -274,12 +252,6 @@ impl Program {
                     let redex = $redex;
                     let fun = $fun;
                     let arg = $arg;
-                    #[cfg(feature = "eval-phase-profile")]
-                    {
-                        if profiling {
-                            self.profile_stack_app_opportunities("<app_taken>", fun, arg);
-                        }
-                    }
                     #[cfg(feature = "eval-phase-profile")]
                     let started = profiling.then(Instant::now);
                     if profiling {
@@ -764,7 +736,6 @@ impl Program {
                 }
                 S if args_len >= 3 => {
                     let (redex, x, y, z) = take_args!(3, take_args3);
-                    profile_rewrite_args!("S", ("x", x), ("y", y), ("z", z));
                     if carried_reductions + 1 < budget
                         && z != redex
                         && matches!(self.cell_trusted(x).prim(), Some(Prim::Known(I)))
@@ -778,7 +749,6 @@ impl Program {
                 }
                 SPrime if args_len >= 4 => {
                     let (redex, x, y, z, w) = take_args!(4, take_args4);
-                    profile_rewrite_args!("S'", ("x", x), ("y", y), ("z", z), ("w", w));
                     let yw = app_site!("S'.yw", y, w);
                     let zw = app_site!("S'.zw", z, w);
                     let left = app_site!("S'.left", x, yw);
@@ -786,20 +756,17 @@ impl Program {
                 }
                 B if args_len >= 3 => {
                     let (redex, x, y, z) = take_args!(3, take_args3);
-                    profile_rewrite_args!("B", ("x", x), ("y", y), ("z", z));
                     let yz = app_site!("B.yz", y, z);
                     app_taken!(redex, 3, x, yz);
                 }
                 BPrime if args_len >= 4 => {
                     let (redex, x, y, z, w) = take_args!(4, take_args4);
-                    profile_rewrite_args!("B'", ("x", x), ("y", y), ("z", z), ("w", w));
                     let zw = app_site!("B'.zw", z, w);
                     let xy = app_site!("B'.xy", x, y);
                     app_taken!(redex, 4, xy, zw);
                 }
                 BPrime if args_len >= 2 => {
                     let (redex, x, y) = take_args!(2, take_args2);
-                    profile_rewrite_args!("B'_under", ("x", x), ("y", y));
                     let xy = app_site!("B'.xy_under", x, y);
                     let b = self.prim("B");
                     app_taken!(redex, 2, b, xy);
@@ -832,20 +799,17 @@ impl Program {
                 }
                 C if args_len >= 3 => {
                     let (redex, x, y, z) = take_args!(3, take_args3);
-                    profile_rewrite_args!("C", ("x", x), ("y", y), ("z", z));
                     let xz = app_site!("C.xz", x, z);
                     app_taken!(redex, 3, xz, y);
                 }
                 CPrime if args_len >= 4 => {
                     let (redex, x, y, z, w) = take_args!(4, take_args4);
-                    profile_rewrite_args!("C'", ("x", x), ("y", y), ("z", z), ("w", w));
                     let yw = app_site!("C'.yw", y, w);
                     let xyw = app_site!("C'.xyw", x, yw);
                     app_taken!(redex, 4, xyw, z);
                 }
                 P if args_len >= 3 => {
                     let (redex, x, y, z) = take_args!(3, take_args3);
-                    profile_rewrite_args!("P", ("x", x), ("y", y), ("z", z));
                     let zx = app_site!("P.zx", z, x);
                     app_taken!(redex, 3, zx, y);
                 }
@@ -894,14 +858,12 @@ impl Program {
                 }
                 CPrimeB if args_len >= 4 => {
                     let (redex, x, y, z, w) = take_args!(4, take_args4);
-                    profile_rewrite_args!("C'B", ("x", x), ("y", y), ("z", z), ("w", w));
                     let yw = app_site!("C'B.yw", y, w);
                     let xz = app_site!("C'B.xz", x, z);
                     app_taken!(redex, 4, xz, yw);
                 }
                 CPrimeB if args_len >= 3 => {
                     let (redex, x, y, z) = take_args!(3, take_args3);
-                    profile_rewrite_args!("C'B_under", ("x", x), ("y", y), ("z", z));
                     let xz = app_site!("C'B.xz_under", x, z);
                     let b = self.prim("B");
                     let bxz = app_site!("C'B.bxz_under", b, xz);

@@ -164,10 +164,6 @@ pub struct EvalProfile {
     #[cfg(feature = "eval-phase-profile")]
     pub stack_inner_descent_head_nanos: HashMap<String, u128>,
     #[cfg(feature = "eval-phase-profile")]
-    pub stack_rewrite_arg_patterns: HashMap<String, usize>,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_rewrite_opportunities: HashMap<String, usize>,
-    #[cfg(feature = "eval-phase-profile")]
     pub stack_head_arities: HashMap<String, usize>,
     #[cfg(feature = "eval-phase-profile")]
     pub stack_head_arity_classes: HashMap<String, usize>,
@@ -282,16 +278,6 @@ impl EvalProfile {
     #[cfg(feature = "eval-phase-profile")]
     pub fn top_stack_inner_descent_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
         sorted_profile_times(&self.stack_inner_descent_head_nanos, limit)
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_stack_rewrite_arg_patterns(&self, limit: usize) -> Vec<(&str, usize)> {
-        sorted_profile_counts(&self.stack_rewrite_arg_patterns, limit)
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_stack_rewrite_opportunities(&self, limit: usize) -> Vec<(&str, usize)> {
-        sorted_profile_counts(&self.stack_rewrite_opportunities, limit)
     }
 
     #[cfg(feature = "eval-phase-profile")]
