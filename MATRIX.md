@@ -4568,6 +4568,15 @@ This is a no-code audit for the next structural heap step. Current GC can mark r
 | 100M/32M bounded A/B | base ms: `1779.985`, `1570.952`, `1694.749`, `1505.724`, `1561.738`, `1629.207`, `1721.892`, `1528.290` (avg `1624.067`); candidate ms: `1645.335`, `1846.012`, `1684.439`, `1683.314`, `1787.576`, `1723.056`, `1780.605`, `1746.596` (avg `1737.117`, `+6.961%`). Pair direction was only `2/8` favorable. All samples used `100,807,543` steps, `3` GCs, high-water `33,949,856`, sink `661902`, and `cell_size_bytes=8` |
 | reading | Clear reject: unlike the older non-cold noinline probe, adding `#[cold]` makes the bounded slice decisively worse. Runtime strict-action classification stays inline; the remaining gap is not exposed by pushing this table/range classifier out of the hot body |
 
+## 2026-07-06 EvalStack Frame-Push Inline Probe
+
+| item | result |
+|---|---|
+| probe | rejected narrow inline-control bundle after the frame-completion keeper: added `#[inline(always)]` to `EvalStack::push_whnf_frame`, `push_int_frame`, `push_int64_frame`, `push_int64_shift_frame`, `push_float64_frame`, `push_float32_frame`, `push_bytes_frame`, and `push_conversion_frame`, trying to remove the still-out-of-line strict-frame push boundary without touching app/arg/take-args accessors. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed. `nm -C --size-sort` confirmed the frame-push helpers disappeared as standalone candidate symbols; `stack_eval_step` changed from `0xc1c8` to `0xc144`, while `finish_ready_stack_frame` grew from `0x156b` to `0x1699` |
+| 100M/32M bounded A/B | base ms: `1795.571`, `1577.521`, `1625.540`, `1557.112`, `1631.175`, `1535.169`, `1553.236`, `1533.640` (avg `1601.120`); candidate ms: `1634.358`, `1613.738`, `1599.540`, `1570.290`, `1630.582`, `1640.128`, `1586.144`, `1559.852` (avg `1604.329`, `+0.200%`). Pair direction was only `3/8` favorable. All samples used `100,807,543` steps, `3` GCs, high-water `33,949,840`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Reject: the symbol shape changed, but the bounded signal is flat-to-negative and depends on the first slow baseline to look interesting. Keep the frame push helpers compiler-chosen; do not combine this with the rejected accessor inline bundle without new evidence |
+
 ## Active Tradeoffs
 
 | item | reading |
