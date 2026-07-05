@@ -113,11 +113,7 @@ pub struct EvalProfile {
     #[cfg(feature = "eval-phase-profile")]
     pub profile_stack_head_time_nanos: u128,
     #[cfg(feature = "eval-phase-profile")]
-    pub profile_app_alloc_bookkeeping_nanos: u128,
-    #[cfg(feature = "eval-phase-profile")]
     pub stack_arg_read_head_nanos: HashMap<String, u128>,
-    #[cfg(feature = "eval-phase-profile")]
-    pub stack_app_alloc_site_nanos: HashMap<String, u128>,
     #[cfg(feature = "eval-phase-profile")]
     pub stack_apply_rewrite_head_nanos: HashMap<String, u128>,
     #[cfg(feature = "eval-phase-profile")]
@@ -186,11 +182,6 @@ impl EvalProfile {
     #[cfg(feature = "eval-phase-profile")]
     pub fn top_stack_arg_read_head_times(&self, limit: usize) -> Vec<(&str, u128)> {
         sorted_profile_times(&self.stack_arg_read_head_nanos, limit)
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_stack_app_alloc_site_times(&self, limit: usize) -> Vec<(&str, u128)> {
-        sorted_profile_times(&self.stack_app_alloc_site_nanos, limit)
     }
 
     #[cfg(feature = "eval-phase-profile")]

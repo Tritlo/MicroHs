@@ -297,10 +297,6 @@ fn print_phase_profile(profile: &ProfileBench, top: usize) {
         "profile_profile_stack_head_time_ms: {:.3}",
         nanos_millis(profile.profile.profile_stack_head_time_nanos)
     );
-    println!(
-        "profile_profile_app_alloc_bookkeeping_ms: {:.3}",
-        nanos_millis(profile.profile.profile_app_alloc_bookkeeping_nanos)
-    );
     println!("profile_stack_head_arities:");
     for (head, count) in profile.profile.top_stack_head_arities(top) {
         println!("  {head}: {count}");
@@ -320,10 +316,6 @@ fn print_phase_profile(profile: &ProfileBench, top: usize) {
     println!("profile_stack_arg_read_head_ms:");
     for (head, nanos) in profile.profile.top_stack_arg_read_head_times(top) {
         println!("  {head}: {:.3}", nanos_millis(nanos));
-    }
-    println!("profile_stack_app_alloc_site_ms:");
-    for (site, nanos) in profile.profile.top_stack_app_alloc_site_times(top) {
-        println!("  {site}: {:.3}", nanos_millis(nanos));
     }
     println!("profile_stack_apply_rewrite_head_ms:");
     for (head, nanos) in profile.profile.top_stack_apply_rewrite_head_times(top) {

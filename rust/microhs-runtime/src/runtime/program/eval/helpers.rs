@@ -335,9 +335,7 @@ impl Program {
         let node = self.push_app_node(fun, arg);
         #[cfg(feature = "eval-phase-profile")]
         if let Some(started) = started {
-            let nanos = started.elapsed().as_nanos();
-            self.profile_stack_app_alloc_time(nanos);
-            self.profile_stack_app_alloc_site_time("<generic app()>", nanos);
+            self.profile_stack_app_alloc_time(started.elapsed().as_nanos());
         }
         node
     }
@@ -357,9 +355,7 @@ impl Program {
         let node = self.push_app_node(fun, arg);
         #[cfg(feature = "eval-phase-profile")]
         if let Some(started) = started {
-            let nanos = started.elapsed().as_nanos();
-            self.profile_stack_app_alloc_time(nanos);
-            self.profile_stack_app_alloc_site_time(key, nanos);
+            self.profile_stack_app_alloc_time(started.elapsed().as_nanos());
         }
         node
     }
@@ -372,8 +368,6 @@ impl Program {
         _fun: NodeId,
         _arg: NodeId,
     ) {
-        #[cfg(feature = "eval-phase-profile")]
-        let profile_started = self.profile.is_some().then(Instant::now);
         #[cfg(feature = "eval-phase-profile")]
         let resolved_site_shape = self.profile.is_some().then(|| {
             let fun_shape = self.profile_resolved_node_shape_key(_fun);
@@ -400,10 +394,6 @@ impl Program {
                     .entry(resolved_site_shape)
                     .or_default() += 1;
             }
-        }
-        #[cfg(feature = "eval-phase-profile")]
-        if let Some(started) = profile_started {
-            self.profile_app_alloc_bookkeeping_time(started.elapsed().as_nanos());
         }
     }
 

@@ -143,26 +143,6 @@ impl Program {
 
     #[cfg(feature = "eval-phase-profile")]
     #[cold]
-    pub(in crate::runtime) fn profile_stack_app_alloc_site_time(
-        &mut self,
-        site: &'static str,
-        nanos: u128,
-    ) {
-        let started = Instant::now();
-        let Some(profile) = self.profile.as_mut() else {
-            return;
-        };
-        *profile
-            .stack_app_alloc_site_nanos
-            .entry(site.to_owned())
-            .or_default() += nanos;
-        profile.profile_stack_head_time_nanos = profile
-            .profile_stack_head_time_nanos
-            .saturating_add(started.elapsed().as_nanos());
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    #[cold]
     pub(in crate::runtime) fn profile_stack_apply_rewrite_head_time(
         &mut self,
         head: ProfileHead,
@@ -367,16 +347,6 @@ impl Program {
         if let Some(profile) = self.profile.as_mut() {
             profile.stack_inner_descent_nanos =
                 profile.stack_inner_descent_nanos.saturating_add(nanos);
-        }
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    #[cold]
-    pub(in crate::runtime) fn profile_app_alloc_bookkeeping_time(&mut self, nanos: u128) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.profile_app_alloc_bookkeeping_nanos = profile
-                .profile_app_alloc_bookkeeping_nanos
-                .saturating_add(nanos);
         }
     }
 
