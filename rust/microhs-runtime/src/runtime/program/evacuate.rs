@@ -62,8 +62,6 @@ impl Program {
         self.weak_nodes
             .retain(|id| remap_table.get(id.index()).is_some_and(Option::is_some));
         self.gc_mark_work.clear();
-        #[cfg(feature = "gc-phase-profile")]
-        self.gc_young_profile_allocated_slots.clear();
 
         self.remap_node_ids_for_moving_gc(
             current_root,
@@ -153,8 +151,6 @@ impl Program {
         self.weak_nodes
             .retain(|id| remap_table.get(id.index()).is_some_and(Option::is_some));
         self.gc_mark_work.clear();
-        #[cfg(feature = "gc-phase-profile")]
-        self.gc_young_profile_allocated_slots.clear();
 
         self.remap_node_ids_for_moving_gc(
             current_root,

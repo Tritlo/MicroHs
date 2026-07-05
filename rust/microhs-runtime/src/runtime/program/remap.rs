@@ -40,10 +40,6 @@ impl Program {
         for id in &mut self.gc_mark_work {
             remap_id(id, &mut remap);
         }
-        #[cfg(feature = "gc-phase-profile")]
-        for id in &mut self.gc_young_profile_allocated_slots {
-            remap_id(id, &mut remap);
-        }
         for id in &mut self.stable_ptrs {
             remap_option_id(id, &mut remap);
         }

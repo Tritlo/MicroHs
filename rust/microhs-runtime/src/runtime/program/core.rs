@@ -66,28 +66,6 @@ impl Program {
             gc_last_sweep_nanos: 0,
             #[cfg(feature = "gc-phase-profile")]
             gc_total_sweep_nanos: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_young_profile_allocated_slots: Vec::new(),
-            #[cfg(feature = "gc-phase-profile")]
-            gc_young_profile_last_slots: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_young_profile_last_live: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_young_profile_last_dead: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_young_profile_last_old_to_young_sources: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_young_profile_last_old_to_young_edges: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_young_profile_total_slots: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_young_profile_total_live: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_young_profile_total_dead: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_young_profile_total_old_to_young_sources: 0,
-            #[cfg(feature = "gc-phase-profile")]
-            gc_young_profile_total_old_to_young_edges: 0,
             gc_marked: Vec::new(),
             gc_mark_work: Vec::new(),
             gc_foreign_finalizer_marked: Vec::new(),
@@ -237,11 +215,6 @@ impl Program {
         id
     }
 
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) fn gc_profile_record_allocated_slot(&mut self, id: NodeId) {
-        self.gc_young_profile_allocated_slots.push(id);
-    }
-
     pub(in crate::runtime) fn cold_node(&self, id: NodeId) -> Option<&Node> {
         let cold = self.cell(id).cold_index()?;
         self.cold_nodes.get(cold)?.as_ref()
@@ -326,14 +299,10 @@ impl Program {
             debug_assert_eq!(self.nodes[index].tag(), CellTag::Free);
             self.nodes[index] = Cell::from_node(node, &mut self.cold_nodes);
             let id = NodeId::from_index(index);
-            #[cfg(feature = "gc-phase-profile")]
-            self.gc_profile_record_allocated_slot(id);
             id
         } else {
             let cell = Cell::from_node(node, &mut self.cold_nodes);
             let id = self.push_cell(cell);
-            #[cfg(feature = "gc-phase-profile")]
-            self.gc_profile_record_allocated_slot(id);
             id
         }
     }
@@ -367,8 +336,6 @@ impl Program {
             debug_assert_eq!(self.nodes[index].tag(), CellTag::Free);
             self.nodes[index] = Cell::app(fun, arg);
             let id = NodeId::from_index(index);
-            #[cfg(feature = "gc-phase-profile")]
-            self.gc_profile_record_allocated_slot(id);
             #[cfg(feature = "eval-phase-profile")]
             if let Some(started) = write_started {
                 if let Some(profile) = self.profile.as_mut() {
@@ -386,8 +353,6 @@ impl Program {
             #[cfg(feature = "eval-phase-profile")]
             let push_started = profiling.then(Instant::now);
             let id = self.push_cell(Cell::app(fun, arg));
-            #[cfg(feature = "gc-phase-profile")]
-            self.gc_profile_record_allocated_slot(id);
             #[cfg(feature = "eval-phase-profile")]
             if let Some(started) = push_started {
                 if let Some(profile) = self.profile.as_mut() {

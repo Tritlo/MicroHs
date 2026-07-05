@@ -50,46 +50,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
             "profile_gc_total_sweep_ms: {:.3}",
             nanos_millis(profile.gc.total_sweep_nanos)
         );
-        println!(
-            "profile_gc_young_profile_last_slots: {}",
-            profile.gc.young_profile_last_slots
-        );
-        println!(
-            "profile_gc_young_profile_last_live: {}",
-            profile.gc.young_profile_last_live
-        );
-        println!(
-            "profile_gc_young_profile_last_dead: {}",
-            profile.gc.young_profile_last_dead
-        );
-        println!(
-            "profile_gc_young_profile_last_old_to_young_sources: {}",
-            profile.gc.young_profile_last_old_to_young_sources
-        );
-        println!(
-            "profile_gc_young_profile_last_old_to_young_edges: {}",
-            profile.gc.young_profile_last_old_to_young_edges
-        );
-        println!(
-            "profile_gc_young_profile_total_slots: {}",
-            profile.gc.young_profile_total_slots
-        );
-        println!(
-            "profile_gc_young_profile_total_live: {}",
-            profile.gc.young_profile_total_live
-        );
-        println!(
-            "profile_gc_young_profile_total_dead: {}",
-            profile.gc.young_profile_total_dead
-        );
-        println!(
-            "profile_gc_young_profile_total_old_to_young_sources: {}",
-            profile.gc.young_profile_total_old_to_young_sources
-        );
-        println!(
-            "profile_gc_young_profile_total_old_to_young_edges: {}",
-            profile.gc.young_profile_total_old_to_young_edges
-        );
     }
     println!(
         "profile_gc_last_allocations_since_collect: {}",

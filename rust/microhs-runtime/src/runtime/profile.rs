@@ -20,26 +20,6 @@ pub struct GcStats {
     pub last_sweep_nanos: u128,
     #[cfg(feature = "gc-phase-profile")]
     pub total_sweep_nanos: u128,
-    #[cfg(feature = "gc-phase-profile")]
-    pub young_profile_last_slots: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub young_profile_last_live: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub young_profile_last_dead: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub young_profile_last_old_to_young_sources: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub young_profile_last_old_to_young_edges: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub young_profile_total_slots: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub young_profile_total_live: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub young_profile_total_dead: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub young_profile_total_old_to_young_sources: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub young_profile_total_old_to_young_edges: usize,
     pub last_allocations_since_collect: usize,
     pub current_allocations_since_collect: usize,
     pub events: Vec<GcEventStats>,
@@ -58,16 +38,6 @@ pub struct GcEventStats {
     pub arena_nodes: usize,
     pub freed_nodes: usize,
     pub allocations_since_collect: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub young_profile_slots: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub young_profile_live: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub young_profile_dead: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub young_profile_old_to_young_sources: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub young_profile_old_to_young_edges: usize,
 }
 
 #[derive(Clone, Debug, Default)]

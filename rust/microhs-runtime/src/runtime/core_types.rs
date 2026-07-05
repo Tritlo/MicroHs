@@ -701,28 +701,6 @@ pub struct Program {
     pub(in crate::runtime) gc_last_sweep_nanos: u128,
     #[cfg(feature = "gc-phase-profile")]
     pub(in crate::runtime) gc_total_sweep_nanos: u128,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_young_profile_allocated_slots: Vec<NodeId>,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_young_profile_last_slots: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_young_profile_last_live: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_young_profile_last_dead: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_young_profile_last_old_to_young_sources: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_young_profile_last_old_to_young_edges: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_young_profile_total_slots: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_young_profile_total_live: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_young_profile_total_dead: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_young_profile_total_old_to_young_sources: usize,
-    #[cfg(feature = "gc-phase-profile")]
-    pub(in crate::runtime) gc_young_profile_total_old_to_young_edges: usize,
     pub(in crate::runtime) gc_marked: Vec<bool>,
     pub(in crate::runtime) gc_mark_work: Vec<NodeId>,
     pub(in crate::runtime) gc_foreign_finalizer_marked: Vec<bool>,
