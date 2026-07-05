@@ -112,7 +112,11 @@ impl Program {
         byte: i64,
     ) -> Result<(), EvalError> {
         if let Some(handle) = handle_from_ptr(ptr) {
-            return self.write_io_handle_bytes(handle, &[byte as u8]);
+            // The std streams are UTF-8 text handles (matching C's add_utf8-wrapped
+            // stdio), so a byte written here is a codepoint that must be UTF-8 encoded.
+            let mut buf = [0u8; 4];
+            let len = Self::encode_modified_utf8(byte, &mut buf)?;
+            return self.write_io_handle_bytes(handle, &buf[..len]);
         }
         enum SpecialBFileWrite {
             Utf8(i64),

@@ -127,27 +127,44 @@ impl Program {
         inner: i64,
         byte: i64,
     ) -> Result<(), EvalError> {
+        let mut buf = [0u8; 4];
+        let len = Self::encode_modified_utf8(byte, &mut buf)?;
+        for &b in &buf[..len] {
+            self.put_bfile_byte(inner, i64::from(b))?;
+        }
+        Ok(())
+    }
+
+    /// Encode a codepoint as MicroHs's (modified) UTF-8 into `buf`, returning the length.
+    /// NUL becomes the two-byte 0xC0 0x80 sequence, matching the C runtime's `add_utf8`.
+    pub(in crate::runtime) fn encode_modified_utf8(
+        byte: i64,
+        buf: &mut [u8; 4],
+    ) -> Result<usize, EvalError> {
         if byte < 0 {
             return Err(EvalError::InvalidByteString);
         }
-        if 0 < byte && byte < 0x80 {
-            self.put_bfile_byte(inner, byte)?;
+        Ok(if 0 < byte && byte < 0x80 {
+            buf[0] = byte as u8;
+            1
         } else if byte < 0x800 {
-            self.put_bfile_byte(inner, (byte >> 6) | 0xc0)?;
-            self.put_bfile_byte(inner, (byte & 0x3f) | 0x80)?;
+            buf[0] = ((byte >> 6) | 0xc0) as u8;
+            buf[1] = ((byte & 0x3f) | 0x80) as u8;
+            2
         } else if byte < 0x10000 {
-            self.put_bfile_byte(inner, (byte >> 12) | 0xe0)?;
-            self.put_bfile_byte(inner, ((byte >> 6) & 0x3f) | 0x80)?;
-            self.put_bfile_byte(inner, (byte & 0x3f) | 0x80)?;
+            buf[0] = ((byte >> 12) | 0xe0) as u8;
+            buf[1] = (((byte >> 6) & 0x3f) | 0x80) as u8;
+            buf[2] = ((byte & 0x3f) | 0x80) as u8;
+            3
         } else if byte < 0x110000 {
-            self.put_bfile_byte(inner, (byte >> 18) | 0xf0)?;
-            self.put_bfile_byte(inner, ((byte >> 12) & 0x3f) | 0x80)?;
-            self.put_bfile_byte(inner, ((byte >> 6) & 0x3f) | 0x80)?;
-            self.put_bfile_byte(inner, (byte & 0x3f) | 0x80)?;
+            buf[0] = ((byte >> 18) | 0xf0) as u8;
+            buf[1] = (((byte >> 12) & 0x3f) | 0x80) as u8;
+            buf[2] = (((byte >> 6) & 0x3f) | 0x80) as u8;
+            buf[3] = ((byte & 0x3f) | 0x80) as u8;
+            4
         } else {
             return Err(EvalError::InvalidByteString);
-        }
-        Ok(())
+        })
     }
 
     pub(in crate::runtime) fn write_io_handle_bytes(
