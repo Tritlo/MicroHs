@@ -1,3 +1,4 @@
+//! JavaScript FFI runtime primitive dispatch.
 use super::*;
 
 impl Program {

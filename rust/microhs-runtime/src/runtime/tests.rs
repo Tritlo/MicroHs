@@ -1,3 +1,4 @@
+//! Runtime parity and regression tests.
 #[cfg(test)]
 mod tests {
     use crate::runtime::{

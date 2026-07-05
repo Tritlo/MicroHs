@@ -1,3 +1,4 @@
+//! Byte-at-a-time BFILE write filters and encoders.
 use super::*;
 
 impl Program {

@@ -1,3 +1,4 @@
+//! Core heap, node, handle, and error types for the runtime.
 use super::*;
 
 #[derive(Clone, Debug)]

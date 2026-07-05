@@ -1,3 +1,4 @@
+//! C FFI, filesystem, socket, bigint, and libc-like runtime primitive dispatch.
 use super::*;
 
 impl Program {

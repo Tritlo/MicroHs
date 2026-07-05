@@ -1,3 +1,4 @@
+//! Comb and printable graph serialization.
 use super::*;
 
 impl Program {

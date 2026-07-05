@@ -1,3 +1,4 @@
+//! Compression and encoding helpers used by BFILE primitives.
 use super::*;
 
 pub(in crate::runtime) const MD5_S: [u32; 64] = [

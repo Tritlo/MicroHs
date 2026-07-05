@@ -1,3 +1,4 @@
+//! Browser JavaScript FFI bridge for wasm builds.
 use super::*;
 
 pub(in crate::runtime) fn int_to_i32(n: i64) -> Result<i32, EvalError> {

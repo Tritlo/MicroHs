@@ -1,3 +1,4 @@
+//! MicroHs primitive identifiers and name/code mappings.
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

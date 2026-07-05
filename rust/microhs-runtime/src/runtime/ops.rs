@@ -1,3 +1,4 @@
+//! Strict scalar and byte primitive operation definitions.
 use super::*;
 
 pub(in crate::runtime) enum IntResult {

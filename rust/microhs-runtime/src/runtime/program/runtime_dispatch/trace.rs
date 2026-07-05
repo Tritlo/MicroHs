@@ -1,3 +1,4 @@
+//! Optional runtime tracing for invalid byte expectations.
 use super::*;
 
 impl Program {

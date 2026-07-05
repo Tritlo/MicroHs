@@ -1,3 +1,4 @@
+//! Evaluation and GC profiling data structures.
 use super::*;
 
 #[derive(Clone, Debug, Default)]

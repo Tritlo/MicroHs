@@ -1,3 +1,4 @@
+//! Program methods grouped by heap, reducer, host, and serialization concerns.
 use super::*;
 
 mod bfile;

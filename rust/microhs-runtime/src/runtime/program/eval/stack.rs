@@ -1,3 +1,4 @@
+//! Fast explicit-stack reducer for hot combinator evaluation.
 use super::*;
 
 impl Program {

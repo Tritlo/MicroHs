@@ -1,3 +1,4 @@
+//! Reducer stacks, frames, and transient evaluation state.
 use super::*;
 
 #[derive(Clone, Debug, Default)]

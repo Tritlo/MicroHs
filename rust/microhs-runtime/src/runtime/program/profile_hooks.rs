@@ -1,6 +1,37 @@
+//! Program-side hooks for evaluation and GC profiling counters.
 use super::*;
 
 impl Program {
+    #[cold]
+    pub(in crate::runtime) fn profile_head_key(&self, head: NodeId) -> String {
+        match self.node_for_debug(head) {
+            Node::App(_, _) => "App".to_owned(),
+            Node::Indir(_) => "Indir".to_owned(),
+            Node::Free(_) => "Free".to_owned(),
+            Node::Prim(name) => format!("Prim:{name}"),
+            Node::Int(_) => "Int".to_owned(),
+            Node::Int64(_) => "Int64".to_owned(),
+            Node::Float64(_) => "Float64".to_owned(),
+            Node::Float32(_) => "Float32".to_owned(),
+            Node::ThreadId(_) => "ThreadId".to_owned(),
+            Node::Ptr(_) => "Ptr".to_owned(),
+            Node::RawFunPtr(_) => "RawFunPtr".to_owned(),
+            Node::ForeignPtr(_) => "ForeignPtr".to_owned(),
+            Node::Weak(_) => "Weak".to_owned(),
+            Node::MVar(_) => "MVar".to_owned(),
+            Node::BigInt(_) => "BigInt".to_owned(),
+            Node::Bytes(_) => "Bytes".to_owned(),
+            Node::BytesView(_) => "BytesView".to_owned(),
+            Node::MutableBytes(_) => "MutableBytes".to_owned(),
+            Node::Array(_) => "Array".to_owned(),
+            Node::Ffi(name) => format!("Ffi:{name}"),
+            Node::JsCall(call) => format!("JsCall:{}", call.tags),
+            Node::JsWrap { tags } => format!("JsWrap:{tags}"),
+            Node::FunPtr(name) => format!("FunPtr:{name}"),
+            Node::Tick(_) => "Tick".to_owned(),
+        }
+    }
+
     #[cold]
     pub(in crate::runtime) fn profile_step(
         &mut self,

@@ -1,3 +1,4 @@
+//! Pointer arithmetic, loads, stores, and conversion primitive dispatch.
 use super::*;
 
 impl Program {

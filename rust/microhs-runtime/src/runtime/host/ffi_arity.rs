@@ -1,3 +1,4 @@
+//! Arity classification for C and runtime FFI entry points.
 use super::*;
 
 pub(in crate::runtime) fn ffi_arity(name: &str) -> Option<usize> {

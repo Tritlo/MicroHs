@@ -1,3 +1,4 @@
+//! Block-oriented BFILE reads and writes.
 use super::*;
 
 impl Program {

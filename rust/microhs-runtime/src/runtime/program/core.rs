@@ -1,3 +1,4 @@
+//! Core Program construction, heap access, allocation, and resolution.
 use super::*;
 
 impl Program {
