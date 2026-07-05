@@ -1,4 +1,4 @@
-//! Platform constants, errno mapping, time, and tracing helpers.
+//! Platform constants, errno mapping, and time helpers.
 pub(in crate::runtime) fn size_of_i64<T>() -> i64 {
     std::mem::size_of::<T>() as i64
 }

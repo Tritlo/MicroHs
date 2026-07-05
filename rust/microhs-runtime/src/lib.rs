@@ -1,4 +1,3 @@
-mod lzma_decode;
 pub mod parse;
 pub mod runtime;
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
