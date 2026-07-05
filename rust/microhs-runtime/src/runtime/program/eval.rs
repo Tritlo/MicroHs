@@ -4,6 +4,5 @@ use super::*;
 mod dispatch;
 mod frames;
 mod helpers;
-mod persistent;
 mod reduce;
 mod stack;

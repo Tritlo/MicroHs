@@ -245,42 +245,32 @@ impl Program {
     pub(in crate::runtime) fn spine(&mut self, root: NodeId) -> Result<Spine, EvalError> {
         let mut node = self.resolve_profiled(root)?;
         let mut inline_args = [const { MaybeUninit::uninit() }; INLINE_SPINE];
-        let mut inline_apps = [const { MaybeUninit::uninit() }; INLINE_SPINE];
         let mut inline_len = 0;
-        let mut heap: Option<(Vec<NodeId>, Vec<NodeId>)> = None;
+        let mut heap: Option<Vec<NodeId>> = None;
         while let Some((fun, arg)) = self.cell(node).app_fields() {
-            if let Some((args, apps)) = &mut heap {
+            if let Some(args) = &mut heap {
                 args.push(arg);
-                apps.push(node);
             } else if inline_len < INLINE_SPINE {
                 inline_args[inline_len].write(arg);
-                inline_apps[inline_len].write(node);
                 inline_len += 1;
             } else {
                 let mut args = Vec::with_capacity(INLINE_SPINE * 2);
-                let mut apps = Vec::with_capacity(INLINE_SPINE * 2);
                 for idx in 0..inline_len {
                     // SAFETY: indices below inline_len were written above.
                     args.push(unsafe { inline_args[idx].assume_init() });
-                    // SAFETY: indices below inline_len were written above.
-                    apps.push(unsafe { inline_apps[idx].assume_init() });
                 }
                 args.push(arg);
-                apps.push(node);
-                heap = Some((args, apps));
+                heap = Some(args);
             }
             node = self.resolve_profiled(fun)?;
         }
-        let storage = if let Some((mut args, mut apps)) = heap {
+        let storage = if let Some(mut args) = heap {
             args.reverse();
-            apps.reverse();
-            SpineStorage::Heap { args, apps }
+            SpineStorage::Heap { args }
         } else {
             inline_args[..inline_len].reverse();
-            inline_apps[..inline_len].reverse();
             SpineStorage::Inline {
                 args: inline_args,
-                apps: inline_apps,
                 len: inline_len,
             }
         };
@@ -288,30 +278,6 @@ impl Program {
             head: node,
             storage,
         })
-    }
-
-    pub(in crate::runtime) fn apply_reduction_spine(
-        &mut self,
-        node: &mut NodeId,
-        used: usize,
-        apps: &[NodeId],
-    ) -> Result<bool, EvalError> {
-        let mut in_place = false;
-        // Match the C reducer's update point: the consumed redex root is shared
-        // even when the current evaluation has extra arguments on the spine.
-        if used > 0 && used < apps.len() {
-            self.set_app_cell_at(apps[used - 1].index(), Cell::indir(Some(*node)));
-            in_place = true;
-        }
-        for app in &apps[used..] {
-            let Some((_, arg)) = self.cell(*app).app_fields() else {
-                return Err(EvalError::DanglingIndirection(*app));
-            };
-            self.set_app_cell_at(app.index(), Cell::app(*node, arg));
-            *node = *app;
-            in_place = true;
-        }
-        Ok(in_place)
     }
 
     pub(in crate::runtime) fn is_identity_alias_node(
@@ -556,14 +522,6 @@ impl Program {
             Ordering::Greater => KnownPrim::KA,
         };
         Node::Prim(Prim::Known(known))
-    }
-
-    pub(in crate::runtime) fn int_result_node(&mut self, result: IntResult) -> NodeId {
-        match result {
-            IntResult::Int(n) => self.int(n),
-            IntResult::Bool(b) => self.prim(if b { "A" } else { "K" }),
-            IntResult::Ordering(ord) => self.ordering(ord),
-        }
     }
 
     pub(in crate::runtime) fn int_result_value_node(result: IntResult) -> Node {

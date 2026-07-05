@@ -2,78 +2,6 @@
 use super::*;
 
 impl Program {
-    pub(in crate::runtime) fn float64_result_node(&mut self, result: Float64Result) -> NodeId {
-        match result {
-            Float64Result::Float(n) => self.push_node(Node::Float64(n)),
-            Float64Result::Bool(b) => self.prim(if b { "A" } else { "K" }),
-        }
-    }
-
-    pub(in crate::runtime) fn finish_float64_frame(
-        &mut self,
-        frame: Float64Frame,
-        value: f64,
-        stack: &mut EvalFrameStack,
-    ) -> Result<(NodeId, usize), EvalError> {
-        let node = match frame.kind {
-            Float64FrameKind::BinSecond { op, x } => {
-                let next = x;
-                let next_frame = Float64Frame {
-                    redex: frame.redex,
-                    profile_head: frame.profile_head,
-                    kind: Float64FrameKind::BinFirst { op, y: value },
-                };
-                if self.profiling_enabled() {
-                    self.profile_eval_frame_push("Float64");
-                }
-                stack.push(EvalFrame::Float64(next_frame));
-                return Ok((next, 0));
-            }
-            Float64FrameKind::BinFirst { op, y } => self.float64_result_node(op.apply(value, y)),
-            Float64FrameKind::Un { op } => self.push_node(Node::Float64(op.apply(value))),
-        };
-
-        self.profile_reduction(frame.profile_head, 1);
-        let node = self.apply_strict_redex(frame.redex, node)?;
-        Ok((node, 1))
-    }
-
-    pub(in crate::runtime) fn float32_result_node(&mut self, result: Float32Result) -> NodeId {
-        match result {
-            Float32Result::Float(n) => self.push_node(Node::Float32(n)),
-            Float32Result::Bool(b) => self.prim(if b { "A" } else { "K" }),
-        }
-    }
-
-    pub(in crate::runtime) fn finish_float32_frame(
-        &mut self,
-        frame: Float32Frame,
-        value: f32,
-        stack: &mut EvalFrameStack,
-    ) -> Result<(NodeId, usize), EvalError> {
-        let node = match frame.kind {
-            Float32FrameKind::BinSecond { op, x } => {
-                let next = x;
-                let next_frame = Float32Frame {
-                    redex: frame.redex,
-                    profile_head: frame.profile_head,
-                    kind: Float32FrameKind::BinFirst { op, y: value },
-                };
-                if self.profiling_enabled() {
-                    self.profile_eval_frame_push("Float32");
-                }
-                stack.push(EvalFrame::Float32(next_frame));
-                return Ok((next, 0));
-            }
-            Float32FrameKind::BinFirst { op, y } => self.float32_result_node(op.apply(value, y)),
-            Float32FrameKind::Un { op } => self.push_node(Node::Float32(op.apply(value))),
-        };
-
-        self.profile_reduction(frame.profile_head, 1);
-        let node = self.apply_strict_redex(frame.redex, node)?;
-        Ok((node, 1))
-    }
-
     pub(in crate::runtime) fn bytes_bin_result_node(
         &mut self,
         op: BytesBinOp,
@@ -113,34 +41,6 @@ impl Program {
             }
         };
         Ok(node)
-    }
-
-    pub(in crate::runtime) fn finish_bytes_frame(
-        &mut self,
-        frame: BytesFrame,
-        value: NodeId,
-        stack: &mut EvalFrameStack,
-    ) -> Result<(NodeId, usize), EvalError> {
-        let node = match frame.kind {
-            BytesFrameKind::BinSecond { op, x } => {
-                let next = x;
-                let next_frame = BytesFrame {
-                    redex: frame.redex,
-                    profile_head: frame.profile_head,
-                    kind: BytesFrameKind::BinFirst { op, y: value },
-                };
-                if self.profiling_enabled() {
-                    self.profile_eval_frame_push("Bytes");
-                }
-                stack.push(EvalFrame::Bytes(next_frame));
-                return Ok((next, 0));
-            }
-            BytesFrameKind::BinFirst { op, y } => self.bytes_bin_result_node(op, value, y)?,
-        };
-
-        self.profile_reduction(frame.profile_head, 1);
-        let node = self.apply_strict_redex(frame.redex, node)?;
-        Ok((node, 1))
     }
 
     pub(in crate::runtime) fn int_binop(

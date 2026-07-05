@@ -73,7 +73,7 @@ impl Program {
     }
 
     pub fn reduce_whnf(&mut self, limit: usize) -> Result<(NodeId, usize), EvalError> {
-        let (root, steps) = self.reduce_whnf_from(self.root, limit, true, false)?;
+        let (root, steps) = self.reduce_whnf_from(self.root, limit, true)?;
         self.root = root;
         Ok((root, steps))
     }

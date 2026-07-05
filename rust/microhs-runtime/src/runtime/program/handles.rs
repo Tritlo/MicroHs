@@ -411,7 +411,7 @@ impl Program {
         root: NodeId,
         limit: usize,
     ) -> Result<NodeId, EvalError> {
-        self.reduce_whnf_from(root, limit, false, false)
+        self.reduce_whnf_from(root, limit, false)
             .map(|(root, _)| root)
     }
 
