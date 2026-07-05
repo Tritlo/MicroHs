@@ -4187,6 +4187,23 @@ Only keep these as "do not retry alone" markers:
 | R1 copying nursery | deferred pending rev 4 direction. Rev 3 says this is the next high-ceiling option after R2 under-delivers, but it breaks stable `NodeId` and is a larger design step than the current simplification directive |
 | simplification directive | pending rev 4. After rev 4 lands and any extra note-driven measurements are handled, switch to performance-neutral simplification and gate sizeable cleanup with 3x median self-host runs |
 
+## 2026-07-05 NOTES.md Rev 4 Intake
+
+| item | status |
+|---|---|
+| rev 4 landed | `NOTES.md` now starts as rev 4 and adds section 0: the 128M result is a memory-for-time presentation improvement, not a fair structural speedup. Fair headline remains the 40M/fair-heap median `74.876s` at `46.41M` cells, while the 128M default median is `61.963s` at `138.07M` cells |
+| rev 4 live sequence | before performance-neutral simplification, measure partial-line R2 first, then consider 8B u30 cells and only later R1 copying nursery |
+| in-tree R2 claim | rev 4 says partial-line R2 is already committed behind `--features immix-line-reclaim` at `c62cef08`, but this checkout maps `c62cef08` to `Use aborting release panics`; `git fetch origin` did not reveal any ref or history containing `immix-line-reclaim`, `line_reclaim`, `free_mask`, or a matching feature. Treat rev 4's benchmark directive as valid, but implement the missing feature locally before measuring it |
+| local partial-line R2 implementation | added the missing `immix-line-reclaim` feature locally: 8-cell line masks, no per-cell `Free` tombstone writes, dead cold payload cleanup during sweep, direct reclaimed-cell writes, stable `NodeId`s. `cargo fmt --check`, default `cargo check`, feature `cargo check`, default `cargo test --lib` 41/41, and feature `cargo test --lib` 41/41 passed |
+| local partial-line R2 100M A/B | initial 8-run alternating A/B (`MHS_REPEAT=4`, 100M step limit, candidate `--features immix-line-reclaim`) failed alloc-neutrality: base avg `2009.101ms`, candidate avg `2228.004ms` (`+10.90%`), same `100,811,779` steps, `3` GCs, high-water `33,939,361`, sink `661902`; candidate GC pause was slightly lower (`214.320ms` vs `217.414ms`) but allocation/codegen cost dominated |
+| local partial-line R2 hoist | after hoisting current line/base/mask out of the mask vector, checks still passed and the 8-run A/B improved but still failed: base avg `2019.253ms`, candidate avg `2128.981ms` (`+5.43%`), same steps/GCs/high-water/sink; candidate GC pause `214.806ms` vs base `219.217ms`. Rejected without full self-host because it missed rev 4's ~1% gate; this matches the older per-line free-mask rejection rather than rev4's expected fair-61s path |
+
+## 2026-07-05 Performance-Neutral Simplification
+
+| item | result |
+|---|---|
+| stale stack-app-origin profiling scaffold | removed the uncommitted `eval-phase-profile` stack-app-origin diagnostic scaffold from the worktree after rev 4 made it irrelevant. Net runtime source diff returned to zero; `cargo fmt --check`, default `cargo check`, `cargo check --features eval-phase-profile`, and default `cargo test --lib` 41/41 passed |
+
 ## Active Tradeoffs
 
 | item | reading |
