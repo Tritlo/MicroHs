@@ -4176,6 +4176,17 @@ Only keep these as "do not retry alone" markers:
 | full self-host | byte-identical in `76.920s`, `3,659,074,869` steps, `47.57M` steps/s, `124` GCs, `25.850s` GC pause, high-water `39,192,416`, SHA `29b8c5a55e0952bd25a9a06d5723033e0367ebaf53cfd598fa00f8e65a80d98a`, `cmp_exit=0` |
 | reading | not accepted as a measurable source win: the full gate lands in the 74-78s current band and misses the `74.668s` best / same-day `72.786s` sample. The note's expectation was right about low ceiling; do not keep iterating on known-dispatch source shape unless paired with a broader evaluator representation change |
 
+## 2026-07-05 NOTES.md Rev 3 Closeout
+
+| item | status |
+|---|---|
+| zero-code GC interval probe | done; `128M` interval became the native default and was pushed in `f02e9631`. Three-sample no-env median is `61.963s`, but the fair-heap companion is `74.876s` at `46.41M` cells, so the 128M result is recorded as a memory-for-time ceiling gauge rather than a fair C comparison |
+| R5 sweep trim | done and rejected; direct sweep tombstone helper did not improve full self-host or 128M full gate |
+| R2 line reclaim | tried full-line reclaim and per-line free-mask variants. Both kept stable `NodeId`s and were feature-gated. Full-line reclaim fragmented/grew the arena and regressed full self-host; per-line masks failed the 100M sanity at `2.486s`. Rejected for these shapes |
+| decode collapse | done and rejected; raw known-dispatch path was byte-identical but missed the full gate and was reverted |
+| R1 copying nursery | deferred pending rev 4 direction. Rev 3 says this is the next high-ceiling option after R2 under-delivers, but it breaks stable `NodeId` and is a larger design step than the current simplification directive |
+| simplification directive | pending rev 4. After rev 4 lands and any extra note-driven measurements are handled, switch to performance-neutral simplification and gate sizeable cleanup with 3x median self-host runs |
+
 ## Active Tradeoffs
 
 | item | reading |
