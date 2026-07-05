@@ -684,8 +684,7 @@ impl Program {
         };
 
         let profile_head = if self.profile.is_some() {
-            let heap_spine = matches!(&spine.storage, SpineStorage::Heap { .. });
-            self.profile_step(head, args.len(), heap_spine)
+            self.profile_step(head, args.len())
         } else {
             None
         };

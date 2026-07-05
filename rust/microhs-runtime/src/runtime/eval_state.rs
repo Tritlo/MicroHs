@@ -377,10 +377,6 @@ impl EvalSpine {
         }
     }
 
-    pub(in crate::runtime) fn is_heap(&self) -> bool {
-        self.heap
-    }
-
     pub(in crate::runtime) fn push_desc(&mut self, arg: NodeId, app: NodeId) {
         if self.heap {
             self.heap_args.push(arg);

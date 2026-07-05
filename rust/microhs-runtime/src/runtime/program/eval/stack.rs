@@ -35,7 +35,7 @@ impl Program {
 
             let args_len = stack.app_len();
             let profile_head = if profiling {
-                self.profile_step(head, args_len, false)
+                self.profile_step(head, args_len)
             } else {
                 None
             };

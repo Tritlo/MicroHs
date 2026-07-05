@@ -175,13 +175,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
     );
     #[cfg(feature = "eval-phase-profile")]
     print_phase_profile(profile, top);
-    let spine_arity_entries: usize = profile
-        .profile
-        .spine_arity
-        .iter()
-        .map(|(arity, count)| arity.saturating_mul(*count))
-        .sum();
-    println!("profile_spine_arity_entries: {spine_arity_entries}");
     println!(
         "profile_persistent_forces: {}",
         profile.profile.persistent_forces
@@ -210,7 +203,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
         "profile_non_small_int_allocations: {}",
         profile.profile.non_small_int_allocations
     );
-    println!("profile_heap_spines: {}", profile.profile.heap_spines);
     println!(
         "profile_max_spine_arity: {}",
         profile.profile.max_spine_arity
@@ -231,10 +223,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
     println!("profile_top_head_reductions:");
     for (head, count) in profile.profile.top_head_reductions(top) {
         println!("  {head}: {count}");
-    }
-    println!("profile_spine_arity:");
-    for (arity, count) in &profile.profile.spine_arity {
-        println!("  {arity}: {count}");
     }
     println!("profile_resolve_chain:");
     for (depth, count) in &profile.profile.resolve_chain {

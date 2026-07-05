@@ -47,7 +47,7 @@ impl Program {
         let head = self.fill_eval_spine(root, spine)?;
         let args_len = spine.len();
         let profile_head = if self.profile.is_some() {
-            self.profile_step(head, args_len, spine.is_heap())
+            self.profile_step(head, args_len)
         } else {
             None
         };
