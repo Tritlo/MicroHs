@@ -25,25 +25,6 @@ impl Program {
         }
 
         let result = match name {
-            name if errno_constant(name).is_some() => {
-                Node::Int(errno_constant(name).expect("checked errno constant"))
-            }
-            name if host_constant(name).is_some() => {
-                Node::Int(host_constant(name).expect("checked host constant"))
-            }
-            "GETRAW" => Node::Int(-1),
-            "GETTIMEMICRO" => Node::Int(current_time_micro()),
-            "islinux" => Node::Int(i64::from(cfg!(target_os = "linux"))),
-            "ismacos" => Node::Int(i64::from(cfg!(target_os = "macos"))),
-            "iswindows" => Node::Int(i64::from(cfg!(target_os = "windows"))),
-            "sizeof_char" => Node::Int(size_of_i64::<std::os::raw::c_char>()),
-            "sizeof_short" => Node::Int(size_of_i64::<std::os::raw::c_short>()),
-            "sizeof_int" => Node::Int(size_of_i64::<std::os::raw::c_int>()),
-            "sizeof_long" => Node::Int(size_of_i64::<std::os::raw::c_long>()),
-            "sizeof_llong" => Node::Int(size_of_i64::<std::os::raw::c_longlong>()),
-            "sizeof_size_t" => Node::Int(size_of_i64::<usize>()),
-            "want_gmp" => Node::Int(0),
-            "want_imath" => Node::Int(1),
             "js_debug" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let bytes = self.read_c_string(ptr)?;
@@ -194,9 +175,6 @@ impl Program {
                 let ptr = self.eval_pointer_value(args[0])?;
                 Node::Int(self.mpz_value(ptr)?.log2()?)
             }
-            "&closeb" => Node::fun_ptr("closeb"),
-            "&free" => Node::fun_ptr("free"),
-            "&errno" | "errno" => Node::Ptr(self.errno_ptr()?),
             "malloc" => {
                 let size = int_to_usize(self.eval_int(args[0])?)?;
                 Node::Ptr(self.alloc_memory(size)?)
