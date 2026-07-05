@@ -149,14 +149,6 @@ impl Program {
         self.nodes[id.index()].to_node(&self.cold_nodes)
     }
 
-    pub fn nodes(&self) -> Vec<Node> {
-        self.nodes
-            .iter()
-            .copied()
-            .map(|cell| cell.to_node(&self.cold_nodes))
-            .collect()
-    }
-
     pub(in crate::runtime) fn cell(&self, id: NodeId) -> Cell {
         self.nodes[id.index()]
     }

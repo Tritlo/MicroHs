@@ -115,7 +115,7 @@ mod tests {
             input.extend_from_slice(b" }\n");
 
             let program = parse_program(&input).unwrap();
-            match &program.nodes()[program.root().index()] {
+            match program.node_for_debug(program.root()) {
                 Node::Bytes(bytes) => assert_eq!(
                     bytes.as_slice(),
                     &[byte],
@@ -139,7 +139,7 @@ mod tests {
         );
 
         let legacy = parse_program(b"v8.4\n0\n%\"123456789\" }\n").unwrap();
-        match &legacy.nodes()[legacy.root().index()] {
+        match legacy.node_for_debug(legacy.root()) {
             Node::BigInt(bytes) => assert_eq!(bytes.as_slice(), b"123456789"),
             other => panic!("legacy bigint parsed as {other:?}"),
         }
@@ -692,7 +692,7 @@ mod tests {
         let mut program = parse_program(b"v8.4\n0\nIO.performIO ^GETTIMEMICRO @ }").unwrap();
         let (root, _) = program.reduce_whnf(100).unwrap();
         let root = program.resolve(root).unwrap();
-        match program.nodes()[root.index()] {
+        match program.node_for_debug(root) {
             Node::Int(n) => assert!(n >= 0),
             _ => panic!("GETTIMEMICRO did not return an Int"),
         }
@@ -722,9 +722,9 @@ mod tests {
             panic!("lz77c did not return a pair");
         };
         assert_eq!(returned_world, world);
-        let compressed_len = match program.nodes()[compressed_len.index()] {
+        let compressed_len = match program.node_for_debug(compressed_len) {
             Node::Int(n) => usize::try_from(n).unwrap(),
-            ref other => panic!("lz77c length returned {other:?}"),
+            other => panic!("lz77c length returned {other:?}"),
         };
         let compressed_ptr = program.peek_signed(out_ptr, 8).unwrap();
         let compressed = program
