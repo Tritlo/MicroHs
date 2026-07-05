@@ -26,7 +26,7 @@ Generated local artifacts are ignored: `target/`,
 ```sh
 cargo fmt --check --manifest-path rust/microhs-runtime/Cargo.toml
 cargo test --manifest-path rust/microhs-runtime/Cargo.toml --lib
-cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features eval-phase-profile
+cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile
 cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features gc-phase-profile
 cargo build --release --manifest-path rust/microhs-runtime/Cargo.toml --bin mhs-rust-bench
 ```
