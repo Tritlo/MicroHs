@@ -4,6 +4,46 @@ This directory contains the staged Rust replacement for the MicroHs runtime.
 The Haskell compiler remains the authoritative `.comb` producer; Rust consumes
 and executes compiler-produced `.comb` files.
 
+## Status & performance
+
+The Rust runtime **self-hosts byte-identically**: running the compiler's own
+`.comb` (`MicroHs.Main` compiling MicroHs) through the Rust evaluator produces the
+same output `.comb` - identical SHA - as the C runtime (`src/runtime/eval.c`).
+
+Self-host compile, one machine, 3.66 B reductions, C `eval.c` (`-O3`) at its
+normal heap as the baseline. Every Rust output is byte-identical to C.
+
+| runtime | wall (median) | vs C | cell memory | GC pause |
+|---|---|---|---|---|
+| **C `eval.c` (`-O3`)** | **46.4 s** | 1.00x | 50M cells / 800 MB | 11.4 s / 89 GCs |
+| Rust - default (128M GC interval) | **53.6 s** | **1.16x** | ~1.1 GB | 8.66 s / 31 GCs |
+| Rust - C-matched memory (80Mi interval) | **55.9 s** | **1.21x** | ~705 MB | 11.1 s / 49 GCs |
+
+Where the time goes (at C-matched memory):
+
+- **GC is at parity with C** - ~11.1 s vs C's ~11.4 s. An 8-byte packed cell (a
+  4-bit tag plus two 30-bit node ids; wide scalars demoted to a cold side-table)
+  and a sweep fast-path closed what was a ~12 s collector gap.
+- The residual gap is the **mutator/locality** (~44.8 s vs C's ~35.0 s), which is
+  ~85% memory-latency at the free-list allocator: each allocation reads a cold dead
+  cell for the next-free pointer and hands back scattered slots, so the following
+  spine descent misses cache. C's bitmap allocator returns the lowest free slot and
+  self-densifies.
+
+**Codegen floor (measurement-only, not shipped).** A profile-guided (PGO) build of
+the same Rust source - no algorithmic change - runs the self-host at **45.5 s**
+at the 128M heap and **49.4 s** at C-matched memory. That is a Rust codegen floor,
+not a win over C: with the same larger heap C `-O3` is **40.3 s**, and C PGO is
+**38.6 s**. PGO is deliberately not shipped (it is a build flag that complicates
+the reproducible-build story); it only marks the floor. Build it with
+`tools/native/build-selfhost-pgo.sh`.
+
+Size: the Rust runtime is ~22k LOC (including tests, the wasm/JS-FFI boundary, and
+the bench harness) against ~8k for the C runtime.
+
+_Self-host compile, measured 2026-07-05. The full experiment ledger and structural
+analysis live in `MATRIX.md` and `NOTES.md` at the repository root._
+
 ## Layout
 
 | path | purpose |
