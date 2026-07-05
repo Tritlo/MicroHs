@@ -544,11 +544,7 @@ impl Program {
                     .map_err(|_| EvalError::Overflow)?
                     .min(buffer.len());
                 self.write_pointer_bytes(addr_ptr, &buffer[..written])?;
-                self.poke_unsigned(
-                    len_ptr,
-                    size_of::<libc::socklen_t>(),
-                    u64::try_from(len).map_err(|_| EvalError::Overflow)?,
-                )?;
+                self.poke_unsigned(len_ptr, size_of::<libc::socklen_t>(), u64::from(len))?;
             }
             self.syscall_result_node(i64::from(rc))
         }
@@ -589,11 +585,7 @@ impl Program {
                         .min(buffer.len());
                     self.write_pointer_bytes(optval_ptr, &buffer[..written])?;
                 }
-                self.poke_unsigned(
-                    optlen_ptr,
-                    size_of::<libc::socklen_t>(),
-                    u64::try_from(len).map_err(|_| EvalError::Overflow)?,
-                )?;
+                self.poke_unsigned(optlen_ptr, size_of::<libc::socklen_t>(), u64::from(len))?;
             }
             self.syscall_result_node(i64::from(rc))
         }
