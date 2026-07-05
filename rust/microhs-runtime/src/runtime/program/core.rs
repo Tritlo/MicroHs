@@ -145,7 +145,7 @@ impl Program {
         self.nodes.len()
     }
 
-    pub fn node_for_debug(&self, id: NodeId) -> Node {
+    pub(in crate::runtime) fn node_for_debug(&self, id: NodeId) -> Node {
         self.nodes[id.index()].to_node(&self.cold_nodes)
     }
 
