@@ -1,10 +1,15 @@
+use super::*;
+
 impl Program {
-    fn eval_ffi_name(&mut self, id: NodeId) -> Result<String, EvalError> {
+    pub(in crate::runtime) fn eval_ffi_name(&mut self, id: NodeId) -> Result<String, EvalError> {
         let bytes = self.eval_string_bytes(id)?;
         String::from_utf8(bytes).map_err(|_| EvalError::InvalidByteString)
     }
 
-    fn eval_string_bytes(&mut self, id: NodeId) -> Result<Vec<u8>, EvalError> {
+    pub(in crate::runtime) fn eval_string_bytes(
+        &mut self,
+        id: NodeId,
+    ) -> Result<Vec<u8>, EvalError> {
         let root = self.reduce_node_whnf(id, FORCE_REDUCTION_LIMIT)?;
         let root = self.resolve(root)?;
         let bytes = match self.cold_node(root) {
@@ -16,7 +21,10 @@ impl Program {
         Ok(bytes)
     }
 
-    fn eval_char_list(&mut self, mut id: NodeId) -> Result<Vec<u8>, EvalError> {
+    pub(in crate::runtime) fn eval_char_list(
+        &mut self,
+        mut id: NodeId,
+    ) -> Result<Vec<u8>, EvalError> {
         let mut out = Vec::new();
         loop {
             let root = self.reduce_node_whnf(id, FORCE_REDUCTION_LIMIT)?;
@@ -44,7 +52,7 @@ impl Program {
     }
 
     #[inline]
-    fn eval_whnf_value<T>(
+    pub(in crate::runtime) fn eval_whnf_value<T>(
         &mut self,
         _kind: &'static str,
         id: NodeId,
@@ -64,7 +72,7 @@ impl Program {
         extract(self, root).ok_or_else(|| expected(root))
     }
 
-    fn eval_int(&mut self, id: NodeId) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn eval_int(&mut self, id: NodeId) -> Result<i64, EvalError> {
         self.eval_whnf_value(
             "Int",
             id,
@@ -73,7 +81,7 @@ impl Program {
         )
     }
 
-    fn eval_int64(&mut self, id: NodeId) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn eval_int64(&mut self, id: NodeId) -> Result<i64, EvalError> {
         self.eval_whnf_value(
             "Int64",
             id,
@@ -82,7 +90,7 @@ impl Program {
         )
     }
 
-    fn eval_float64(&mut self, id: NodeId) -> Result<f64, EvalError> {
+    pub(in crate::runtime) fn eval_float64(&mut self, id: NodeId) -> Result<f64, EvalError> {
         self.eval_whnf_value(
             "Float64",
             id,
@@ -91,7 +99,7 @@ impl Program {
         )
     }
 
-    fn eval_float32(&mut self, id: NodeId) -> Result<f32, EvalError> {
+    pub(in crate::runtime) fn eval_float32(&mut self, id: NodeId) -> Result<f32, EvalError> {
         self.eval_whnf_value(
             "Float32",
             id,
@@ -100,7 +108,7 @@ impl Program {
         )
     }
 
-    fn eval_bool(&mut self, id: NodeId) -> Result<bool, EvalError> {
+    pub(in crate::runtime) fn eval_bool(&mut self, id: NodeId) -> Result<bool, EvalError> {
         self.eval_whnf_value(
             "Bool",
             id,
@@ -113,7 +121,7 @@ impl Program {
         )
     }
 
-    fn eval_thread_id(&mut self, id: NodeId) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn eval_thread_id(&mut self, id: NodeId) -> Result<i64, EvalError> {
         self.eval_whnf_value(
             "ThreadId",
             id,
@@ -122,7 +130,7 @@ impl Program {
         )
     }
 
-    fn eval_pointer_value(&mut self, id: NodeId) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn eval_pointer_value(&mut self, id: NodeId) -> Result<i64, EvalError> {
         let root = self.resolve(id)?;
         if let Some(value) = self.pointer_value_from_whnf(root) {
             #[cfg(feature = "eval-phase-profile")]
@@ -141,7 +149,7 @@ impl Program {
         Ok(value)
     }
 
-    fn pointer_value_from_whnf(&self, root: NodeId) -> Option<i64> {
+    pub(in crate::runtime) fn pointer_value_from_whnf(&self, root: NodeId) -> Option<i64> {
         let cell = self.cell(root);
         if let Some(value) = cell.int_value() {
             return Some(value);
@@ -161,7 +169,7 @@ impl Program {
         }
     }
 
-    fn trace_suspicious_pointer_value(&self, root: NodeId, ptr: i64) {
+    pub(in crate::runtime) fn trace_suspicious_pointer_value(&self, root: NodeId, ptr: i64) {
         if std::env::var_os("MHS_TRACE_INVALID_BYTES").is_none() {
             return;
         }
@@ -194,7 +202,7 @@ impl Program {
         }
     }
 
-    fn expected_bytes_error(&self, id: NodeId) -> EvalError {
+    pub(in crate::runtime) fn expected_bytes_error(&self, id: NodeId) -> EvalError {
         if self.trace_expected_bytes {
             eprintln!("expected bytes: reductions={}", self.reductions);
             eprintln!(
@@ -211,7 +219,10 @@ impl Program {
         EvalError::ExpectedBytes(id)
     }
 
-    fn eval_foreign_ptr_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn eval_foreign_ptr_id(
+        &mut self,
+        id: NodeId,
+    ) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
             "ForeignPtr",
             id,
@@ -228,12 +239,12 @@ impl Program {
         )
     }
 
-    fn eval_bytes(&mut self, id: NodeId) -> Result<Vec<u8>, EvalError> {
+    pub(in crate::runtime) fn eval_bytes(&mut self, id: NodeId) -> Result<Vec<u8>, EvalError> {
         let id = self.eval_bytes_id(id)?;
         Ok(self.bytes(id)?.to_vec())
     }
 
-    fn eval_bytes_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn eval_bytes_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
             "Bytes",
             id,
@@ -245,7 +256,7 @@ impl Program {
         )
     }
 
-    fn eval_array_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn eval_array_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
             "Array",
             id,
@@ -257,21 +268,24 @@ impl Program {
         )
     }
 
-    fn array(&self, id: NodeId) -> Result<&[NodeId], EvalError> {
+    pub(in crate::runtime) fn array(&self, id: NodeId) -> Result<&[NodeId], EvalError> {
         match self.cold_node(id) {
             Some(Node::Array(items)) => Ok(items.as_slice()),
             _ => Err(EvalError::ExpectedArray(id)),
         }
     }
 
-    fn array_mut(&mut self, id: NodeId) -> Result<&mut Vec<NodeId>, EvalError> {
+    pub(in crate::runtime) fn array_mut(
+        &mut self,
+        id: NodeId,
+    ) -> Result<&mut Vec<NodeId>, EvalError> {
         match self.cold_node_mut(id) {
             Some(Node::Array(items)) => Ok(items.as_mut()),
             _ => Err(EvalError::ExpectedArray(id)),
         }
     }
 
-    fn bytes(&self, id: NodeId) -> Result<&[u8], EvalError> {
+    pub(in crate::runtime) fn bytes(&self, id: NodeId) -> Result<&[u8], EvalError> {
         match self.cold_node(id) {
             Some(Node::Bytes(bytes)) => Ok(bytes.as_slice()),
             Some(Node::BytesView(view)) => {
@@ -288,7 +302,12 @@ impl Program {
         }
     }
 
-    fn byte_slice_node(&self, id: NodeId, offset: usize, len: usize) -> Result<Node, EvalError> {
+    pub(in crate::runtime) fn byte_slice_node(
+        &self,
+        id: NodeId,
+        offset: usize,
+        len: usize,
+    ) -> Result<Node, EvalError> {
         let bytes = self.bytes(id)?;
         let end = offset.checked_add(len).ok_or(EvalError::Overflow)?;
         if end > bytes.len() {
@@ -305,7 +324,10 @@ impl Program {
         }
     }
 
-    fn materialize_bytes_view_for_write(&mut self, id: NodeId) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn materialize_bytes_view_for_write(
+        &mut self,
+        id: NodeId,
+    ) -> Result<(), EvalError> {
         if matches!(self.cold_node(id), Some(Node::BytesView(_))) {
             let bytes = self.bytes(id)?.to_vec();
             self.set_node_at(id.index(), Node::bytes(bytes));
@@ -313,7 +335,11 @@ impl Program {
         Ok(())
     }
 
-    fn new_mutable_bytes(&mut self, size: usize, capacity: usize) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn new_mutable_bytes(
+        &mut self,
+        size: usize,
+        capacity: usize,
+    ) -> Result<NodeId, EvalError> {
         if size > capacity {
             return Err(EvalError::InvalidByteString);
         }
@@ -327,7 +353,7 @@ impl Program {
         )
     }
 
-    fn freeze_bytes(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn freeze_bytes(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         let frozen = match self.cold_node(id) {
             Some(Node::Bytes(_)) => return Ok(id),
             Some(Node::BytesView(_)) => return Ok(id),
@@ -338,7 +364,11 @@ impl Program {
         Ok(id)
     }
 
-    fn append_byte(&mut self, id: NodeId, byte: u8) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn append_byte(
+        &mut self,
+        id: NodeId,
+        byte: u8,
+    ) -> Result<(), EvalError> {
         self.materialize_bytes_view_for_write(id)?;
         match self.cold_node_mut(id) {
             Some(Node::Bytes(bytes)) => {
@@ -368,7 +398,11 @@ impl Program {
         }
     }
 
-    fn append_bytes(&mut self, id: NodeId, bytes: &[u8]) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn append_bytes(
+        &mut self,
+        id: NodeId,
+        bytes: &[u8],
+    ) -> Result<(), EvalError> {
         self.materialize_bytes_view_for_write(id)?;
         match self.cold_node_mut(id) {
             Some(Node::Bytes(dst)) => {
@@ -385,7 +419,11 @@ impl Program {
         }
     }
 
-    fn read_byte_unchecked_prim(&self, id: NodeId, index: usize) -> Result<u8, EvalError> {
+    pub(in crate::runtime) fn read_byte_unchecked_prim(
+        &self,
+        id: NodeId,
+        index: usize,
+    ) -> Result<u8, EvalError> {
         match self.cold_node(id) {
             Some(Node::Bytes(bytes)) => bytes
                 .get(index)
@@ -405,7 +443,10 @@ impl Program {
         }
     }
 
-    fn byte_prim_lengths(&self, id: NodeId) -> Result<(usize, usize), EvalError> {
+    pub(in crate::runtime) fn byte_prim_lengths(
+        &self,
+        id: NodeId,
+    ) -> Result<(usize, usize), EvalError> {
         match self.cold_node(id) {
             Some(Node::Bytes(bytes)) => Ok((bytes.len(), bytes.len())),
             Some(Node::BytesView(view)) => Ok((view.len, view.len)),
@@ -414,7 +455,7 @@ impl Program {
         }
     }
 
-    fn write_byte_unchecked_prim(
+    pub(in crate::runtime) fn write_byte_unchecked_prim(
         &mut self,
         id: NodeId,
         index: usize,
@@ -439,7 +480,7 @@ impl Program {
         }
     }
 
-    fn alloc_memory(&mut self, size: usize) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn alloc_memory(&mut self, size: usize) -> Result<i64, EvalError> {
         let bytes = vec![0; size];
         let slot = if let Some(slot) = self.allocations.iter().position(Option::is_none) {
             self.allocations[slot] = Some(bytes);
@@ -451,7 +492,10 @@ impl Program {
         self.pointer_for_allocation(slot, 0)
     }
 
-    fn alloc_c_string_bytes(&mut self, bytes: &[u8]) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn alloc_c_string_bytes(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<i64, EvalError> {
         let len = bytes.len().checked_add(1).ok_or(EvalError::Overflow)?;
         let ptr = self.alloc_memory(len)?;
         self.write_pointer_bytes(ptr, bytes)?;
@@ -463,7 +507,7 @@ impl Program {
         Ok(ptr)
     }
 
-    fn errno_ptr(&mut self) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn errno_ptr(&mut self) -> Result<i64, EvalError> {
         if let Some(ptr) = self.errno_ptr {
             return Ok(ptr);
         }
@@ -473,7 +517,7 @@ impl Program {
         Ok(ptr)
     }
 
-    fn set_errno_value(&mut self, value: i32) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn set_errno_value(&mut self, value: i32) -> Result<(), EvalError> {
         self.errno_value = value;
         if let Some(ptr) = self.errno_ptr {
             self.write_errno_cell(ptr)?;
@@ -481,12 +525,15 @@ impl Program {
         Ok(())
     }
 
-    fn write_errno_cell(&mut self, ptr: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn write_errno_cell(&mut self, ptr: i64) -> Result<(), EvalError> {
         let value = self.errno_value as std::os::raw::c_int;
         self.write_pointer_bytes(ptr, &value.to_ne_bytes())
     }
 
-    fn host_int_node(&mut self, result: HostIntResult) -> Result<Node, EvalError> {
+    pub(in crate::runtime) fn host_int_node(
+        &mut self,
+        result: HostIntResult,
+    ) -> Result<Node, EvalError> {
         if let Some(errno) = result.errno {
             self.set_errno_value(errno)?;
         }
@@ -494,14 +541,17 @@ impl Program {
     }
 
     #[cfg_attr(not(all(unix, not(target_arch = "wasm32"))), allow(dead_code))]
-    fn syscall_result_node(&mut self, value: i64) -> Result<Node, EvalError> {
+    pub(in crate::runtime) fn syscall_result_node(
+        &mut self,
+        value: i64,
+    ) -> Result<Node, EvalError> {
         if value < 0 {
             self.set_errno_value(last_errno())?;
         }
         Ok(Node::Int(value))
     }
 
-    fn gettimeofday_node(
+    pub(in crate::runtime) fn gettimeofday_node(
         &mut self,
         timeval_ptr: i64,
         timezone_ptr: i64,
@@ -536,7 +586,7 @@ impl Program {
         }
     }
 
-    fn accept_socket_node(
+    pub(in crate::runtime) fn accept_socket_node(
         &mut self,
         fd: i32,
         addr_ptr: i64,
@@ -576,7 +626,7 @@ impl Program {
         }
     }
 
-    fn getsockopt_node(
+    pub(in crate::runtime) fn getsockopt_node(
         &mut self,
         fd: i32,
         level: i32,
@@ -621,7 +671,7 @@ impl Program {
         }
     }
 
-    fn recv_socket_node(
+    pub(in crate::runtime) fn recv_socket_node(
         &mut self,
         fd: i32,
         buf_ptr: i64,
@@ -651,7 +701,7 @@ impl Program {
         }
     }
 
-    fn send_socket_node(
+    pub(in crate::runtime) fn send_socket_node(
         &mut self,
         fd: i32,
         buf_ptr: i64,
@@ -681,13 +731,13 @@ impl Program {
         }
     }
 
-    fn new_mpz_node(&mut self) -> Result<Node, EvalError> {
+    pub(in crate::runtime) fn new_mpz_node(&mut self) -> Result<Node, EvalError> {
         let bigint = self.push_node(Node::bigint(b"0".to_vec()));
         let ptr = self.pointer_for_node(bigint, 0)?;
         Ok(self.foreign_ptr_node(None, 0, ptr))
     }
 
-    fn mpz_node_id(&self, ptr: i64) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn mpz_node_id(&self, ptr: i64) -> Result<NodeId, EvalError> {
         let (slot, offset) = self.decode_pointer(ptr)?;
         if offset != 0 {
             return Err(EvalError::ExpectedForeignPtr(NodeId::from_index(slot)));
@@ -699,7 +749,7 @@ impl Program {
         }
     }
 
-    fn mpz_decimal_bytes_for_ptr(&self, ptr: i64) -> Option<&[u8]> {
+    pub(in crate::runtime) fn mpz_decimal_bytes_for_ptr(&self, ptr: i64) -> Option<&[u8]> {
         let (slot, offset) = self.decode_pointer(ptr).ok()?;
         if offset != 0 {
             return None;
@@ -711,7 +761,7 @@ impl Program {
         }
     }
 
-    fn mpz_value(&self, ptr: i64) -> Result<MpzValue, EvalError> {
+    pub(in crate::runtime) fn mpz_value(&self, ptr: i64) -> Result<MpzValue, EvalError> {
         let id = self.mpz_node_id(ptr)?;
         let Some(Node::BigInt(bytes)) = self.cold_node(id) else {
             return Err(EvalError::ExpectedForeignPtr(id));
@@ -719,13 +769,22 @@ impl Program {
         MpzValue::parse_decimal(bytes).map_err(|_| EvalError::InvalidByteString)
     }
 
-    fn write_mpz_value(&mut self, ptr: i64, value: MpzValue) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn write_mpz_value(
+        &mut self,
+        ptr: i64,
+        value: MpzValue,
+    ) -> Result<(), EvalError> {
         let id = self.mpz_node_id(ptr)?;
         self.set_node_at(id.index(), Node::bigint(value.to_decimal_bytes()));
         Ok(())
     }
 
-    fn write_strerror(&mut self, errno: i32, ptr: i64, size: usize) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn write_strerror(
+        &mut self,
+        errno: i32,
+        ptr: i64,
+        size: usize,
+    ) -> Result<i64, EvalError> {
         if size == 0 {
             let erange = errno_i32("ERANGE");
             self.set_errno_value(erange)?;
@@ -747,12 +806,20 @@ impl Program {
         }
     }
 
-    fn calloc_memory(&mut self, count: usize, size: usize) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn calloc_memory(
+        &mut self,
+        count: usize,
+        size: usize,
+    ) -> Result<i64, EvalError> {
         let len = count.checked_mul(size).ok_or(EvalError::Overflow)?;
         self.alloc_memory(len)
     }
 
-    fn realloc_memory(&mut self, ptr: i64, size: usize) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn realloc_memory(
+        &mut self,
+        ptr: i64,
+        size: usize,
+    ) -> Result<i64, EvalError> {
         if ptr == 0 {
             return self.alloc_memory(size);
         }
@@ -769,7 +836,7 @@ impl Program {
         self.pointer_for_allocation(slot, 0)
     }
 
-    fn free_memory(&mut self, ptr: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn free_memory(&mut self, ptr: i64) -> Result<(), EvalError> {
         if ptr == 0 {
             return Ok(());
         }

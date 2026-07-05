@@ -1,5 +1,10 @@
+use super::*;
+
 impl Program {
-    fn new_stable_ptr_handle(&mut self, value: NodeId) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn new_stable_ptr_handle(
+        &mut self,
+        value: NodeId,
+    ) -> Result<i64, EvalError> {
         let slot = self
             .stable_ptrs
             .iter()
@@ -19,23 +24,26 @@ impl Program {
         i64::try_from(slot).map_err(|_| EvalError::Overflow)
     }
 
-    fn new_stable_ptr(&mut self, value: NodeId) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn new_stable_ptr(
+        &mut self,
+        value: NodeId,
+    ) -> Result<NodeId, EvalError> {
         let handle = self.new_stable_ptr_handle(value)?;
         Ok(self.int(handle))
     }
 
-    fn stable_ptr_handle(&mut self, id: NodeId) -> Result<usize, EvalError> {
+    pub(in crate::runtime) fn stable_ptr_handle(&mut self, id: NodeId) -> Result<usize, EvalError> {
         usize::try_from(self.eval_int(id)?).map_err(|_| EvalError::InvalidStablePtr)
     }
 
-    fn deref_stable_ptr(&self, handle: usize) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn deref_stable_ptr(&self, handle: usize) -> Result<NodeId, EvalError> {
         self.stable_ptrs
             .get(handle)
             .and_then(|value| *value)
             .ok_or(EvalError::InvalidStablePtr)
     }
 
-    fn free_stable_ptr(&mut self, handle: usize) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn free_stable_ptr(&mut self, handle: usize) -> Result<(), EvalError> {
         let slot = self
             .stable_ptrs
             .get_mut(handle)
@@ -47,7 +55,7 @@ impl Program {
         Ok(())
     }
 
-    fn new_foreign_finalizer(&mut self, arg: i64) -> usize {
+    pub(in crate::runtime) fn new_foreign_finalizer(&mut self, arg: i64) -> usize {
         let state = ForeignFinalizerState {
             arg,
             finalizer: None,
@@ -62,7 +70,12 @@ impl Program {
         }
     }
 
-    fn foreign_ptr_node(&mut self, bytes: Option<Vec<u8>>, offset: usize, ptr: i64) -> Node {
+    pub(in crate::runtime) fn foreign_ptr_node(
+        &mut self,
+        bytes: Option<Vec<u8>>,
+        offset: usize,
+        ptr: i64,
+    ) -> Node {
         let finalizer = Some(self.new_foreign_finalizer(ptr));
         Node::ForeignPtr(Box::new(ForeignPtrNode {
             bytes,
@@ -72,7 +85,11 @@ impl Program {
         }))
     }
 
-    fn offset_foreign_ptr(&mut self, id: NodeId, by: usize) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn offset_foreign_ptr(
+        &mut self,
+        id: NodeId,
+        by: usize,
+    ) -> Result<NodeId, EvalError> {
         let (bytes, offset, ptr, finalizer) = match self.cold_node(id) {
             Some(Node::ForeignPtr(foreign_ptr)) => (
                 foreign_ptr.bytes.clone(),
@@ -94,7 +111,11 @@ impl Program {
         }))))
     }
 
-    fn foreign_ptr_to_bytes(&mut self, id: NodeId, len: usize) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn foreign_ptr_to_bytes(
+        &mut self,
+        id: NodeId,
+        len: usize,
+    ) -> Result<NodeId, EvalError> {
         let foreign_ptr = match self.cold_node(id) {
             Some(Node::ForeignPtr(foreign_ptr)) => foreign_ptr.clone(),
             _ => return Err(EvalError::ExpectedForeignPtr(id)),
@@ -115,7 +136,7 @@ impl Program {
         Ok(self.push_node(Node::bytes(bytes)))
     }
 
-    fn foreign_ptr_value(&self, id: NodeId) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn foreign_ptr_value(&self, id: NodeId) -> Result<i64, EvalError> {
         match self.cold_node(id) {
             Some(Node::ForeignPtr(foreign_ptr)) => Ok(foreign_ptr.ptr),
             _ => match self.cell(id).prim() {
@@ -125,16 +146,19 @@ impl Program {
         }
     }
 
-    fn eval_js_object_handle(&mut self, id: NodeId) -> Result<u32, EvalError> {
+    pub(in crate::runtime) fn eval_js_object_handle(
+        &mut self,
+        id: NodeId,
+    ) -> Result<u32, EvalError> {
         let foreign_ptr = self.eval_foreign_ptr_id(id)?;
         u32::try_from(self.foreign_ptr_value(foreign_ptr)?).map_err(|_| EvalError::Overflow)
     }
 
-    fn js_object_node(&mut self, handle: u32) -> Node {
+    pub(in crate::runtime) fn js_object_node(&mut self, handle: u32) -> Node {
         self.foreign_ptr_node(None, 0, i64::from(handle))
     }
 
-    fn set_foreign_ptr_finalizer(
+    pub(in crate::runtime) fn set_foreign_ptr_finalizer(
         &mut self,
         id: NodeId,
         finalizer: NodeId,
@@ -166,7 +190,10 @@ impl Program {
         Ok(())
     }
 
-    fn eval_foreign_finalizer(&mut self, id: NodeId) -> Result<ForeignFinalizer, EvalError> {
+    pub(in crate::runtime) fn eval_foreign_finalizer(
+        &mut self,
+        id: NodeId,
+    ) -> Result<ForeignFinalizer, EvalError> {
         let root = self.reduce_node_whnf(id, FORCE_REDUCTION_LIMIT)?;
         let root = self.resolve(root)?;
         if let Some(value) = self.cell(root).raw_fun_ptr_value() {
@@ -196,7 +223,12 @@ impl Program {
         }
     }
 
-    fn new_weak_ptr(&mut self, key: NodeId, value: NodeId, finalizer: Option<NodeId>) -> NodeId {
+    pub(in crate::runtime) fn new_weak_ptr(
+        &mut self,
+        key: NodeId,
+        value: NodeId,
+        finalizer: Option<NodeId>,
+    ) -> NodeId {
         let finalizer = finalizer.map(|finalizer| {
             let world = self.world();
             self.app(finalizer, world)
@@ -210,7 +242,7 @@ impl Program {
         weak
     }
 
-    fn eval_weak_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn eval_weak_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
             "Weak",
             id,
@@ -222,7 +254,7 @@ impl Program {
         )
     }
 
-    fn deref_weak_ptr(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn deref_weak_ptr(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         let id = self.eval_weak_id(id)?;
         let value = match self.cold_node(id) {
             Some(Node::Weak(weak)) => weak.value,
@@ -234,7 +266,7 @@ impl Program {
         })
     }
 
-    fn finalize_weak_ptr(&mut self, id: NodeId) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn finalize_weak_ptr(&mut self, id: NodeId) -> Result<(), EvalError> {
         let id = self.eval_weak_id(id)?;
         let finalizer = match self.cold_node_mut(id) {
             Some(Node::Weak(weak)) => weak.finalizer.take(),
@@ -246,7 +278,7 @@ impl Program {
         Ok(())
     }
 
-    fn eval_mvar_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn eval_mvar_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
             "MVar",
             id,
@@ -258,28 +290,39 @@ impl Program {
         )
     }
 
-    fn read_mvar(&self, id: NodeId) -> Result<Option<NodeId>, EvalError> {
+    pub(in crate::runtime) fn read_mvar(&self, id: NodeId) -> Result<Option<NodeId>, EvalError> {
         match self.cold_node(id) {
             Some(Node::MVar(value)) => Ok(*value),
             _ => Err(EvalError::ExpectedMVar(id)),
         }
     }
 
-    fn take_mvar(&mut self, id: NodeId) -> Result<Option<NodeId>, EvalError> {
+    pub(in crate::runtime) fn take_mvar(
+        &mut self,
+        id: NodeId,
+    ) -> Result<Option<NodeId>, EvalError> {
         match self.cold_node_mut(id) {
             Some(Node::MVar(value)) => Ok(value.take()),
             _ => Err(EvalError::ExpectedMVar(id)),
         }
     }
 
-    fn put_mvar(&mut self, id: NodeId, value: NodeId) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn put_mvar(
+        &mut self,
+        id: NodeId,
+        value: NodeId,
+    ) -> Result<(), EvalError> {
         if !self.try_put_mvar(id, value)? {
             return Err(EvalError::InvalidMVar);
         }
         Ok(())
     }
 
-    fn try_put_mvar(&mut self, id: NodeId, new_value: NodeId) -> Result<bool, EvalError> {
+    pub(in crate::runtime) fn try_put_mvar(
+        &mut self,
+        id: NodeId,
+        new_value: NodeId,
+    ) -> Result<bool, EvalError> {
         match self.cold_node_mut(id) {
             Some(Node::MVar(value)) if value.is_none() => {
                 *value = Some(new_value);
@@ -290,7 +333,7 @@ impl Program {
         }
     }
 
-    fn int_list(&mut self, values: impl IntoIterator<Item = i64>) -> NodeId {
+    pub(in crate::runtime) fn int_list(&mut self, values: impl IntoIterator<Item = i64>) -> NodeId {
         let values: Vec<_> = values.into_iter().collect();
         let mut list = self.prim("K");
         for value in values.into_iter().rev() {
@@ -302,7 +345,7 @@ impl Program {
         list
     }
 
-    fn arg_ref_array(&mut self) -> NodeId {
+    pub(in crate::runtime) fn arg_ref_array(&mut self) -> NodeId {
         if let Some(array) = self.arg_ref_array {
             return array;
         }
@@ -318,14 +361,18 @@ impl Program {
         array
     }
 
-    fn reduce_node_whnf(&mut self, root: NodeId, limit: usize) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn reduce_node_whnf(
+        &mut self,
+        root: NodeId,
+        limit: usize,
+    ) -> Result<NodeId, EvalError> {
         #[cfg(feature = "eval-phase-profile")]
         self.profile_reduce_node_whnf_entry(root);
         self.reduce_whnf_from(root, limit, false, false)
             .map(|(root, _)| root)
     }
 
-    fn rnf(&mut self, noerr: bool, root: NodeId) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn rnf(&mut self, noerr: bool, root: NodeId) -> Result<(), EvalError> {
         let mut seen = HashSet::new();
         let mut stack = vec![root];
         while let Some(root) = stack.pop() {
@@ -352,7 +399,7 @@ impl Program {
         out
     }
 
-    fn render_into(&self, id: NodeId, depth: usize, out: &mut String) {
+    pub(in crate::runtime) fn render_into(&self, id: NodeId, depth: usize, out: &mut String) {
         if depth > 80 {
             out.push_str("...");
             return;

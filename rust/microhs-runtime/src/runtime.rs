@@ -40,12 +40,26 @@ macro_rules! trace_invalid_bytes {
     }};
 }
 
-include!("runtime/prims.rs");
-include!("runtime/core_types.rs");
-include!("runtime/profile.rs");
-include!("runtime/eval_state.rs");
-include!("runtime/program.rs");
-include!("runtime/ops.rs");
-include!("runtime/codecs.rs");
-include!("runtime/host.rs");
-include!("runtime/tests.rs");
+mod codecs;
+mod core_types;
+mod eval_state;
+mod host;
+mod ops;
+mod prims;
+mod profile;
+mod program;
+#[cfg(test)]
+mod tests;
+
+pub use self::core_types::{EvalError, JsCallNode, JsValue, Node, Program};
+pub(crate) use self::ops::is_runtime_prim_name;
+pub use self::prims::{KnownPrim, NodeId, Prim};
+pub use self::profile::{EvalProfile, GcStats};
+
+pub(in crate::runtime) use self::codecs::*;
+pub(in crate::runtime) use self::core_types::*;
+pub(in crate::runtime) use self::eval_state::*;
+pub(in crate::runtime) use self::host::*;
+pub(in crate::runtime) use self::ops::*;
+pub(in crate::runtime) use self::prims::*;
+pub(in crate::runtime) use self::profile::*;

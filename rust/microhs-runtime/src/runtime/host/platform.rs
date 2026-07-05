@@ -1,8 +1,8 @@
-fn size_of_i64<T>() -> i64 {
+pub(in crate::runtime) fn size_of_i64<T>() -> i64 {
     std::mem::size_of::<T>() as i64
 }
 
-fn format_float(value: f64) -> String {
+pub(in crate::runtime) fn format_float(value: f64) -> String {
     let mut out = value.to_string();
     if out == "NaN" {
         out = "nan".to_owned();
@@ -20,7 +20,7 @@ fn format_float(value: f64) -> String {
     out
 }
 
-fn current_time_micro() -> i64 {
+pub(in crate::runtime) fn current_time_micro() -> i64 {
     #[cfg(target_arch = "wasm32")]
     {
         0
@@ -37,7 +37,7 @@ fn current_time_micro() -> i64 {
 }
 
 #[cfg(not(any(unix, target_arch = "wasm32")))]
-fn current_time_nanos() -> u64 {
+pub(in crate::runtime) fn current_time_nanos() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let Ok(duration) = SystemTime::now().duration_since(UNIX_EPOCH) else {
@@ -50,7 +50,7 @@ fn current_time_nanos() -> u64 {
     any(target_os = "linux", target_os = "android"),
     not(target_arch = "wasm32")
 ))]
-fn cpu_time() -> (u64, u64) {
+pub(in crate::runtime) fn cpu_time() -> (u64, u64) {
     let mut ts = std::mem::MaybeUninit::<libc::timespec>::uninit();
     // SAFETY: clock_gettime writes the timespec on success. The pointer is valid for one call.
     let rc = unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, ts.as_mut_ptr()) };
@@ -69,15 +69,15 @@ fn cpu_time() -> (u64, u64) {
     target_arch = "wasm32",
     not(any(target_os = "linux", target_os = "android"))
 ))]
-fn cpu_time() -> (u64, u64) {
+pub(in crate::runtime) fn cpu_time() -> (u64, u64) {
     (0, 0)
 }
 
-fn errno_i32(name: &str) -> i32 {
+pub(in crate::runtime) fn errno_i32(name: &str) -> i32 {
     errno_constant(name).unwrap_or(-1) as i32
 }
 
-fn host_constant(name: &str) -> Option<i64> {
+pub(in crate::runtime) fn host_constant(name: &str) -> Option<i64> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
         return Some(i64::from(match name {
@@ -107,30 +107,30 @@ fn host_constant(name: &str) -> Option<i64> {
 }
 
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-fn last_errno() -> i32 {
+pub(in crate::runtime) fn last_errno() -> i32 {
     std::io::Error::last_os_error()
         .raw_os_error()
         .unwrap_or_else(|| errno_i32("ENOENT"))
 }
 
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-fn io_error_errno(error: &std::io::Error) -> Option<i32> {
+pub(in crate::runtime) fn io_error_errno(error: &std::io::Error) -> Option<i32> {
     error.raw_os_error()
 }
 
-fn strerror_bytes(errno: i32) -> Vec<u8> {
+pub(in crate::runtime) fn strerror_bytes(errno: i32) -> Vec<u8> {
     std::io::Error::from_raw_os_error(errno)
         .to_string()
         .into_bytes()
 }
 
 #[cfg(target_os = "wasi")]
-fn wasi_trace_enabled() -> bool {
+pub(in crate::runtime) fn wasi_trace_enabled() -> bool {
     std::env::var_os("MHS_WASI_TRACE").is_some()
 }
 
 #[cfg(target_os = "wasi")]
-fn wasi_trace_host(event: &str, detail: &str) {
+pub(in crate::runtime) fn wasi_trace_host(event: &str, detail: &str) {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -146,7 +146,7 @@ fn wasi_trace_host(event: &str, detail: &str) {
 }
 
 #[cfg(target_os = "wasi")]
-fn wasi_trace_every(event: &str, interval: usize) {
+pub(in crate::runtime) fn wasi_trace_every(event: &str, interval: usize) {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -163,7 +163,7 @@ fn wasi_trace_every(event: &str, interval: usize) {
     any(target_os = "linux", target_os = "android"),
     not(target_arch = "wasm32")
 ))]
-fn errno_constant(name: &str) -> Option<i64> {
+pub(in crate::runtime) fn errno_constant(name: &str) -> Option<i64> {
     Some(i64::from(match name {
         "EOK" => 0,
         "E2BIG" => libc::E2BIG,
@@ -273,7 +273,7 @@ fn errno_constant(name: &str) -> Option<i64> {
     target_arch = "wasm32",
     not(any(target_os = "linux", target_os = "android"))
 ))]
-fn errno_constant(name: &str) -> Option<i64> {
+pub(in crate::runtime) fn errno_constant(name: &str) -> Option<i64> {
     if name == "EOK" {
         return Some(0);
     }

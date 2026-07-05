@@ -1,11 +1,13 @@
-enum IntResult {
+use super::*;
+
+pub(in crate::runtime) enum IntResult {
     Int(i64),
     Bool(bool),
     Ordering(Ordering),
 }
 
 #[derive(Clone, Copy, Debug)]
-enum IntBinOp {
+pub(in crate::runtime) enum IntBinOp {
     Add,
     Sub,
     Mul,
@@ -39,7 +41,7 @@ enum IntBinOp {
 }
 
 impl IntBinOp {
-    fn from_prim(name: &str) -> Option<Self> {
+    pub(in crate::runtime) fn from_prim(name: &str) -> Option<Self> {
         Some(match name {
             "+" => Self::Add,
             "-" => Self::Sub,
@@ -75,7 +77,7 @@ impl IntBinOp {
         })
     }
 
-    fn apply(self, x: i64, y: i64) -> Result<IntResult, EvalError> {
+    pub(in crate::runtime) fn apply(self, x: i64, y: i64) -> Result<IntResult, EvalError> {
         let xu = x as u64;
         let yu = y as u64;
         let n = match self {
@@ -134,14 +136,14 @@ impl IntBinOp {
     }
 }
 
-enum Int64Result {
+pub(in crate::runtime) enum Int64Result {
     Int64(i64),
     Bool(bool),
     Ordering(Ordering),
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Int64BinOp {
+pub(in crate::runtime) enum Int64BinOp {
     Add,
     Sub,
     Mul,
@@ -175,7 +177,7 @@ enum Int64BinOp {
 }
 
 impl Int64BinOp {
-    fn from_prim(name: &str) -> Option<Self> {
+    pub(in crate::runtime) fn from_prim(name: &str) -> Option<Self> {
         Some(match name {
             "I+" => Self::Add,
             "I-" => Self::Sub,
@@ -211,15 +213,15 @@ impl Int64BinOp {
         })
     }
 
-    fn rhs_is_shift(self) -> bool {
+    pub(in crate::runtime) fn rhs_is_shift(self) -> bool {
         matches!(self, Self::Shl | Self::Shr | Self::Ashr)
     }
 
-    fn driver_marker_safe(self) -> bool {
+    pub(in crate::runtime) fn driver_marker_safe(self) -> bool {
         !self.rhs_is_shift()
     }
 
-    fn apply(self, x: i64, y: i64) -> Result<Int64Result, EvalError> {
+    pub(in crate::runtime) fn apply(self, x: i64, y: i64) -> Result<Int64Result, EvalError> {
         let xu = x as u64;
         let yu = y as u64;
         let n = match self {
@@ -278,13 +280,13 @@ impl Int64BinOp {
     }
 }
 
-enum Int64UnResult {
+pub(in crate::runtime) enum Int64UnResult {
     Int64(i64),
     Int(i64),
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Int64UnOp {
+pub(in crate::runtime) enum Int64UnOp {
     Neg,
     UNeg,
     Inv,
@@ -294,7 +296,7 @@ enum Int64UnOp {
 }
 
 impl Int64UnOp {
-    fn from_prim(name: &str) -> Option<Self> {
+    pub(in crate::runtime) fn from_prim(name: &str) -> Option<Self> {
         Some(match name {
             "Ineg" => Self::Neg,
             "Iuneg" => Self::UNeg,
@@ -306,7 +308,7 @@ impl Int64UnOp {
         })
     }
 
-    fn apply(self, x: i64) -> Result<Int64UnResult, EvalError> {
+    pub(in crate::runtime) fn apply(self, x: i64) -> Result<Int64UnResult, EvalError> {
         let xu = x as u64;
         Ok(match self {
             Self::Neg => Int64UnResult::Int64(x.checked_neg().ok_or(EvalError::Overflow)?),
@@ -319,13 +321,13 @@ impl Int64UnOp {
     }
 }
 
-enum Float64Result {
+pub(in crate::runtime) enum Float64Result {
     Float(f64),
     Bool(bool),
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Float64BinOp {
+pub(in crate::runtime) enum Float64BinOp {
     Add,
     Sub,
     Mul,
@@ -339,7 +341,7 @@ enum Float64BinOp {
 }
 
 impl Float64BinOp {
-    fn from_prim(name: &str) -> Option<Self> {
+    pub(in crate::runtime) fn from_prim(name: &str) -> Option<Self> {
         Some(match name {
             "d+" => Self::Add,
             "d-" => Self::Sub,
@@ -355,7 +357,7 @@ impl Float64BinOp {
         })
     }
 
-    fn apply(self, x: f64, y: f64) -> Float64Result {
+    pub(in crate::runtime) fn apply(self, x: f64, y: f64) -> Float64Result {
         match self {
             Self::Add => Float64Result::Float(x + y),
             Self::Sub => Float64Result::Float(x - y),
@@ -372,32 +374,32 @@ impl Float64BinOp {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Float64UnOp {
+pub(in crate::runtime) enum Float64UnOp {
     Neg,
 }
 
 impl Float64UnOp {
-    fn from_prim(name: &str) -> Option<Self> {
+    pub(in crate::runtime) fn from_prim(name: &str) -> Option<Self> {
         Some(match name {
             "dneg" => Self::Neg,
             _ => return None,
         })
     }
 
-    fn apply(self, x: f64) -> f64 {
+    pub(in crate::runtime) fn apply(self, x: f64) -> f64 {
         match self {
             Self::Neg => -x,
         }
     }
 }
 
-enum Float32Result {
+pub(in crate::runtime) enum Float32Result {
     Float(f32),
     Bool(bool),
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Float32BinOp {
+pub(in crate::runtime) enum Float32BinOp {
     Add,
     Sub,
     Mul,
@@ -411,7 +413,7 @@ enum Float32BinOp {
 }
 
 impl Float32BinOp {
-    fn from_prim(name: &str) -> Option<Self> {
+    pub(in crate::runtime) fn from_prim(name: &str) -> Option<Self> {
         Some(match name {
             "f+" => Self::Add,
             "f-" => Self::Sub,
@@ -427,7 +429,7 @@ impl Float32BinOp {
         })
     }
 
-    fn apply(self, x: f32, y: f32) -> Float32Result {
+    pub(in crate::runtime) fn apply(self, x: f32, y: f32) -> Float32Result {
         match self {
             Self::Add => Float32Result::Float(x + y),
             Self::Sub => Float32Result::Float(x - y),
@@ -444,19 +446,19 @@ impl Float32BinOp {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Float32UnOp {
+pub(in crate::runtime) enum Float32UnOp {
     Neg,
 }
 
 impl Float32UnOp {
-    fn from_prim(name: &str) -> Option<Self> {
+    pub(in crate::runtime) fn from_prim(name: &str) -> Option<Self> {
         Some(match name {
             "fneg" => Self::Neg,
             _ => return None,
         })
     }
 
-    fn apply(self, x: f32) -> f32 {
+    pub(in crate::runtime) fn apply(self, x: f32) -> f32 {
         match self {
             Self::Neg => -x,
         }
@@ -464,7 +466,7 @@ impl Float32UnOp {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum BytesBinOp {
+pub(in crate::runtime) enum BytesBinOp {
     Append,
     AppendDot,
     Eq,
@@ -477,7 +479,7 @@ enum BytesBinOp {
 }
 
 impl BytesBinOp {
-    fn from_prim(name: &str) -> Option<Self> {
+    pub(in crate::runtime) fn from_prim(name: &str) -> Option<Self> {
         Some(match name {
             "bs++" => Self::Append,
             "bs++." => Self::AppendDot,
@@ -494,7 +496,7 @@ impl BytesBinOp {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum IntUnOp {
+pub(in crate::runtime) enum IntUnOp {
     Neg,
     UNeg,
     Inv,
@@ -504,7 +506,7 @@ enum IntUnOp {
 }
 
 impl IntUnOp {
-    fn from_prim(name: &str) -> Option<Self> {
+    pub(in crate::runtime) fn from_prim(name: &str) -> Option<Self> {
         Some(match name {
             "neg" => Self::Neg,
             "uneg" => Self::UNeg,
@@ -516,7 +518,7 @@ impl IntUnOp {
         })
     }
 
-    fn apply(self, x: i64) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn apply(self, x: i64) -> Result<i64, EvalError> {
         Ok(match self {
             Self::Neg => x.checked_neg().ok_or(EvalError::Overflow)?,
             Self::UNeg => (0u64.wrapping_sub(x as u64)) as i64,
@@ -528,24 +530,24 @@ impl IntUnOp {
     }
 }
 
-fn shift(n: i64) -> Result<u32, EvalError> {
+pub(in crate::runtime) fn shift(n: i64) -> Result<u32, EvalError> {
     if !(0..64).contains(&n) {
         return Err(EvalError::InvalidShift(n));
     }
     Ok(n as u32)
 }
 
-fn tag_index(name: &str) -> Option<usize> {
+pub(in crate::runtime) fn tag_index(name: &str) -> Option<usize> {
     let tag = name.strip_prefix("TAG")?.parse().ok()?;
     (tag <= 32).then_some(tag)
 }
 
-fn tuple_fields(name: &str) -> Option<usize> {
+pub(in crate::runtime) fn tuple_fields(name: &str) -> Option<usize> {
     let fields = name.strip_prefix('T')?.parse().ok()?;
     (3..=16).contains(&fields).then_some(fields)
 }
 
-fn rts_exception_message(code: i64) -> &'static [u8] {
+pub(in crate::runtime) fn rts_exception_message(code: i64) -> &'static [u8] {
     match code {
         0 => b"stack overflow",
         1 => b"heap overflow",
@@ -563,7 +565,7 @@ pub(crate) fn is_runtime_prim_name(name: &str) -> bool {
     Prim::from_name(name).is_some()
 }
 
-fn is_supported_runtime_prim_name(name: &str) -> bool {
+pub(in crate::runtime) fn is_supported_runtime_prim_name(name: &str) -> bool {
     is_runtime_prim_name(name)
         && !matches!(
             name,
@@ -571,6 +573,6 @@ fn is_supported_runtime_prim_name(name: &str) -> bool {
         )
 }
 
-fn int_to_usize(n: i64) -> Result<usize, EvalError> {
+pub(in crate::runtime) fn int_to_usize(n: i64) -> Result<usize, EvalError> {
     usize::try_from(n).map_err(|_| EvalError::InvalidByteString)
 }

@@ -1,3 +1,5 @@
+use super::*;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct NodeId(pub u32);
 
@@ -40,17 +42,17 @@ impl Prim {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct RuntimePrim(u16);
+pub struct RuntimePrim(pub(in crate::runtime) u16);
 
 impl RuntimePrim {
-    fn from_name(name: &str) -> Option<Self> {
+    pub(in crate::runtime) fn from_name(name: &str) -> Option<Self> {
         RUNTIME_PRIM_NAMES
             .iter()
             .position(|candidate| *candidate == name)
             .map(|index| Self(index as u16))
     }
 
-    fn name(self) -> &'static str {
+    pub(in crate::runtime) fn name(self) -> &'static str {
         RUNTIME_PRIM_NAMES
             .get(self.0 as usize)
             .copied()
@@ -157,7 +159,7 @@ pub enum KnownPrim {
 }
 
 impl KnownPrim {
-    fn from_name(name: &str) -> Option<Self> {
+    pub(in crate::runtime) fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "A" => Self::A,
             "B" => Self::B,
@@ -233,7 +235,7 @@ impl KnownPrim {
         })
     }
 
-    fn name(self) -> &'static str {
+    pub(in crate::runtime) fn name(self) -> &'static str {
         match self {
             Self::A => "A",
             Self::B => "B",
@@ -310,7 +312,7 @@ impl KnownPrim {
     }
 }
 
-fn encode_known_prim(known: KnownPrim) -> u16 {
+pub(in crate::runtime) fn encode_known_prim(known: KnownPrim) -> u16 {
     match known {
         KnownPrim::A => 0,
         KnownPrim::B => 1,
@@ -380,7 +382,7 @@ fn encode_known_prim(known: KnownPrim) -> u16 {
 }
 
 #[inline(always)]
-fn decode_known_prim(code: u16) -> KnownPrim {
+pub(in crate::runtime) fn decode_known_prim(code: u16) -> KnownPrim {
     match code {
         0 => KnownPrim::A,
         1 => KnownPrim::B,
@@ -450,19 +452,19 @@ fn decode_known_prim(code: u16) -> KnownPrim {
     }
 }
 
-const TAG_PRIM_NAMES: [&str; 33] = [
+pub(in crate::runtime) const TAG_PRIM_NAMES: [&str; 33] = [
     "TAG0", "TAG1", "TAG2", "TAG3", "TAG4", "TAG5", "TAG6", "TAG7", "TAG8", "TAG9", "TAG10",
     "TAG11", "TAG12", "TAG13", "TAG14", "TAG15", "TAG16", "TAG17", "TAG18", "TAG19", "TAG20",
     "TAG21", "TAG22", "TAG23", "TAG24", "TAG25", "TAG26", "TAG27", "TAG28", "TAG29", "TAG30",
     "TAG31", "TAG32",
 ];
 
-const TUPLE_PRIM_NAMES: [&str; 17] = [
+pub(in crate::runtime) const TUPLE_PRIM_NAMES: [&str; 17] = [
     "", "", "", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10", "T11", "T12", "T13", "T14", "T15",
     "T16",
 ];
 
-const RUNTIME_PRIM_NAMES: &[&str] = &[
+pub(in crate::runtime) const RUNTIME_PRIM_NAMES: &[&str] = &[
     "+",
     "-",
     "*",
@@ -632,4 +634,3 @@ const RUNTIME_PRIM_NAMES: &[&str] = &[
     "IO.waitrdfd",
     "IO.waitwrfd",
 ];
-

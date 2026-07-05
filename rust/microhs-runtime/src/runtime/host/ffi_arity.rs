@@ -1,4 +1,6 @@
-fn ffi_arity(name: &str) -> Option<usize> {
+use super::*;
+
+pub(in crate::runtime) fn ffi_arity(name: &str) -> Option<usize> {
     if errno_constant(name).is_some() {
         return Some(0);
     }
@@ -133,7 +135,7 @@ fn ffi_arity(name: &str) -> Option<usize> {
     })
 }
 
-fn is_unary_math_ffi_candidate(name: &str) -> bool {
+pub(in crate::runtime) fn is_unary_math_ffi_candidate(name: &str) -> bool {
     let bytes = name.as_bytes();
     match bytes.first() {
         Some(b'a') => {

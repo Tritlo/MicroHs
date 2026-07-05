@@ -1,10 +1,12 @@
-const MD5_S: [u32; 64] = [
+use super::*;
+
+pub(in crate::runtime) const MD5_S: [u32; 64] = [
     7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9,
     14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15,
     21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
 ];
 
-const MD5_K: [u32; 64] = [
+pub(in crate::runtime) const MD5_K: [u32; 64] = [
     0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
     0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
     0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
@@ -15,14 +17,14 @@ const MD5_K: [u32; 64] = [
     0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
 ];
 
-struct Md5Context {
-    size: u64,
-    state: [u32; 4],
-    input: [u8; 64],
+pub(in crate::runtime) struct Md5Context {
+    pub(in crate::runtime) size: u64,
+    pub(in crate::runtime) state: [u32; 4],
+    pub(in crate::runtime) input: [u8; 64],
 }
 
 impl Md5Context {
-    fn new() -> Self {
+    pub(in crate::runtime) fn new() -> Self {
         Self {
             size: 0,
             state: [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476],
@@ -30,7 +32,7 @@ impl Md5Context {
         }
     }
 
-    fn update(&mut self, bytes: &[u8]) {
+    pub(in crate::runtime) fn update(&mut self, bytes: &[u8]) {
         let mut offset = (self.size % 64) as usize;
         self.size = self.size.wrapping_add(bytes.len() as u64);
         for &byte in bytes {
@@ -43,7 +45,7 @@ impl Md5Context {
         }
     }
 
-    fn finalize(mut self) -> [u8; 16] {
+    pub(in crate::runtime) fn finalize(mut self) -> [u8; 16] {
         let offset = (self.size % 64) as usize;
         let padding_len = if offset < 56 {
             56 - offset
@@ -69,13 +71,13 @@ impl Md5Context {
     }
 }
 
-fn md5_bytes(bytes: &[u8]) -> [u8; 16] {
+pub(in crate::runtime) fn md5_bytes(bytes: &[u8]) -> [u8; 16] {
     let mut ctx = Md5Context::new();
     ctx.update(bytes);
     ctx.finalize()
 }
 
-fn md5_block_words(input: &[u8; 64]) -> [u32; 16] {
+pub(in crate::runtime) fn md5_block_words(input: &[u8; 64]) -> [u32; 16] {
     let mut out = [0; 16];
     for (idx, word) in out.iter_mut().enumerate() {
         let start = idx * 4;
@@ -89,7 +91,7 @@ fn md5_block_words(input: &[u8; 64]) -> [u32; 16] {
     out
 }
 
-fn md5_step(state: &mut [u32; 4], input: &[u32; 16]) {
+pub(in crate::runtime) fn md5_step(state: &mut [u32; 4], input: &[u32; 16]) {
     let mut a = state[0];
     let mut b = state[1];
     let mut c = state[2];
@@ -120,7 +122,7 @@ fn md5_step(state: &mut [u32; 4], input: &[u32; 16]) {
     state[3] = state[3].wrapping_add(d);
 }
 
-fn rle_pending_bytes(count: usize, byte: i64) -> Result<Vec<u8>, EvalError> {
+pub(in crate::runtime) fn rle_pending_bytes(count: usize, byte: i64) -> Result<Vec<u8>, EvalError> {
     if count == 0 {
         return Ok(Vec::new());
     }
@@ -138,7 +140,7 @@ fn rle_pending_bytes(count: usize, byte: i64) -> Result<Vec<u8>, EvalError> {
     }
 }
 
-fn push_rle_rep(n: usize, out: &mut Vec<u8>) -> Result<(), EvalError> {
+pub(in crate::runtime) fn push_rle_rep(n: usize, out: &mut Vec<u8>) -> Result<(), EvalError> {
     if n > 127 {
         push_rle_rep(n / 128, out)?;
     }
@@ -147,17 +149,17 @@ fn push_rle_rep(n: usize, out: &mut Vec<u8>) -> Result<(), EvalError> {
     Ok(())
 }
 
-enum Base64Input {
+pub(in crate::runtime) enum Base64Input {
     Value(i32),
     Whitespace,
     Invalid,
 }
 
-const BASE64_ALPHABET: &[u8; 65] =
+pub(in crate::runtime) const BASE64_ALPHABET: &[u8; 65] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
-const BASE64_PAD: usize = 64;
+pub(in crate::runtime) const BASE64_PAD: usize = 64;
 
-fn base64_decode_value(byte: u8) -> Base64Input {
+pub(in crate::runtime) fn base64_decode_value(byte: u8) -> Base64Input {
     match byte {
         b'A'..=b'Z' => Base64Input::Value(i32::from(byte - b'A')),
         b'a'..=b'z' => Base64Input::Value(i32::from(byte - b'a') + 26),
@@ -170,7 +172,11 @@ fn base64_decode_value(byte: u8) -> Base64Input {
     }
 }
 
-fn base64_full_quad_bytes(encbuf: &[u8; 3], linelen: usize, outcol: &mut usize) -> Vec<u8> {
+pub(in crate::runtime) fn base64_full_quad_bytes(
+    encbuf: &[u8; 3],
+    linelen: usize,
+    outcol: &mut usize,
+) -> Vec<u8> {
     let x = ((u32::from(encbuf[0])) << 16) | ((u32::from(encbuf[1])) << 8) | u32::from(encbuf[2]);
     base64_quad_bytes(
         [
@@ -184,7 +190,7 @@ fn base64_full_quad_bytes(encbuf: &[u8; 3], linelen: usize, outcol: &mut usize) 
     )
 }
 
-fn base64_pending_bytes(
+pub(in crate::runtime) fn base64_pending_bytes(
     encbuf: &[u8; 3],
     encpos: &usize,
     linelen: usize,
@@ -222,7 +228,11 @@ fn base64_pending_bytes(
     })
 }
 
-fn base64_quad_bytes(indices: [usize; 4], linelen: usize, outcol: &mut usize) -> Vec<u8> {
+pub(in crate::runtime) fn base64_quad_bytes(
+    indices: [usize; 4],
+    linelen: usize,
+    outcol: &mut usize,
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(5);
     if linelen != 0 && *outcol + 4 > linelen {
         out.push(b'\n');
@@ -235,16 +245,16 @@ fn base64_quad_bytes(indices: [usize; 4], linelen: usize, outcol: &mut usize) ->
     out
 }
 
-const LZ77_MAXWIN: usize = 8_192;
-const LZ77_MAXLEN: usize = 9 + 255;
-const LZ77_MINMATCH: usize = 3;
-const LZ77_MINOFFS: usize = 1;
-const LZ77_MAXLIT: usize = 32;
-const LZ77_HASHBITS: usize = 11;
-const LZ77_HASHSIZE: usize = 1 << LZ77_HASHBITS;
-const LZ77_NUMPREV: usize = 16;
+pub(in crate::runtime) const LZ77_MAXWIN: usize = 8_192;
+pub(in crate::runtime) const LZ77_MAXLEN: usize = 9 + 255;
+pub(in crate::runtime) const LZ77_MINMATCH: usize = 3;
+pub(in crate::runtime) const LZ77_MINOFFS: usize = 1;
+pub(in crate::runtime) const LZ77_MAXLIT: usize = 32;
+pub(in crate::runtime) const LZ77_HASHBITS: usize = 11;
+pub(in crate::runtime) const LZ77_HASHSIZE: usize = 1 << LZ77_HASHBITS;
+pub(in crate::runtime) const LZ77_NUMPREV: usize = 16;
 
-fn lz77_decompress(src: &[u8]) -> Result<Vec<u8>, EvalError> {
+pub(in crate::runtime) fn lz77_decompress(src: &[u8]) -> Result<Vec<u8>, EvalError> {
     let mut out = Vec::with_capacity(100_000);
     let mut src_pos = 0;
     while src_pos < src.len() {
@@ -290,7 +300,7 @@ fn lz77_decompress(src: &[u8]) -> Result<Vec<u8>, EvalError> {
     Ok(out)
 }
 
-fn lz77_compress(src: &[u8]) -> Result<Vec<u8>, EvalError> {
+pub(in crate::runtime) fn lz77_compress(src: &[u8]) -> Result<Vec<u8>, EvalError> {
     let mut out = Vec::with_capacity(25_000);
     let mut hashes = [[usize::MAX; LZ77_NUMPREV]; LZ77_HASHSIZE];
     let mut cur = 0;
@@ -337,7 +347,7 @@ fn lz77_compress(src: &[u8]) -> Result<Vec<u8>, EvalError> {
     Ok(out)
 }
 
-fn lz77_hash(bytes: &[u8]) -> usize {
+pub(in crate::runtime) fn lz77_hash(bytes: &[u8]) -> usize {
     let mut hash = 5381usize;
     for byte in bytes.iter().take(4) {
         hash = hash.wrapping_mul(33).wrapping_add(usize::from(*byte));
@@ -345,7 +355,7 @@ fn lz77_hash(bytes: &[u8]) -> usize {
     hash & (LZ77_HASHSIZE - 1)
 }
 
-fn lz77_find_longest_match(
+pub(in crate::runtime) fn lz77_find_longest_match(
     src: &[u8],
     cur: usize,
     hashes: &[[usize; LZ77_NUMPREV]; LZ77_HASHSIZE],
@@ -375,7 +385,7 @@ fn lz77_find_longest_match(
     (match_len, match_offs)
 }
 
-fn lz77_match_len(src: &[u8], cur: usize, win: usize) -> usize {
+pub(in crate::runtime) fn lz77_match_len(src: &[u8], cur: usize, win: usize) -> usize {
     let mut len = 0;
     while cur + len < src.len() && len < LZ77_MAXLEN && src[cur + len] == src[win + len] {
         len += 1;
@@ -383,7 +393,11 @@ fn lz77_match_len(src: &[u8], cur: usize, win: usize) -> usize {
     len
 }
 
-fn lz77_update_hash(src: &[u8], cur: usize, hashes: &mut [[usize; LZ77_NUMPREV]; LZ77_HASHSIZE]) {
+pub(in crate::runtime) fn lz77_update_hash(
+    src: &[u8],
+    cur: usize,
+    hashes: &mut [[usize; LZ77_NUMPREV]; LZ77_HASHSIZE],
+) {
     let slots = &mut hashes[lz77_hash(&src[cur..])];
     for idx in (1..LZ77_NUMPREV).rev() {
         slots[idx] = slots[idx - 1];
@@ -391,17 +405,17 @@ fn lz77_update_hash(src: &[u8], cur: usize, hashes: &mut [[usize; LZ77_NUMPREV];
     slots[0] = cur;
 }
 
-fn u32_le_bytes(n: usize) -> Result<[u8; 4], EvalError> {
+pub(in crate::runtime) fn u32_le_bytes(n: usize) -> Result<[u8; 4], EvalError> {
     let n = u32::try_from(n).map_err(|_| EvalError::Overflow)?;
     Ok(n.to_le_bytes())
 }
 
-fn u64_le_bytes(n: usize) -> Result<[u8; 8], EvalError> {
+pub(in crate::runtime) fn u64_le_bytes(n: usize) -> Result<[u8; 8], EvalError> {
     let n = u64::try_from(n).map_err(|_| EvalError::Overflow)?;
     Ok(n.to_le_bytes())
 }
 
-fn lzma_compress_payload(input: &[u8]) -> Result<Vec<u8>, EvalError> {
+pub(in crate::runtime) fn lzma_compress_payload(input: &[u8]) -> Result<Vec<u8>, EvalError> {
     let props = lzma_sdk_rs::LzmaProps::for_level(5, u32::MAX);
     let raw = lzma_sdk_rs::encode(input, &props);
     let mut out = Vec::with_capacity(13 + raw.len());
@@ -411,7 +425,7 @@ fn lzma_compress_payload(input: &[u8]) -> Result<Vec<u8>, EvalError> {
     Ok(out)
 }
 
-fn lzma_decompress_payload(input: &[u8]) -> Result<Vec<u8>, EvalError> {
+pub(in crate::runtime) fn lzma_decompress_payload(input: &[u8]) -> Result<Vec<u8>, EvalError> {
     if input.len() < 13 {
         return Err(EvalError::InvalidByteString);
     }
@@ -428,7 +442,7 @@ fn lzma_decompress_payload(input: &[u8]) -> Result<Vec<u8>, EvalError> {
         .ok_or(EvalError::InvalidByteString)
 }
 
-fn bwt_encode(data: &[u8]) -> Result<(usize, Vec<u8>), EvalError> {
+pub(in crate::runtime) fn bwt_encode(data: &[u8]) -> Result<(usize, Vec<u8>), EvalError> {
     if data.is_empty() {
         return Ok((0, Vec::new()));
     }
@@ -445,7 +459,7 @@ fn bwt_encode(data: &[u8]) -> Result<(usize, Vec<u8>), EvalError> {
     Ok((zero, last))
 }
 
-fn bwt_compare_rotation(data: &[u8], a: usize, b: usize) -> Ordering {
+pub(in crate::runtime) fn bwt_compare_rotation(data: &[u8], a: usize, b: usize) -> Ordering {
     if a == b {
         return Ordering::Equal;
     }
@@ -460,7 +474,7 @@ fn bwt_compare_rotation(data: &[u8], a: usize, b: usize) -> Ordering {
     Ordering::Equal
 }
 
-fn bwt_decode(data: &[u8], zero: usize) -> Result<Vec<u8>, EvalError> {
+pub(in crate::runtime) fn bwt_decode(data: &[u8], zero: usize) -> Result<Vec<u8>, EvalError> {
     if data.is_empty() {
         if zero == 0 {
             return Ok(Vec::new());

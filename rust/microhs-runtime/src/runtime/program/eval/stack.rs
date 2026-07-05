@@ -1,5 +1,7 @@
+use super::*;
+
 impl Program {
-    fn stack_eval_step(
+    pub(in crate::runtime) fn stack_eval_step(
         &mut self,
         mut head: NodeId,
         stack: &mut EvalStack,

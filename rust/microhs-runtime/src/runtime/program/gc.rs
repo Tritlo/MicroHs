@@ -1,3 +1,5 @@
+use super::*;
+
 impl Program {
     pub fn gc_stats(&self) -> GcStats {
         GcStats {
@@ -66,7 +68,11 @@ impl Program {
         }
     }
 
-    fn mark_node_id(marked: &mut [bool], work: &mut Vec<NodeId>, id: NodeId) {
+    pub(in crate::runtime) fn mark_node_id(
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        id: NodeId,
+    ) {
         if let Some(mark) = marked.get_mut(id.index()) {
             if !*mark {
                 *mark = true;
@@ -75,7 +81,7 @@ impl Program {
         }
     }
 
-    fn node_pointer_target(&self, ptr: i64) -> Option<NodeId> {
+    pub(in crate::runtime) fn node_pointer_target(&self, ptr: i64) -> Option<NodeId> {
         if ptr <= 0 {
             return None;
         }
@@ -86,26 +92,35 @@ impl Program {
         self.node_pointers.get(slot_word - 1).copied()
     }
 
-    fn mark_pointer_target(&self, marked: &mut [bool], work: &mut Vec<NodeId>, ptr: i64) {
+    pub(in crate::runtime) fn mark_pointer_target(
+        &self,
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        ptr: i64,
+    ) {
         if let Some(id) = self.node_pointer_target(ptr) {
             Self::mark_node_id(marked, work, id);
         }
     }
 
     #[cfg(feature = "gc-phase-profile")]
-    fn gc_profile_young_edge(young: &[bool], id: NodeId) -> usize {
+    pub(in crate::runtime) fn gc_profile_young_edge(young: &[bool], id: NodeId) -> usize {
         young.get(id.index()).copied().unwrap_or(false) as usize
     }
 
     #[cfg(feature = "gc-phase-profile")]
-    fn gc_profile_young_pointer_edge(&self, young: &[bool], ptr: i64) -> usize {
+    pub(in crate::runtime) fn gc_profile_young_pointer_edge(
+        &self,
+        young: &[bool],
+        ptr: i64,
+    ) -> usize {
         self.node_pointer_target(ptr)
             .map(|id| Self::gc_profile_young_edge(young, id))
             .unwrap_or(0)
     }
 
     #[cfg(feature = "gc-phase-profile")]
-    fn gc_profile_old_to_young_edges_for_cell(
+    pub(in crate::runtime) fn gc_profile_old_to_young_edges_for_cell(
         &self,
         index: usize,
         cell: Cell,
@@ -157,7 +172,7 @@ impl Program {
     }
 
     #[cfg(feature = "gc-phase-profile")]
-    fn gc_profile_young_candidate_stats(
+    pub(in crate::runtime) fn gc_profile_young_candidate_stats(
         &self,
         marked: &[bool],
     ) -> (usize, usize, usize, usize, usize) {
@@ -192,7 +207,11 @@ impl Program {
         (slots, live, dead, old_to_young_sources, old_to_young_edges)
     }
 
-    fn mark_strict_redex(marked: &mut [bool], work: &mut Vec<NodeId>, redex: &StrictRedex) {
+    pub(in crate::runtime) fn mark_strict_redex(
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        redex: &StrictRedex,
+    ) {
         match redex {
             StrictRedex::Root(root) => Self::mark_node_id(marked, work, *root),
             StrictRedex::Spine { root, apps, .. } => {
@@ -204,7 +223,12 @@ impl Program {
         }
     }
 
-    fn mark_eval_frame(&self, marked: &mut [bool], work: &mut Vec<NodeId>, frame: &EvalFrame) {
+    pub(in crate::runtime) fn mark_eval_frame(
+        &self,
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        frame: &EvalFrame,
+    ) {
         match frame {
             EvalFrame::Whnf(frame) => {
                 Self::mark_strict_redex(marked, work, &frame.redex);
@@ -262,7 +286,12 @@ impl Program {
         }
     }
 
-    fn mark_eval_stack(&self, marked: &mut [bool], work: &mut Vec<NodeId>, stack: &EvalFrameStack) {
+    pub(in crate::runtime) fn mark_eval_stack(
+        &self,
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        stack: &EvalFrameStack,
+    ) {
         if let Some(frame) = &stack.top {
             self.mark_eval_frame(marked, work, frame);
         }
@@ -271,7 +300,12 @@ impl Program {
         }
     }
 
-    fn mark_machine_stack(&self, marked: &mut [bool], work: &mut Vec<NodeId>, stack: &EvalStack) {
+    pub(in crate::runtime) fn mark_machine_stack(
+        &self,
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        stack: &EvalStack,
+    ) {
         for app in &stack.apps {
             Self::mark_node_id(marked, work, *app);
         }
@@ -324,20 +358,28 @@ impl Program {
         }
     }
 
-    fn mark_eval_spine(marked: &mut [bool], work: &mut Vec<NodeId>, spine: &EvalSpine) {
+    pub(in crate::runtime) fn mark_eval_spine(
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        spine: &EvalSpine,
+    ) {
         for idx in 0..spine.len() {
             Self::mark_node_id(marked, work, spine.desc_arg(idx));
             Self::mark_node_id(marked, work, spine.desc_app(idx));
         }
     }
 
-    fn mark_persistent_spine(marked: &mut [bool], work: &mut Vec<NodeId>, spine: &PersistentSpine) {
+    pub(in crate::runtime) fn mark_persistent_spine(
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        spine: &PersistentSpine,
+    ) {
         for id in &spine.apps {
             Self::mark_node_id(marked, work, *id);
         }
     }
 
-    fn mark_program_roots(
+    pub(in crate::runtime) fn mark_program_roots(
         &self,
         marked: &mut [bool],
         work: &mut Vec<NodeId>,
@@ -407,7 +449,7 @@ impl Program {
         }
     }
 
-    fn compress_marked_indirection(&mut self, id: NodeId) -> Option<NodeId> {
+    pub(in crate::runtime) fn compress_marked_indirection(&mut self, id: NodeId) -> Option<NodeId> {
         let mut current = id;
         let mut depth = 0usize;
         loop {
@@ -432,7 +474,7 @@ impl Program {
         Some(current)
     }
 
-    fn canonical_gc_target(&mut self, id: NodeId) -> Option<NodeId> {
+    pub(in crate::runtime) fn canonical_gc_target(&mut self, id: NodeId) -> Option<NodeId> {
         let target = if matches!(
             self.nodes.get(id.index()).map(|cell| cell.tag()),
             Some(CellTag::Indir)
@@ -454,7 +496,7 @@ impl Program {
         Some(target)
     }
 
-    fn mark_canonical_child(
+    pub(in crate::runtime) fn mark_canonical_child(
         &mut self,
         marked: &mut [bool],
         work: &mut Vec<NodeId>,
@@ -466,7 +508,7 @@ impl Program {
     }
 
     #[cfg(any(feature = "gc-phase-profile", feature = "eval-phase-profile"))]
-    fn gc_profile_resolved_id(&self, id: NodeId) -> Option<NodeId> {
+    pub(in crate::runtime) fn gc_profile_resolved_id(&self, id: NodeId) -> Option<NodeId> {
         let mut current = id;
         for _ in 0..self.nodes.len() {
             let cell = *self.nodes.get(current.index())?;
@@ -479,19 +521,19 @@ impl Program {
     }
 
     #[cfg(any(feature = "gc-phase-profile", feature = "eval-phase-profile"))]
-    fn gc_profile_prim(&self, id: NodeId) -> Option<Prim> {
+    pub(in crate::runtime) fn gc_profile_prim(&self, id: NodeId) -> Option<Prim> {
         let id = self.gc_profile_resolved_id(id)?;
         self.nodes.get(id.index())?.prim()
     }
 
     #[cfg(any(feature = "gc-phase-profile", feature = "eval-phase-profile"))]
-    fn gc_profile_app_fields(&self, id: NodeId) -> Option<(NodeId, NodeId)> {
+    pub(in crate::runtime) fn gc_profile_app_fields(&self, id: NodeId) -> Option<(NodeId, NodeId)> {
         let id = self.gc_profile_resolved_id(id)?;
         self.nodes.get(id.index())?.app_fields()
     }
 
     #[cfg(any(feature = "gc-phase-profile", feature = "eval-phase-profile"))]
-    fn gc_profile_flipped_prim(prim: Prim) -> Option<Prim> {
+    pub(in crate::runtime) fn gc_profile_flipped_prim(prim: Prim) -> Option<Prim> {
         match prim {
             Prim::Known(KnownPrim::K) => Some(Prim::Known(KnownPrim::A)),
             Prim::Known(KnownPrim::A) => Some(Prim::Known(KnownPrim::K)),
@@ -570,7 +612,7 @@ impl Program {
     }
 
     #[cfg(feature = "gc-phase-profile")]
-    fn profile_gc_red_opportunities(&mut self, fun: NodeId, arg: NodeId) {
+    pub(in crate::runtime) fn profile_gc_red_opportunities(&mut self, fun: NodeId, arg: NodeId) {
         use KnownPrim::*;
 
         let funt = self.gc_profile_prim(fun);
@@ -624,7 +666,7 @@ impl Program {
         }
     }
 
-    fn mark_reachable(
+    pub(in crate::runtime) fn mark_reachable(
         &mut self,
         marked: &mut [bool],
         work: &mut Vec<NodeId>,
@@ -690,7 +732,7 @@ impl Program {
         }
     }
 
-    fn weak_key_target(&mut self, key: NodeId) -> Option<NodeId> {
+    pub(in crate::runtime) fn weak_key_target(&mut self, key: NodeId) -> Option<NodeId> {
         if matches!(
             self.nodes.get(key.index()).map(|cell| cell.tag()),
             Some(CellTag::Indir)
@@ -706,7 +748,7 @@ impl Program {
         }
     }
 
-    fn sweep_weaks_after_mark(
+    pub(in crate::runtime) fn sweep_weaks_after_mark(
         &mut self,
         marked: &mut [bool],
         work: &mut Vec<NodeId>,
@@ -803,7 +845,7 @@ impl Program {
         finalizers
     }
 
-    fn run_foreign_finalizer(
+    pub(in crate::runtime) fn run_foreign_finalizer(
         &mut self,
         finalizer: ForeignFinalizer,
         arg: i64,
@@ -815,7 +857,10 @@ impl Program {
         }
     }
 
-    fn run_dead_foreign_finalizers(&mut self, marked: &[bool]) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn run_dead_foreign_finalizers(
+        &mut self,
+        marked: &[bool],
+    ) -> Result<(), EvalError> {
         for index in 0..self.foreign_finalizers.len() {
             if marked.get(index).copied().unwrap_or(false) {
                 continue;
@@ -831,7 +876,7 @@ impl Program {
         Ok(())
     }
 
-    fn collect_garbage_between_steps(
+    pub(in crate::runtime) fn collect_garbage_between_steps(
         &mut self,
         current_root: NodeId,
         frame_stack: &EvalFrameStack,
@@ -969,7 +1014,7 @@ impl Program {
         Ok(freed)
     }
 
-    fn maybe_collect_garbage_between_steps(
+    pub(in crate::runtime) fn maybe_collect_garbage_between_steps(
         &mut self,
         current_root: NodeId,
         frame_stack: &EvalFrameStack,

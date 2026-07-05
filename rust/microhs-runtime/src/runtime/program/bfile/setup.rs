@@ -1,5 +1,7 @@
+use super::*;
+
 impl Program {
-    fn alloc_bfile(&mut self, bfile: BFile) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn alloc_bfile(&mut self, bfile: BFile) -> Result<i64, EvalError> {
         let slot = if let Some(slot) = self.bfiles.iter().position(Option::is_none) {
             self.bfiles[slot] = Some(bfile);
             slot
@@ -10,7 +12,11 @@ impl Program {
         self.pointer_for_bfile(slot)
     }
 
-    fn read_only_memory_view(&self, ptr: i64, len: usize) -> Result<Option<BFileKind>, EvalError> {
+    pub(in crate::runtime) fn read_only_memory_view(
+        &self,
+        ptr: i64,
+        len: usize,
+    ) -> Result<Option<BFileKind>, EvalError> {
         if len <= READ_ONLY_MEMORY_VIEW_MIN_LEN {
             return Ok(None);
         }
@@ -43,7 +49,11 @@ impl Program {
         }
     }
 
-    fn memory_read_bfile_kind(&self, ptr: i64, len: usize) -> Result<BFileKind, EvalError> {
+    pub(in crate::runtime) fn memory_read_bfile_kind(
+        &self,
+        ptr: i64,
+        len: usize,
+    ) -> Result<BFileKind, EvalError> {
         if let Some(kind) = self.read_only_memory_view(ptr, len)? {
             return Ok(kind);
         }
@@ -51,7 +61,10 @@ impl Program {
         Ok(BFileKind::Memory { bytes, pos: 0 })
     }
 
-    fn alloc_dir(&mut self, entries: Vec<Vec<u8>>) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn alloc_dir(
+        &mut self,
+        entries: Vec<Vec<u8>>,
+    ) -> Result<i64, EvalError> {
         let dir = DirHandle { entries, pos: 0 };
         let slot = if let Some(slot) = self.dirs.iter().position(Option::is_none) {
             self.dirs[slot] = Some(dir);
@@ -63,7 +76,7 @@ impl Program {
         self.pointer_for_dir(slot)
     }
 
-    fn alloc_environ(&mut self) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn alloc_environ(&mut self) -> Result<i64, EvalError> {
         let vars = environ_bytes();
         let mut pointers = Vec::with_capacity(
             (vars.len() + 1)
@@ -82,7 +95,10 @@ impl Program {
         Ok(ptr)
     }
 
-    fn bfile_permissions(&self, ptr: i64) -> Result<(bool, bool), EvalError> {
+    pub(in crate::runtime) fn bfile_permissions(
+        &self,
+        ptr: i64,
+    ) -> Result<(bool, bool), EvalError> {
         if let Some(handle) = handle_from_ptr(ptr) {
             return Ok(match handle {
                 StdHandle::Stdin => (true, false),
@@ -93,7 +109,7 @@ impl Program {
         Ok((bfile.readable, bfile.writable))
     }
 
-    fn add_utf8_bfile(&mut self, ptr: i64) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn add_utf8_bfile(&mut self, ptr: i64) -> Result<i64, EvalError> {
         let (readable, writable) = self.bfile_permissions(ptr)?;
         self.alloc_bfile(BFile {
             kind: BFileKind::Utf8 {
@@ -107,7 +123,7 @@ impl Program {
         })
     }
 
-    fn add_crlf_bfile(&mut self, ptr: i64) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn add_crlf_bfile(&mut self, ptr: i64) -> Result<i64, EvalError> {
         let (readable, writable) = self.bfile_permissions(ptr)?;
         self.alloc_bfile(BFile {
             kind: BFileKind::Crlf { inner: ptr },
@@ -116,7 +132,11 @@ impl Program {
         })
     }
 
-    fn add_rle_bfile(&mut self, ptr: i64, read: bool) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn add_rle_bfile(
+        &mut self,
+        ptr: i64,
+        read: bool,
+    ) -> Result<i64, EvalError> {
         let (inner_readable, inner_writable) = self.bfile_permissions(ptr)?;
         self.alloc_bfile(BFile {
             kind: BFileKind::Rle {
@@ -131,7 +151,11 @@ impl Program {
         })
     }
 
-    fn add_base64_bfile(&mut self, ptr: i64, read: bool) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn add_base64_bfile(
+        &mut self,
+        ptr: i64,
+        read: bool,
+    ) -> Result<i64, EvalError> {
         let (inner_readable, inner_writable) = self.bfile_permissions(ptr)?;
         self.alloc_bfile(BFile {
             kind: BFileKind::Base64 {
@@ -151,7 +175,11 @@ impl Program {
         })
     }
 
-    fn add_lz77_bfile(&mut self, ptr: i64, read: bool) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn add_lz77_bfile(
+        &mut self,
+        ptr: i64,
+        read: bool,
+    ) -> Result<i64, EvalError> {
         let (inner_readable, inner_writable) = self.bfile_permissions(ptr)?;
         if read {
             if !inner_readable {
@@ -196,13 +224,17 @@ impl Program {
         }
     }
 
-    fn read_bfile_u32_le(&mut self, ptr: i64) -> Result<usize, EvalError> {
+    pub(in crate::runtime) fn read_bfile_u32_le(&mut self, ptr: i64) -> Result<usize, EvalError> {
         let bytes = self.read_bfile_bytes(ptr, 4)?;
         let bytes: [u8; 4] = bytes.try_into().map_err(|_| EvalError::InvalidByteString)?;
         usize::try_from(u32::from_le_bytes(bytes)).map_err(|_| EvalError::Overflow)
     }
 
-    fn add_bwt_bfile(&mut self, ptr: i64, read: bool) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn add_bwt_bfile(
+        &mut self,
+        ptr: i64,
+        read: bool,
+    ) -> Result<i64, EvalError> {
         let (inner_readable, inner_writable) = self.bfile_permissions(ptr)?;
         if read {
             if !inner_readable {
@@ -248,7 +280,11 @@ impl Program {
         }
     }
 
-    fn add_lzma_bfile(&mut self, ptr: i64, read: bool) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn add_lzma_bfile(
+        &mut self,
+        ptr: i64,
+        read: bool,
+    ) -> Result<i64, EvalError> {
         let (inner_readable, inner_writable) = self.bfile_permissions(ptr)?;
         if read {
             if !inner_readable {
@@ -293,7 +329,11 @@ impl Program {
         }
     }
 
-    fn add_buf_bfile(&mut self, ptr: i64, bufsize: i64) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn add_buf_bfile(
+        &mut self,
+        ptr: i64,
+        bufsize: i64,
+    ) -> Result<i64, EvalError> {
         let (readable, writable) = self.bfile_permissions(ptr)?;
         let linebuf = bufsize < 0;
         let size = if linebuf {

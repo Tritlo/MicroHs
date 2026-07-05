@@ -1,11 +1,13 @@
-fn c_string_len(bytes: &[u8]) -> usize {
+use super::*;
+
+pub(in crate::runtime) fn c_string_len(bytes: &[u8]) -> usize {
     bytes
         .iter()
         .position(|byte| *byte == 0)
         .unwrap_or(bytes.len())
 }
 
-fn std_handle(name: &str) -> Option<StdHandle> {
+pub(in crate::runtime) fn std_handle(name: &str) -> Option<StdHandle> {
     Some(match name {
         "IO.stdin" => StdHandle::Stdin,
         "IO.stdout" => StdHandle::Stdout,
@@ -14,7 +16,7 @@ fn std_handle(name: &str) -> Option<StdHandle> {
     })
 }
 
-fn std_handle_ptr(name: &str) -> Option<i64> {
+pub(in crate::runtime) fn std_handle_ptr(name: &str) -> Option<i64> {
     Some(match std_handle(name)? {
         StdHandle::Stdin => -1,
         StdHandle::Stdout => -2,
@@ -22,7 +24,7 @@ fn std_handle_ptr(name: &str) -> Option<i64> {
     })
 }
 
-fn handle_from_ptr(ptr: i64) -> Option<StdHandle> {
+pub(in crate::runtime) fn handle_from_ptr(ptr: i64) -> Option<StdHandle> {
     Some(match ptr {
         -1 => StdHandle::Stdin,
         -2 => StdHandle::Stdout,
@@ -31,7 +33,7 @@ fn handle_from_ptr(ptr: i64) -> Option<StdHandle> {
     })
 }
 
-fn handle_name_from_ptr(ptr: i64) -> Option<&'static str> {
+pub(in crate::runtime) fn handle_name_from_ptr(ptr: i64) -> Option<&'static str> {
     Some(match handle_from_ptr(ptr)? {
         StdHandle::Stdin => "IO.stdin",
         StdHandle::Stdout => "IO.stdout",
@@ -39,11 +41,11 @@ fn handle_name_from_ptr(ptr: i64) -> Option<&'static str> {
     })
 }
 
-fn push_display<T: fmt::Display>(out: &mut Vec<u8>, value: T) {
+pub(in crate::runtime) fn push_display<T: fmt::Display>(out: &mut Vec<u8>, value: T) {
     out.extend_from_slice(value.to_string().as_bytes());
 }
 
-fn serialize_ptr(ptr: i64, out: &mut Vec<u8>) {
+pub(in crate::runtime) fn serialize_ptr(ptr: i64, out: &mut Vec<u8>) {
     match ptr {
         -1 => out.extend_from_slice(b"fp2p IO.stdin @"),
         -2 => out.extend_from_slice(b"fp2p IO.stdout @"),
@@ -56,7 +58,7 @@ fn serialize_ptr(ptr: i64, out: &mut Vec<u8>) {
     }
 }
 
-fn serialize_bytes_comb(bytes: &[u8], out: &mut Vec<u8>) {
+pub(in crate::runtime) fn serialize_bytes_comb(bytes: &[u8], out: &mut Vec<u8>) {
     if bytes.len() > 100 {
         out.push(b'$');
         push_display(out, bytes.len());
@@ -67,13 +69,13 @@ fn serialize_bytes_comb(bytes: &[u8], out: &mut Vec<u8>) {
     }
 }
 
-fn serialize_bigint_decimal(bytes: &[u8], out: &mut Vec<u8>) {
+pub(in crate::runtime) fn serialize_bigint_decimal(bytes: &[u8], out: &mut Vec<u8>) {
     out.push(b'%');
     out.extend_from_slice(bytes);
     out.push(b'"');
 }
 
-fn serialize_bytes_quoted(bytes: &[u8], out: &mut Vec<u8>) {
+pub(in crate::runtime) fn serialize_bytes_quoted(bytes: &[u8], out: &mut Vec<u8>) {
     out.push(b'"');
     for &byte in bytes {
         match byte {
@@ -101,7 +103,7 @@ fn serialize_bytes_quoted(bytes: &[u8], out: &mut Vec<u8>) {
     out.push(b'"');
 }
 
-fn head_utf8(bytes: &[u8]) -> Result<(u32, usize), EvalError> {
+pub(in crate::runtime) fn head_utf8(bytes: &[u8]) -> Result<(u32, usize), EvalError> {
     let c1 = *bytes.first().ok_or(EvalError::InvalidByteString)?;
     if c1 & 0x80 == 0 {
         return Ok((c1 as u32, 1));
@@ -134,7 +136,9 @@ fn head_utf8(bytes: &[u8]) -> Result<(u32, usize), EvalError> {
     Err(EvalError::InvalidByteString)
 }
 
-fn head_utf8_string(bytes: &[u8]) -> Result<Option<(u32, usize)>, EvalError> {
+pub(in crate::runtime) fn head_utf8_string(
+    bytes: &[u8],
+) -> Result<Option<(u32, usize)>, EvalError> {
     let Some(&c1) = bytes.first() else {
         return Ok(None);
     };
@@ -181,7 +185,9 @@ fn head_utf8_string(bytes: &[u8]) -> Result<Option<(u32, usize)>, EvalError> {
     Err(EvalError::InvalidByteString)
 }
 
-fn decode_utf8_string_bytes(mut bytes: &[u8]) -> Result<Vec<u32>, EvalError> {
+pub(in crate::runtime) fn decode_utf8_string_bytes(
+    mut bytes: &[u8],
+) -> Result<Vec<u32>, EvalError> {
     let mut values = Vec::new();
     while let Some((value, offset)) = head_utf8_string(bytes)? {
         values.push(value);
@@ -190,7 +196,7 @@ fn decode_utf8_string_bytes(mut bytes: &[u8]) -> Result<Vec<u32>, EvalError> {
     Ok(values)
 }
 
-fn modified_utf8(n: i64) -> Result<Vec<u8>, EvalError> {
+pub(in crate::runtime) fn modified_utf8(n: i64) -> Result<Vec<u8>, EvalError> {
     let mut c = u32::try_from(n).map_err(|_| EvalError::InvalidByteString)?;
     if c & 0x1ff800 == 0xd800 {
         c = 0xfffd;
@@ -217,7 +223,7 @@ fn modified_utf8(n: i64) -> Result<Vec<u8>, EvalError> {
     }
 }
 
-fn render_bytes(bytes: &[u8], out: &mut String) {
+pub(in crate::runtime) fn render_bytes(bytes: &[u8], out: &mut String) {
     out.push('"');
     for &byte in bytes {
         match byte {
@@ -237,7 +243,7 @@ fn render_bytes(bytes: &[u8], out: &mut String) {
     out.push('"');
 }
 
-fn nibble(n: u8) -> char {
+pub(in crate::runtime) fn nibble(n: u8) -> char {
     match n {
         0..=9 => (b'0' + n) as char,
         10..=15 => (b'a' + n - 10) as char,

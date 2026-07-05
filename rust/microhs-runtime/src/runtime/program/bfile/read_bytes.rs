@@ -1,5 +1,7 @@
+use super::*;
+
 impl Program {
-    fn get_bfile_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn get_bfile_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
         if handle_from_ptr(ptr) == Some(StdHandle::Stdin) {
             return self.read_stdin_byte();
         }
@@ -149,7 +151,7 @@ impl Program {
         }
     }
 
-    fn get_crlf_bfile_byte(&mut self, inner: i64) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn get_crlf_bfile_byte(&mut self, inner: i64) -> Result<i64, EvalError> {
         let byte = self.get_bfile_byte(inner)?;
         if byte != i64::from(b'\r') {
             return Ok(byte);
@@ -164,7 +166,7 @@ impl Program {
         Ok(byte)
     }
 
-    fn get_rle_bfile_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn get_rle_bfile_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
         let inner = {
             let bfile = self.bfile_mut(ptr)?;
             if !bfile.readable {
@@ -222,7 +224,10 @@ impl Program {
         }
     }
 
-    fn get_rle_rep(&mut self, inner: i64) -> Result<Option<usize>, EvalError> {
+    pub(in crate::runtime) fn get_rle_rep(
+        &mut self,
+        inner: i64,
+    ) -> Result<Option<usize>, EvalError> {
         let mut n = 0usize;
         loop {
             let byte = self.get_bfile_byte(inner)?;
@@ -241,7 +246,7 @@ impl Program {
         }
     }
 
-    fn get_base64_bfile_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn get_base64_bfile_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
         let inner = {
             let bfile = self.bfile_mut(ptr)?;
             if !bfile.readable {
@@ -324,7 +329,10 @@ impl Program {
         }
     }
 
-    fn get_base64_quartet(&mut self, inner: i64) -> Result<Option<[i32; 4]>, EvalError> {
+    pub(in crate::runtime) fn get_base64_quartet(
+        &mut self,
+        inner: i64,
+    ) -> Result<Option<[i32; 4]>, EvalError> {
         let mut v = [0; 4];
         let mut got = 0;
         loop {
@@ -349,7 +357,7 @@ impl Program {
         }
     }
 
-    fn get_buf_bfile_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn get_buf_bfile_byte(&mut self, ptr: i64) -> Result<i64, EvalError> {
         loop {
             enum BufReadAction {
                 Direct(i64),

@@ -1,5 +1,7 @@
+use super::*;
+
 impl Program {
-    fn pointer_conversion(
+    pub(in crate::runtime) fn pointer_conversion(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -13,7 +15,7 @@ impl Program {
         Ok(Some((1, self.push_value_node(value))))
     }
 
-    fn foreign_ptr_op(
+    pub(in crate::runtime) fn foreign_ptr_op(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -24,7 +26,7 @@ impl Program {
         }
     }
 
-    fn foreign_ptr_op_inner(
+    pub(in crate::runtime) fn foreign_ptr_op_inner(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -62,7 +64,7 @@ impl Program {
         Ok(rewrite)
     }
 
-    fn foreign_ptr_unop(
+    pub(in crate::runtime) fn foreign_ptr_unop(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -73,7 +75,7 @@ impl Program {
         }
     }
 
-    fn foreign_ptr_unop_inner(
+    pub(in crate::runtime) fn foreign_ptr_unop_inner(
         &mut self,
         name: &str,
         args: &[NodeId],

@@ -1,8 +1,10 @@
-fn int_to_i32(n: i64) -> Result<i32, EvalError> {
+use super::*;
+
+pub(in crate::runtime) fn int_to_i32(n: i64) -> Result<i32, EvalError> {
     i32::try_from(n).map_err(|_| EvalError::Overflow)
 }
 
-fn validate_js_tags(tags: &[u8]) -> Result<(), EvalError> {
+pub(in crate::runtime) fn validate_js_tags(tags: &[u8]) -> Result<(), EvalError> {
     if tags.is_empty() {
         return Err(EvalError::InvalidByteString);
     }
@@ -16,7 +18,7 @@ fn validate_js_tags(tags: &[u8]) -> Result<(), EvalError> {
     Ok(())
 }
 
-fn host_js_debug(bytes: &[u8]) -> Result<(), EvalError> {
+pub(in crate::runtime) fn host_js_debug(bytes: &[u8]) -> Result<(), EvalError> {
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let bytes = nul_terminated(bytes)?;
@@ -32,7 +34,7 @@ fn host_js_debug(bytes: &[u8]) -> Result<(), EvalError> {
     }
 }
 
-fn host_js_eval_run(bytes: &[u8]) -> Result<(), EvalError> {
+pub(in crate::runtime) fn host_js_eval_run(bytes: &[u8]) -> Result<(), EvalError> {
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let bytes = nul_terminated(bytes)?;
@@ -48,7 +50,7 @@ fn host_js_eval_run(bytes: &[u8]) -> Result<(), EvalError> {
     }
 }
 
-fn host_js_eval_call(bytes: &[u8]) -> Result<Vec<u8>, EvalError> {
+pub(in crate::runtime) fn host_js_eval_call(bytes: &[u8]) -> Result<Vec<u8>, EvalError> {
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let bytes = nul_terminated(bytes)?;
@@ -64,7 +66,7 @@ fn host_js_eval_call(bytes: &[u8]) -> Result<Vec<u8>, EvalError> {
     }
 }
 
-fn host_js_set_haskell_callback(callback: i32) -> Result<(), EvalError> {
+pub(in crate::runtime) fn host_js_set_haskell_callback(callback: i32) -> Result<(), EvalError> {
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         unsafe {
@@ -79,7 +81,11 @@ fn host_js_set_haskell_callback(callback: i32) -> Result<(), EvalError> {
     }
 }
 
-fn host_js_call_void(body: &[u8], arity: usize, args: &[JsArg]) -> Result<(), EvalError> {
+pub(in crate::runtime) fn host_js_call_void(
+    body: &[u8],
+    arity: usize,
+    args: &[JsArg],
+) -> Result<(), EvalError> {
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
@@ -95,7 +101,11 @@ fn host_js_call_void(body: &[u8], arity: usize, args: &[JsArg]) -> Result<(), Ev
     }
 }
 
-fn host_js_call_int(body: &[u8], arity: usize, args: &[JsArg]) -> Result<i32, EvalError> {
+pub(in crate::runtime) fn host_js_call_int(
+    body: &[u8],
+    arity: usize,
+    args: &[JsArg],
+) -> Result<i32, EvalError> {
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
@@ -110,7 +120,11 @@ fn host_js_call_int(body: &[u8], arity: usize, args: &[JsArg]) -> Result<i32, Ev
     }
 }
 
-fn host_js_call_uint(body: &[u8], arity: usize, args: &[JsArg]) -> Result<u32, EvalError> {
+pub(in crate::runtime) fn host_js_call_uint(
+    body: &[u8],
+    arity: usize,
+    args: &[JsArg],
+) -> Result<u32, EvalError> {
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
@@ -125,7 +139,11 @@ fn host_js_call_uint(body: &[u8], arity: usize, args: &[JsArg]) -> Result<u32, E
     }
 }
 
-fn host_js_call_double(body: &[u8], arity: usize, args: &[JsArg]) -> Result<f64, EvalError> {
+pub(in crate::runtime) fn host_js_call_double(
+    body: &[u8],
+    arity: usize,
+    args: &[JsArg],
+) -> Result<f64, EvalError> {
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
@@ -140,7 +158,11 @@ fn host_js_call_double(body: &[u8], arity: usize, args: &[JsArg]) -> Result<f64,
     }
 }
 
-fn host_js_call_ptr(body: &[u8], arity: usize, args: &[JsArg]) -> Result<u32, EvalError> {
+pub(in crate::runtime) fn host_js_call_ptr(
+    body: &[u8],
+    arity: usize,
+    args: &[JsArg],
+) -> Result<u32, EvalError> {
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
@@ -155,7 +177,11 @@ fn host_js_call_ptr(body: &[u8], arity: usize, args: &[JsArg]) -> Result<u32, Ev
     }
 }
 
-fn host_js_call_object(body: &[u8], arity: usize, args: &[JsArg]) -> Result<u32, EvalError> {
+pub(in crate::runtime) fn host_js_call_object(
+    body: &[u8],
+    arity: usize,
+    args: &[JsArg],
+) -> Result<u32, EvalError> {
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
@@ -170,7 +196,11 @@ fn host_js_call_object(body: &[u8], arity: usize, args: &[JsArg]) -> Result<u32,
     }
 }
 
-fn host_js_call_bool(body: &[u8], arity: usize, args: &[JsArg]) -> Result<bool, EvalError> {
+pub(in crate::runtime) fn host_js_call_bool(
+    body: &[u8],
+    arity: usize,
+    args: &[JsArg],
+) -> Result<bool, EvalError> {
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
@@ -185,7 +215,11 @@ fn host_js_call_bool(body: &[u8], arity: usize, args: &[JsArg]) -> Result<bool, 
     }
 }
 
-fn host_js_call_string(body: &[u8], arity: usize, args: &[JsArg]) -> Result<Vec<u8>, EvalError> {
+pub(in crate::runtime) fn host_js_call_string(
+    body: &[u8],
+    arity: usize,
+    args: &[JsArg],
+) -> Result<Vec<u8>, EvalError> {
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         let idx = host_js_prepare_call(body, arity, args)?;
@@ -204,7 +238,7 @@ fn host_js_call_string(body: &[u8], arity: usize, args: &[JsArg]) -> Result<Vec<
     }
 }
 
-fn host_js_make_wrapper(
+pub(in crate::runtime) fn host_js_make_wrapper(
     program_handle: u32,
     stable_ptr: i64,
     wrapper_index: u32,
@@ -224,7 +258,11 @@ fn host_js_make_wrapper(
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn host_js_prepare_call(body: &[u8], arity: usize, args: &[JsArg]) -> Result<i32, EvalError> {
+pub(in crate::runtime) fn host_js_prepare_call(
+    body: &[u8],
+    arity: usize,
+    args: &[JsArg],
+) -> Result<i32, EvalError> {
     let body = nul_terminated(body)?;
     let arity = i32::try_from(arity).map_err(|_| EvalError::Overflow)?;
     unsafe {
@@ -248,7 +286,7 @@ fn host_js_prepare_call(body: &[u8], arity: usize, args: &[JsArg]) -> Result<i32
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn host_js_check_error() -> Result<(), EvalError> {
+pub(in crate::runtime) fn host_js_check_error() -> Result<(), EvalError> {
     unsafe {
         if mhs_js_haserr() != 0 {
             mhs_js_logerr();
@@ -259,7 +297,7 @@ fn host_js_check_error() -> Result<(), EvalError> {
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-fn nul_terminated(bytes: &[u8]) -> Result<Vec<u8>, EvalError> {
+pub(in crate::runtime) fn nul_terminated(bytes: &[u8]) -> Result<Vec<u8>, EvalError> {
     if bytes.contains(&0) {
         return Err(EvalError::InvalidByteString);
     }

@@ -1,12 +1,14 @@
+use super::*;
+
 impl Program {
-    fn float64_result_node(&mut self, result: Float64Result) -> NodeId {
+    pub(in crate::runtime) fn float64_result_node(&mut self, result: Float64Result) -> NodeId {
         match result {
             Float64Result::Float(n) => self.push_node(Node::Float64(n)),
             Float64Result::Bool(b) => self.prim(if b { "A" } else { "K" }),
         }
     }
 
-    fn finish_float64_frame(
+    pub(in crate::runtime) fn finish_float64_frame(
         &mut self,
         frame: Float64Frame,
         value: f64,
@@ -37,14 +39,14 @@ impl Program {
         Ok((node, 1))
     }
 
-    fn float32_result_node(&mut self, result: Float32Result) -> NodeId {
+    pub(in crate::runtime) fn float32_result_node(&mut self, result: Float32Result) -> NodeId {
         match result {
             Float32Result::Float(n) => self.push_node(Node::Float32(n)),
             Float32Result::Bool(b) => self.prim(if b { "A" } else { "K" }),
         }
     }
 
-    fn finish_float32_frame(
+    pub(in crate::runtime) fn finish_float32_frame(
         &mut self,
         frame: Float32Frame,
         value: f32,
@@ -75,7 +77,7 @@ impl Program {
         Ok((node, 1))
     }
 
-    fn bytes_bin_result_node(
+    pub(in crate::runtime) fn bytes_bin_result_node(
         &mut self,
         op: BytesBinOp,
         x: NodeId,
@@ -116,7 +118,7 @@ impl Program {
         Ok(node)
     }
 
-    fn finish_bytes_frame(
+    pub(in crate::runtime) fn finish_bytes_frame(
         &mut self,
         frame: BytesFrame,
         value: NodeId,
@@ -146,7 +148,7 @@ impl Program {
         Ok((node, 1))
     }
 
-    fn int_binop(
+    pub(in crate::runtime) fn int_binop(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -167,7 +169,7 @@ impl Program {
         Ok(Some((2, node)))
     }
 
-    fn int_unop(
+    pub(in crate::runtime) fn int_unop(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -181,7 +183,7 @@ impl Program {
         Ok(Some((1, node)))
     }
 
-    fn int64_binop(
+    pub(in crate::runtime) fn int64_binop(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -206,7 +208,7 @@ impl Program {
         Ok(Some((2, node)))
     }
 
-    fn int64_unop(
+    pub(in crate::runtime) fn int64_unop(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -223,7 +225,7 @@ impl Program {
         Ok(Some((1, node)))
     }
 
-    fn int_conversion(
+    pub(in crate::runtime) fn int_conversion(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -242,7 +244,7 @@ impl Program {
         Ok(Some((1, node)))
     }
 
-    fn float64_binop(
+    pub(in crate::runtime) fn float64_binop(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -259,7 +261,7 @@ impl Program {
         Ok(Some((2, node)))
     }
 
-    fn float64_unop(
+    pub(in crate::runtime) fn float64_unop(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -272,7 +274,7 @@ impl Program {
         Ok(Some((1, node)))
     }
 
-    fn float32_binop(
+    pub(in crate::runtime) fn float32_binop(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -289,7 +291,7 @@ impl Program {
         Ok(Some((2, node)))
     }
 
-    fn float32_unop(
+    pub(in crate::runtime) fn float32_unop(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -302,7 +304,7 @@ impl Program {
         Ok(Some((1, node)))
     }
 
-    fn float_conversion(
+    pub(in crate::runtime) fn float_conversion(
         &mut self,
         name: &str,
         args: &[NodeId],

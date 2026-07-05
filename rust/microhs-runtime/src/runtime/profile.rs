@@ -1,3 +1,5 @@
+use super::*;
+
 #[derive(Clone, Debug, Default)]
 pub struct GcStats {
     pub collections: usize,
@@ -333,7 +335,7 @@ impl EvalProfile {
 }
 
 #[cfg(feature = "eval-phase-profile")]
-fn profile_known_reducing_arity(known: KnownPrim) -> Option<usize> {
+pub(in crate::runtime) fn profile_known_reducing_arity(known: KnownPrim) -> Option<usize> {
     use KnownPrim::*;
     Some(match known {
         I | Ord | Chr | Y | IoPerformIo | Raise | Rnf | IsInt => 1,
@@ -348,7 +350,10 @@ fn profile_known_reducing_arity(known: KnownPrim) -> Option<usize> {
     })
 }
 
-fn sorted_profile_counts(map: &HashMap<String, usize>, limit: usize) -> Vec<(&str, usize)> {
+pub(in crate::runtime) fn sorted_profile_counts(
+    map: &HashMap<String, usize>,
+    limit: usize,
+) -> Vec<(&str, usize)> {
     let mut counts: Vec<_> = map
         .iter()
         .map(|(key, value)| (key.as_str(), *value))
@@ -358,7 +363,10 @@ fn sorted_profile_counts(map: &HashMap<String, usize>, limit: usize) -> Vec<(&st
     counts
 }
 
-fn sorted_profile_times(map: &HashMap<String, u128>, limit: usize) -> Vec<(&str, u128)> {
+pub(in crate::runtime) fn sorted_profile_times(
+    map: &HashMap<String, u128>,
+    limit: usize,
+) -> Vec<(&str, u128)> {
     let mut counts: Vec<_> = map
         .iter()
         .map(|(key, value)| (key.as_str(), *value))
@@ -368,7 +376,7 @@ fn sorted_profile_times(map: &HashMap<String, u128>, limit: usize) -> Vec<(&str,
     counts
 }
 
-fn node_allocation_key(node: &Node) -> &'static str {
+pub(in crate::runtime) fn node_allocation_key(node: &Node) -> &'static str {
     match node {
         Node::App(_, _) => "App",
         Node::Indir(_) => "Indir",
@@ -398,7 +406,7 @@ fn node_allocation_key(node: &Node) -> &'static str {
 }
 
 #[cfg(feature = "eval-phase-profile")]
-fn cold_profile_key(node: &Node) -> &'static str {
+pub(in crate::runtime) fn cold_profile_key(node: &Node) -> &'static str {
     match node {
         Node::ForeignPtr(_) => "ForeignPtr",
         Node::Weak(_) => "Weak",
@@ -427,7 +435,7 @@ fn cold_profile_key(node: &Node) -> &'static str {
     }
 }
 
-fn serialization_shareable_node(node: &Node) -> bool {
+pub(in crate::runtime) fn serialization_shareable_node(node: &Node) -> bool {
     matches!(
         node,
         Node::App(_, _)

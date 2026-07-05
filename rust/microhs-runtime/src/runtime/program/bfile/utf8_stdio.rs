@@ -1,5 +1,11 @@
+use super::*;
+
 impl Program {
-    fn get_utf8_bfile_byte(&mut self, ptr: i64, inner: i64) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn get_utf8_bfile_byte(
+        &mut self,
+        ptr: i64,
+        inner: i64,
+    ) -> Result<i64, EvalError> {
         let c1 = self.get_bfile_byte(inner)?;
         if c1 < 0 {
             return Ok(-1);
@@ -44,7 +50,11 @@ impl Program {
         Err(EvalError::InvalidByteString)
     }
 
-    fn refill_utf8_ascii(&mut self, ptr: i64, inner: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn refill_utf8_ascii(
+        &mut self,
+        ptr: i64,
+        inner: i64,
+    ) -> Result<(), EvalError> {
         if !self.can_refill_utf8_ascii(ptr, inner)? {
             return Ok(());
         }
@@ -78,7 +88,11 @@ impl Program {
         }
     }
 
-    fn can_refill_utf8_ascii(&self, ptr: i64, inner: i64) -> Result<bool, EvalError> {
+    pub(in crate::runtime) fn can_refill_utf8_ascii(
+        &self,
+        ptr: i64,
+        inner: i64,
+    ) -> Result<bool, EvalError> {
         let outer = self.bfile(ptr)?;
         let BFileKind::Utf8 {
             unget,
@@ -107,7 +121,11 @@ impl Program {
         }
     }
 
-    fn put_utf8_bfile_byte(&mut self, inner: i64, byte: i64) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn put_utf8_bfile_byte(
+        &mut self,
+        inner: i64,
+        byte: i64,
+    ) -> Result<(), EvalError> {
         if byte < 0 {
             return Err(EvalError::InvalidByteString);
         }
@@ -131,7 +149,11 @@ impl Program {
         Ok(())
     }
 
-    fn write_io_handle_bytes(&self, handle: StdHandle, bytes: &[u8]) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn write_io_handle_bytes(
+        &self,
+        handle: StdHandle,
+        bytes: &[u8],
+    ) -> Result<(), EvalError> {
         if handle == StdHandle::Stdin {
             return Err(EvalError::InvalidHandle);
         }
@@ -162,7 +184,7 @@ impl Program {
         Ok(())
     }
 
-    fn flush_io_handle(&self, handle: StdHandle) -> Result<(), EvalError> {
+    pub(in crate::runtime) fn flush_io_handle(&self, handle: StdHandle) -> Result<(), EvalError> {
         if handle == StdHandle::Stdin {
             return Ok(());
         }
@@ -185,7 +207,7 @@ impl Program {
         Ok(())
     }
 
-    fn read_stdin_byte(&self) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn read_stdin_byte(&self) -> Result<i64, EvalError> {
         #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
         {
             use std::io::Read as _;

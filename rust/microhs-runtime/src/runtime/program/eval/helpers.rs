@@ -1,5 +1,7 @@
+use super::*;
+
 impl Program {
-    fn ignored_io_action_reductions(
+    pub(in crate::runtime) fn ignored_io_action_reductions(
         &mut self,
         action: NodeId,
         budget: usize,
@@ -7,7 +9,7 @@ impl Program {
         self.io_action_reductions(action, budget, IGNORED_IO_SHORTCUT_RECURSION_LIMIT)
     }
 
-    fn io_action_reductions(
+    pub(in crate::runtime) fn io_action_reductions(
         &mut self,
         action: NodeId,
         budget: usize,
@@ -72,7 +74,7 @@ impl Program {
         }
     }
 
-    fn run_ignored_io_action(
+    pub(in crate::runtime) fn run_ignored_io_action(
         &mut self,
         action: NodeId,
         world: NodeId,
@@ -82,7 +84,10 @@ impl Program {
             .map(|(_, world)| world))
     }
 
-    fn io_return_action_result(&mut self, action: NodeId) -> Result<Option<NodeId>, EvalError> {
+    pub(in crate::runtime) fn io_return_action_result(
+        &mut self,
+        action: NodeId,
+    ) -> Result<Option<NodeId>, EvalError> {
         let action = self.resolve_profiled(action)?;
         let Some((fun, result)) = self.cell(action).app_fields() else {
             return Ok(None);
@@ -94,7 +99,7 @@ impl Program {
         })
     }
 
-    fn run_io_action(
+    pub(in crate::runtime) fn run_io_action(
         &mut self,
         action: NodeId,
         world: NodeId,
@@ -163,7 +168,10 @@ impl Program {
         }
     }
 
-    fn direct_ffi_continuation_accepts_result(&mut self, cont: NodeId) -> Result<bool, EvalError> {
+    pub(in crate::runtime) fn direct_ffi_continuation_accepts_result(
+        &mut self,
+        cont: NodeId,
+    ) -> Result<bool, EvalError> {
         let cont = self.resolve_profiled(cont)?;
         let Some(Node::Ffi(name)) = self.cold_node(cont) else {
             return Ok(false);
@@ -174,7 +182,10 @@ impl Program {
         Ok(arity == 1)
     }
 
-    fn pair_fields(&mut self, pair: NodeId) -> Result<Option<(NodeId, NodeId)>, EvalError> {
+    pub(in crate::runtime) fn pair_fields(
+        &mut self,
+        pair: NodeId,
+    ) -> Result<Option<(NodeId, NodeId)>, EvalError> {
         let pair = self.resolve_profiled(pair)?;
         let Some((result_pair, world)) = self.cell(pair).app_fields() else {
             return Ok(None);
@@ -190,7 +201,7 @@ impl Program {
         })
     }
 
-    fn selector_pair_field(
+    pub(in crate::runtime) fn selector_pair_field(
         &mut self,
         selector: NodeId,
         pair: NodeId,
@@ -209,7 +220,7 @@ impl Program {
         Ok(Some(if field == 0 { result } else { world }))
     }
 
-    fn tuple_first_field_selector_extra(
+    pub(in crate::runtime) fn tuple_first_field_selector_extra(
         &mut self,
         selector: NodeId,
         fields: usize,
@@ -230,7 +241,7 @@ impl Program {
         Ok((extra <= available_extra).then_some(extra))
     }
 
-    fn spine(&mut self, root: NodeId) -> Result<Spine, EvalError> {
+    pub(in crate::runtime) fn spine(&mut self, root: NodeId) -> Result<Spine, EvalError> {
         let mut node = self.resolve_profiled(root)?;
         let mut inline_args = [const { MaybeUninit::uninit() }; INLINE_SPINE];
         let mut inline_apps = [const { MaybeUninit::uninit() }; INLINE_SPINE];
@@ -278,7 +289,7 @@ impl Program {
         })
     }
 
-    fn apply_reduction_spine(
+    pub(in crate::runtime) fn apply_reduction_spine(
         &mut self,
         node: &mut NodeId,
         used: usize,
@@ -302,7 +313,10 @@ impl Program {
         Ok(in_place)
     }
 
-    fn is_identity_alias_node(&mut self, id: NodeId) -> Result<bool, EvalError> {
+    pub(in crate::runtime) fn is_identity_alias_node(
+        &mut self,
+        id: NodeId,
+    ) -> Result<bool, EvalError> {
         let id = self.resolve_profiled(id)?;
         Ok(matches!(
             self.cell(id).prim(),
@@ -311,7 +325,7 @@ impl Program {
     }
 
     #[inline]
-    fn app(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
+    pub(in crate::runtime) fn app(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
         if self.profile.is_some() {
             self.app_alloc_bookkeeping_cold("<generic app()>", fun, arg);
         }
@@ -328,7 +342,12 @@ impl Program {
     }
 
     #[inline]
-    fn app_with_site(&mut self, key: &'static str, fun: NodeId, arg: NodeId) -> NodeId {
+    pub(in crate::runtime) fn app_with_site(
+        &mut self,
+        key: &'static str,
+        fun: NodeId,
+        arg: NodeId,
+    ) -> NodeId {
         if self.profile.is_some() {
             self.app_alloc_bookkeeping_cold(key, fun, arg);
         }
@@ -346,7 +365,12 @@ impl Program {
 
     #[cold]
     #[inline(never)]
-    fn app_alloc_bookkeeping_cold(&mut self, key: &'static str, fun: NodeId, arg: NodeId) {
+    pub(in crate::runtime) fn app_alloc_bookkeeping_cold(
+        &mut self,
+        key: &'static str,
+        fun: NodeId,
+        arg: NodeId,
+    ) {
         #[cfg(feature = "eval-phase-profile")]
         let profile_started = self.profile.is_some().then(Instant::now);
         #[cfg(feature = "eval-phase-profile")]
@@ -406,7 +430,7 @@ impl Program {
         }
     }
 
-    fn prim(&mut self, name: &str) -> NodeId {
+    pub(in crate::runtime) fn prim(&mut self, name: &str) -> NodeId {
         let cached = match name {
             "A" => self.prim_cache.a,
             "B" => self.prim_cache.b,
@@ -449,7 +473,7 @@ impl Program {
         id
     }
 
-    fn int(&mut self, value: i64) -> NodeId {
+    pub(in crate::runtime) fn int(&mut self, value: i64) -> NodeId {
         let Some(index) = small_int_index(value) else {
             if self.profile.is_some() {
                 self.profile_non_small_int_allocation();
@@ -470,7 +494,7 @@ impl Program {
         id
     }
 
-    fn push_value_node(&mut self, node: Node) -> NodeId {
+    pub(in crate::runtime) fn push_value_node(&mut self, node: Node) -> NodeId {
         match node {
             Node::Int(value) => self.int(value),
             Node::Prim(prim) => self.prim(prim.name()),
@@ -478,7 +502,7 @@ impl Program {
         }
     }
 
-    fn world(&mut self) -> NodeId {
+    pub(in crate::runtime) fn world(&mut self) -> NodeId {
         if let Some(world) = self.world {
             return world;
         }
@@ -487,7 +511,7 @@ impl Program {
         world
     }
 
-    fn fst(&mut self) -> NodeId {
+    pub(in crate::runtime) fn fst(&mut self) -> NodeId {
         if let Some(fst) = self.compound_cache.fst {
             return fst;
         }
@@ -498,7 +522,7 @@ impl Program {
         fst
     }
 
-    fn snd(&mut self) -> NodeId {
+    pub(in crate::runtime) fn snd(&mut self) -> NodeId {
         if let Some(snd) = self.compound_cache.snd {
             return snd;
         }
@@ -509,13 +533,13 @@ impl Program {
         snd
     }
 
-    fn pair(&mut self, result: NodeId, world: NodeId) -> NodeId {
+    pub(in crate::runtime) fn pair(&mut self, result: NodeId, world: NodeId) -> NodeId {
         let pair = self.prim("P");
         let result_pair = self.app(pair, result);
         self.app(result_pair, world)
     }
 
-    fn unit_pair(&mut self, world: NodeId) -> NodeId {
+    pub(in crate::runtime) fn unit_pair(&mut self, world: NodeId) -> NodeId {
         let pair_unit = if let Some(pair_unit) = self.compound_cache.pair_unit {
             pair_unit
         } else {
@@ -528,7 +552,7 @@ impl Program {
         self.app(pair_unit, world)
     }
 
-    fn just(&mut self, value: NodeId) -> NodeId {
+    pub(in crate::runtime) fn just(&mut self, value: NodeId) -> NodeId {
         let just = if let Some(just) = self.compound_cache.just {
             just
         } else {
@@ -541,11 +565,11 @@ impl Program {
         self.app(just, value)
     }
 
-    fn nothing(&mut self) -> NodeId {
+    pub(in crate::runtime) fn nothing(&mut self) -> NodeId {
         self.prim("K")
     }
 
-    fn catch_result(
+    pub(in crate::runtime) fn catch_result(
         &mut self,
         action: NodeId,
         handler: NodeId,
@@ -575,12 +599,12 @@ impl Program {
         }
     }
 
-    fn rts_exception(&mut self, code: i64) -> EvalError {
+    pub(in crate::runtime) fn rts_exception(&mut self, code: i64) -> EvalError {
         let exn = self.int(code);
         EvalError::Raised(exn)
     }
 
-    fn arithmetic_eval_error(&mut self, err: EvalError) -> EvalError {
+    pub(in crate::runtime) fn arithmetic_eval_error(&mut self, err: EvalError) -> EvalError {
         match err {
             EvalError::DivideByZero => self.rts_exception(RTS_EXN_DIVIDE_BY_ZERO),
             EvalError::Overflow => self.rts_exception(RTS_EXN_OVERFLOW),
@@ -588,7 +612,7 @@ impl Program {
         }
     }
 
-    fn ordering(&mut self, ord: Ordering) -> NodeId {
+    pub(in crate::runtime) fn ordering(&mut self, ord: Ordering) -> NodeId {
         let name = match ord {
             Ordering::Less => "K2",
             Ordering::Equal => "KK",
@@ -597,11 +621,11 @@ impl Program {
         self.prim(name)
     }
 
-    fn bool_value_node(value: bool) -> Node {
+    pub(in crate::runtime) fn bool_value_node(value: bool) -> Node {
         Node::Prim(Prim::Known(if value { KnownPrim::A } else { KnownPrim::K }))
     }
 
-    fn ordering_value_node(ord: Ordering) -> Node {
+    pub(in crate::runtime) fn ordering_value_node(ord: Ordering) -> Node {
         let known = match ord {
             Ordering::Less => KnownPrim::K2,
             Ordering::Equal => KnownPrim::KK,
@@ -610,7 +634,7 @@ impl Program {
         Node::Prim(Prim::Known(known))
     }
 
-    fn int_result_node(&mut self, result: IntResult) -> NodeId {
+    pub(in crate::runtime) fn int_result_node(&mut self, result: IntResult) -> NodeId {
         match result {
             IntResult::Int(n) => self.int(n),
             IntResult::Bool(b) => self.prim(if b { "A" } else { "K" }),
@@ -618,7 +642,7 @@ impl Program {
         }
     }
 
-    fn int_result_value_node(result: IntResult) -> Node {
+    pub(in crate::runtime) fn int_result_value_node(result: IntResult) -> Node {
         match result {
             IntResult::Int(n) => Node::Int(n),
             IntResult::Bool(b) => Self::bool_value_node(b),

@@ -1,5 +1,7 @@
-include!("eval/legacy.rs");
-include!("eval/stack.rs");
-include!("eval/helpers.rs");
-include!("eval/frames.rs");
-include!("eval/primitives.rs");
+use super::*;
+
+mod frames;
+mod helpers;
+mod legacy;
+mod primitives;
+mod stack;

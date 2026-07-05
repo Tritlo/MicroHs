@@ -1,3 +1,5 @@
+use super::*;
+
 #[derive(Clone, Debug)]
 pub enum Node {
     App(NodeId, NodeId),
@@ -27,13 +29,13 @@ pub enum Node {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Cell {
-    word0: u64,
-    word1: u64,
+pub(in crate::runtime) struct Cell {
+    pub(in crate::runtime) word0: u64,
+    pub(in crate::runtime) word1: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CellTag {
+pub(in crate::runtime) enum CellTag {
     App,
     Indir,
     Free,
@@ -49,12 +51,12 @@ enum CellTag {
     Cold,
 }
 
-const CELL_TAG_BITS: u64 = 0xff;
-const CELL_PAYLOAD_SHIFT: u64 = 8;
-const CELL_NONE_ID: u64 = u64::MAX;
+pub(in crate::runtime) const CELL_TAG_BITS: u64 = 0xff;
+pub(in crate::runtime) const CELL_PAYLOAD_SHIFT: u64 = 8;
+pub(in crate::runtime) const CELL_NONE_ID: u64 = u64::MAX;
 
 impl CellTag {
-    fn from_bits(bits: u64) -> Self {
+    pub(in crate::runtime) fn from_bits(bits: u64) -> Self {
         match bits & CELL_TAG_BITS {
             0 => Self::App,
             1 => Self::Indir,
@@ -73,7 +75,7 @@ impl CellTag {
         }
     }
 
-    fn bits(self) -> u64 {
+    pub(in crate::runtime) fn bits(self) -> u64 {
         match self {
             Self::App => 0,
             Self::Indir => 1,
@@ -94,16 +96,16 @@ impl CellTag {
 
 impl Cell {
     #[inline]
-    fn tag_bits(self) -> u64 {
+    pub(in crate::runtime) fn tag_bits(self) -> u64 {
         self.word0 & CELL_TAG_BITS
     }
 
     #[inline]
-    fn has_tag(self, tag: CellTag) -> bool {
+    pub(in crate::runtime) fn has_tag(self, tag: CellTag) -> bool {
         self.tag_bits() == tag.bits()
     }
 
-    fn from_node(node: Node, cold_nodes: &mut Vec<Option<Node>>) -> Self {
+    pub(in crate::runtime) fn from_node(node: Node, cold_nodes: &mut Vec<Option<Node>>) -> Self {
         match node {
             Node::App(fun, arg) => Self::app(fun, arg),
             Node::Indir(target) => Self::indir(target),
@@ -125,7 +127,7 @@ impl Cell {
         }
     }
 
-    fn to_node(self, cold_nodes: &[Option<Node>]) -> Node {
+    pub(in crate::runtime) fn to_node(self, cold_nodes: &[Option<Node>]) -> Node {
         match self.tag() {
             CellTag::App => Node::App(self.id_payload(), self.id_word1()),
             CellTag::Indir => Node::Indir(self.option_id_word1()),
@@ -146,120 +148,120 @@ impl Cell {
         }
     }
 
-    fn tag(self) -> CellTag {
+    pub(in crate::runtime) fn tag(self) -> CellTag {
         CellTag::from_bits(self.tag_bits())
     }
 
-    fn app(fun: NodeId, arg: NodeId) -> Self {
+    pub(in crate::runtime) fn app(fun: NodeId, arg: NodeId) -> Self {
         Self {
             word0: (u64::from(fun.0) << CELL_PAYLOAD_SHIFT) | CellTag::App.bits(),
             word1: u64::from(arg.0),
         }
     }
 
-    fn indir(target: Option<NodeId>) -> Self {
+    pub(in crate::runtime) fn indir(target: Option<NodeId>) -> Self {
         Self {
             word0: CellTag::Indir.bits(),
             word1: pack_option_id(target),
         }
     }
 
-    fn free(next: Option<NodeId>) -> Self {
+    pub(in crate::runtime) fn free(next: Option<NodeId>) -> Self {
         Self {
             word0: CellTag::Free.bits(),
             word1: pack_option_id(next),
         }
     }
 
-    fn known_prim(known: KnownPrim) -> Self {
+    pub(in crate::runtime) fn known_prim(known: KnownPrim) -> Self {
         Self {
             word0: CellTag::KnownPrim.bits(),
             word1: u64::from(encode_known_prim(known)),
         }
     }
 
-    fn runtime_prim(runtime: RuntimePrim) -> Self {
+    pub(in crate::runtime) fn runtime_prim(runtime: RuntimePrim) -> Self {
         Self {
             word0: CellTag::RuntimePrim.bits(),
             word1: u64::from(runtime.0),
         }
     }
 
-    fn int(value: i64) -> Self {
+    pub(in crate::runtime) fn int(value: i64) -> Self {
         Self {
             word0: CellTag::Int.bits(),
             word1: value as u64,
         }
     }
 
-    fn int64(value: i64) -> Self {
+    pub(in crate::runtime) fn int64(value: i64) -> Self {
         Self {
             word0: CellTag::Int64.bits(),
             word1: value as u64,
         }
     }
 
-    fn float64(value: f64) -> Self {
+    pub(in crate::runtime) fn float64(value: f64) -> Self {
         Self {
             word0: CellTag::Float64.bits(),
             word1: value.to_bits(),
         }
     }
 
-    fn float32(value: f32) -> Self {
+    pub(in crate::runtime) fn float32(value: f32) -> Self {
         Self {
             word0: CellTag::Float32.bits(),
             word1: u64::from(value.to_bits()),
         }
     }
 
-    fn thread_id(value: i64) -> Self {
+    pub(in crate::runtime) fn thread_id(value: i64) -> Self {
         Self {
             word0: CellTag::ThreadId.bits(),
             word1: value as u64,
         }
     }
 
-    fn ptr(value: i64) -> Self {
+    pub(in crate::runtime) fn ptr(value: i64) -> Self {
         Self {
             word0: CellTag::Ptr.bits(),
             word1: value as u64,
         }
     }
 
-    fn raw_fun_ptr(value: i64) -> Self {
+    pub(in crate::runtime) fn raw_fun_ptr(value: i64) -> Self {
         Self {
             word0: CellTag::RawFunPtr.bits(),
             word1: value as u64,
         }
     }
 
-    fn cold(index: usize) -> Self {
+    pub(in crate::runtime) fn cold(index: usize) -> Self {
         Self {
             word0: CellTag::Cold.bits(),
             word1: u64::try_from(index).expect("cold node table exceeded u64"),
         }
     }
 
-    fn id_payload(self) -> NodeId {
+    pub(in crate::runtime) fn id_payload(self) -> NodeId {
         NodeId((self.word0 >> CELL_PAYLOAD_SHIFT) as u32)
     }
 
-    fn id_word1(self) -> NodeId {
+    pub(in crate::runtime) fn id_word1(self) -> NodeId {
         NodeId(self.word1 as u32)
     }
 
-    fn option_id_word1(self) -> Option<NodeId> {
+    pub(in crate::runtime) fn option_id_word1(self) -> Option<NodeId> {
         unpack_option_id(self.word1)
     }
 
-    fn app_fields(self) -> Option<(NodeId, NodeId)> {
+    pub(in crate::runtime) fn app_fields(self) -> Option<(NodeId, NodeId)> {
         self.has_tag(CellTag::App)
             .then(|| (self.id_payload(), self.id_word1()))
     }
 
     #[inline(always)]
-    fn prim(self) -> Option<Prim> {
+    pub(in crate::runtime) fn prim(self) -> Option<Prim> {
         match self.tag_bits() {
             3 => Some(Prim::Known(decode_known_prim(self.word1 as u16))),
             4 => Some(Prim::Runtime(RuntimePrim(self.word1 as u16))),
@@ -267,54 +269,54 @@ impl Cell {
         }
     }
 
-    fn int_value(self) -> Option<i64> {
+    pub(in crate::runtime) fn int_value(self) -> Option<i64> {
         self.has_tag(CellTag::Int).then_some(self.word1 as i64)
     }
 
-    fn int64_value(self) -> Option<i64> {
+    pub(in crate::runtime) fn int64_value(self) -> Option<i64> {
         self.has_tag(CellTag::Int64).then_some(self.word1 as i64)
     }
 
-    fn thread_id_value(self) -> Option<i64> {
+    pub(in crate::runtime) fn thread_id_value(self) -> Option<i64> {
         self.has_tag(CellTag::ThreadId).then_some(self.word1 as i64)
     }
 
-    fn ptr_value(self) -> Option<i64> {
+    pub(in crate::runtime) fn ptr_value(self) -> Option<i64> {
         self.has_tag(CellTag::Ptr).then_some(self.word1 as i64)
     }
 
-    fn raw_fun_ptr_value(self) -> Option<i64> {
+    pub(in crate::runtime) fn raw_fun_ptr_value(self) -> Option<i64> {
         self.has_tag(CellTag::RawFunPtr)
             .then_some(self.word1 as i64)
     }
 
-    fn float64_value(self) -> Option<f64> {
+    pub(in crate::runtime) fn float64_value(self) -> Option<f64> {
         self.has_tag(CellTag::Float64)
             .then_some(f64::from_bits(self.word1))
     }
 
-    fn float32_value(self) -> Option<f32> {
+    pub(in crate::runtime) fn float32_value(self) -> Option<f32> {
         self.has_tag(CellTag::Float32)
             .then_some(f32::from_bits(self.word1 as u32))
     }
 
-    fn cold_index(self) -> Option<usize> {
+    pub(in crate::runtime) fn cold_index(self) -> Option<usize> {
         self.has_tag(CellTag::Cold).then_some(self.word1 as usize)
     }
 }
 
-fn pack_option_id(id: Option<NodeId>) -> u64 {
+pub(in crate::runtime) fn pack_option_id(id: Option<NodeId>) -> u64 {
     id.map_or(CELL_NONE_ID, |id| u64::from(id.0))
 }
 
-fn unpack_option_id(word: u64) -> Option<NodeId> {
+pub(in crate::runtime) fn unpack_option_id(word: u64) -> Option<NodeId> {
     (word != CELL_NONE_ID).then_some(NodeId(word as u32))
 }
 
 #[derive(Default)]
-struct SerializationLabels {
-    shared: HashSet<NodeId>,
-    printed: HashSet<NodeId>,
+pub(in crate::runtime) struct SerializationLabels {
+    pub(in crate::runtime) shared: HashSet<NodeId>,
+    pub(in crate::runtime) printed: HashSet<NodeId>,
 }
 
 #[derive(Clone, Debug)]
@@ -326,16 +328,16 @@ pub struct ForeignPtrNode {
 }
 
 #[derive(Clone, Debug)]
-enum ForeignFinalizer {
+pub(in crate::runtime) enum ForeignFinalizer {
     Free,
     CloseB,
     RawZero,
 }
 
 #[derive(Clone, Debug)]
-struct ForeignFinalizerState {
-    arg: i64,
-    finalizer: Option<ForeignFinalizer>,
+pub(in crate::runtime) struct ForeignFinalizerState {
+    pub(in crate::runtime) arg: i64,
+    pub(in crate::runtime) finalizer: Option<ForeignFinalizer>,
 }
 
 #[derive(Clone, Debug)]
@@ -366,7 +368,7 @@ pub struct MutableBytesNode {
 }
 
 impl MutableBytesNode {
-    fn visible(&self) -> &[u8] {
+    pub(in crate::runtime) fn visible(&self) -> &[u8] {
         &self.bytes[..self.size]
     }
 }
@@ -386,7 +388,7 @@ impl Node {
         Self::Bytes(Box::new(bytes))
     }
 
-    fn bytes_view(base: NodeId, offset: usize, len: usize) -> Self {
+    pub(in crate::runtime) fn bytes_view(base: NodeId, offset: usize, len: usize) -> Self {
         Self::BytesView(Box::new(BytesViewNode { base, offset, len }))
     }
 
@@ -414,45 +416,45 @@ impl Node {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum StdHandle {
+pub(in crate::runtime) enum StdHandle {
     Stdin,
     Stdout,
     Stderr,
 }
 
-const ALLOCATION_PTR_BASE: i64 = -(1_i64 << 62);
-const ALLOCATION_PTR_STRIDE: i64 = 1_i64 << 32;
-const NODE_PTR_STRIDE: i64 = 1_i64 << 32;
-const BFILE_PTR_BASE: i64 = i64::MIN + (1_i64 << 32);
-const FORCE_REDUCTION_LIMIT: usize = usize::MAX;
-const RTS_EXN_DIVIDE_BY_ZERO: i64 = 4;
-const RTS_EXN_OVERFLOW: i64 = 7;
-const MASK_INTERRUPTIBLE: i64 = 1;
-const BFILE_PTR_STRIDE: i64 = 1_i64 << 32;
-const DIR_PTR_BASE: i64 = i64::MIN + (1_i64 << 61);
-const DIR_PTR_STRIDE: i64 = 1_i64 << 32;
-const INLINE_SPINE: usize = 16;
-const FALLBACK_PRIM_ARG_PREFIX: usize = 4;
-const SMALL_INT_MIN: i64 = -10;
-const SMALL_INT_MAX: i64 = 255;
-const SMALL_INT_COUNT: usize = (SMALL_INT_MAX - SMALL_INT_MIN + 1) as usize;
-const IGNORED_IO_SHORTCUT_RECURSION_LIMIT: usize = 256;
-const UTF8_ASCII_REFILL: usize = 1024;
-const READ_ONLY_MEMORY_VIEW_MIN_LEN: usize = 8;
+pub(in crate::runtime) const ALLOCATION_PTR_BASE: i64 = -(1_i64 << 62);
+pub(in crate::runtime) const ALLOCATION_PTR_STRIDE: i64 = 1_i64 << 32;
+pub(in crate::runtime) const NODE_PTR_STRIDE: i64 = 1_i64 << 32;
+pub(in crate::runtime) const BFILE_PTR_BASE: i64 = i64::MIN + (1_i64 << 32);
+pub(in crate::runtime) const FORCE_REDUCTION_LIMIT: usize = usize::MAX;
+pub(in crate::runtime) const RTS_EXN_DIVIDE_BY_ZERO: i64 = 4;
+pub(in crate::runtime) const RTS_EXN_OVERFLOW: i64 = 7;
+pub(in crate::runtime) const MASK_INTERRUPTIBLE: i64 = 1;
+pub(in crate::runtime) const BFILE_PTR_STRIDE: i64 = 1_i64 << 32;
+pub(in crate::runtime) const DIR_PTR_BASE: i64 = i64::MIN + (1_i64 << 61);
+pub(in crate::runtime) const DIR_PTR_STRIDE: i64 = 1_i64 << 32;
+pub(in crate::runtime) const INLINE_SPINE: usize = 16;
+pub(in crate::runtime) const FALLBACK_PRIM_ARG_PREFIX: usize = 4;
+pub(in crate::runtime) const SMALL_INT_MIN: i64 = -10;
+pub(in crate::runtime) const SMALL_INT_MAX: i64 = 255;
+pub(in crate::runtime) const SMALL_INT_COUNT: usize = (SMALL_INT_MAX - SMALL_INT_MIN + 1) as usize;
+pub(in crate::runtime) const IGNORED_IO_SHORTCUT_RECURSION_LIMIT: usize = 256;
+pub(in crate::runtime) const UTF8_ASCII_REFILL: usize = 1024;
+pub(in crate::runtime) const READ_ONLY_MEMORY_VIEW_MIN_LEN: usize = 8;
 #[cfg(not(target_os = "wasi"))]
-const GC_NODE_INTERVAL: usize = 32 * 1024 * 1024;
+pub(in crate::runtime) const GC_NODE_INTERVAL: usize = 32 * 1024 * 1024;
 #[cfg(target_os = "wasi")]
-const WASI_GC_NODE_INTERVAL: usize = 500_000;
+pub(in crate::runtime) const WASI_GC_NODE_INTERVAL: usize = 500_000;
 
 #[derive(Clone, Debug)]
-struct BFile {
-    kind: BFileKind,
-    readable: bool,
-    writable: bool,
+pub(in crate::runtime) struct BFile {
+    pub(in crate::runtime) kind: BFileKind,
+    pub(in crate::runtime) readable: bool,
+    pub(in crate::runtime) writable: bool,
 }
 
 #[derive(Clone, Debug)]
-enum BFileKind {
+pub(in crate::runtime) enum BFileKind {
     Memory {
         bytes: Vec<u8>,
         pos: usize,
@@ -534,44 +536,44 @@ enum BFileKind {
 }
 
 #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
-type NativeFileHandle = std::rc::Rc<std::cell::RefCell<std::fs::File>>;
+pub(in crate::runtime) type NativeFileHandle = std::rc::Rc<std::cell::RefCell<std::fs::File>>;
 
 #[derive(Clone, Debug)]
-struct DirHandle {
-    entries: Vec<Vec<u8>>,
-    pos: usize,
+pub(in crate::runtime) struct DirHandle {
+    pub(in crate::runtime) entries: Vec<Vec<u8>>,
+    pub(in crate::runtime) pos: usize,
 }
 
 #[cfg_attr(all(target_arch = "wasm32", not(target_os = "wasi")), allow(dead_code))]
 #[derive(Clone, Copy, Debug)]
-struct NativeFileMode {
-    readable: bool,
-    writable: bool,
-    append: bool,
-    truncate: bool,
-    create: bool,
+pub(in crate::runtime) struct NativeFileMode {
+    pub(in crate::runtime) readable: bool,
+    pub(in crate::runtime) writable: bool,
+    pub(in crate::runtime) append: bool,
+    pub(in crate::runtime) truncate: bool,
+    pub(in crate::runtime) create: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
-struct HostIntResult {
-    value: i64,
-    errno: Option<i32>,
+pub(in crate::runtime) struct HostIntResult {
+    pub(in crate::runtime) value: i64,
+    pub(in crate::runtime) errno: Option<i32>,
 }
 
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 impl HostIntResult {
-    fn ok(value: i64) -> Self {
+    pub(in crate::runtime) fn ok(value: i64) -> Self {
         Self { value, errno: None }
     }
 
-    fn err(errno: i32) -> Self {
+    pub(in crate::runtime) fn err(errno: i32) -> Self {
         Self {
             value: -1,
             errno: Some(errno),
         }
     }
 
-    fn os_err(errno: Option<i32>) -> Self {
+    pub(in crate::runtime) fn os_err(errno: Option<i32>) -> Self {
         Self::err(errno.unwrap_or_else(|| errno_i32("EINVAL")))
     }
 }
@@ -651,7 +653,7 @@ impl std::error::Error for EvalError {}
     not(all(target_arch = "wasm32", not(target_os = "wasi"))),
     allow(dead_code)
 )]
-enum JsArg {
+pub(in crate::runtime) enum JsArg {
     Int(i32),
     UInt(u32),
     Double(f64),
@@ -674,101 +676,100 @@ pub enum JsValue {
 
 #[derive(Clone, Debug)]
 pub struct Program {
-    nodes: Vec<Cell>,
-    cold_nodes: Vec<Option<Node>>,
-    root: NodeId,
-    labels: HashMap<usize, NodeId>,
-    node_pointers: Vec<NodeId>,
-    node_pointer_slots: HashMap<NodeId, usize>,
-    free_head: Option<NodeId>,
-    free_nodes: usize,
-    gc_node_interval: usize,
-    gc_allocations_since_collect: usize,
-    gc_last_allocations_since_collect: usize,
-    gc_collections: usize,
-    gc_freed_nodes_total: usize,
-    gc_last_live_nodes: usize,
-    gc_last_free_nodes: usize,
-    gc_high_water_nodes: usize,
-    gc_last_pause_nanos: u128,
-    gc_total_pause_nanos: u128,
+    pub(in crate::runtime) nodes: Vec<Cell>,
+    pub(in crate::runtime) cold_nodes: Vec<Option<Node>>,
+    pub(in crate::runtime) root: NodeId,
+    pub(in crate::runtime) labels: HashMap<usize, NodeId>,
+    pub(in crate::runtime) node_pointers: Vec<NodeId>,
+    pub(in crate::runtime) node_pointer_slots: HashMap<NodeId, usize>,
+    pub(in crate::runtime) free_head: Option<NodeId>,
+    pub(in crate::runtime) free_nodes: usize,
+    pub(in crate::runtime) gc_node_interval: usize,
+    pub(in crate::runtime) gc_allocations_since_collect: usize,
+    pub(in crate::runtime) gc_last_allocations_since_collect: usize,
+    pub(in crate::runtime) gc_collections: usize,
+    pub(in crate::runtime) gc_freed_nodes_total: usize,
+    pub(in crate::runtime) gc_last_live_nodes: usize,
+    pub(in crate::runtime) gc_last_free_nodes: usize,
+    pub(in crate::runtime) gc_high_water_nodes: usize,
+    pub(in crate::runtime) gc_last_pause_nanos: u128,
+    pub(in crate::runtime) gc_total_pause_nanos: u128,
     #[cfg(feature = "gc-phase-profile")]
-    gc_last_mark_nanos: u128,
+    pub(in crate::runtime) gc_last_mark_nanos: u128,
     #[cfg(feature = "gc-phase-profile")]
-    gc_total_mark_nanos: u128,
+    pub(in crate::runtime) gc_total_mark_nanos: u128,
     #[cfg(feature = "gc-phase-profile")]
-    gc_last_sweep_nanos: u128,
+    pub(in crate::runtime) gc_last_sweep_nanos: u128,
     #[cfg(feature = "gc-phase-profile")]
-    gc_total_sweep_nanos: u128,
+    pub(in crate::runtime) gc_total_sweep_nanos: u128,
     #[cfg(feature = "gc-phase-profile")]
-    gc_red_i_opportunities: usize,
+    pub(in crate::runtime) gc_red_i_opportunities: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_red_k_opportunities: usize,
+    pub(in crate::runtime) gc_red_k_opportunities: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_red_a_opportunities: usize,
+    pub(in crate::runtime) gc_red_a_opportunities: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_red_bi_opportunities: usize,
+    pub(in crate::runtime) gc_red_bi_opportunities: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_red_bxi_opportunities: usize,
+    pub(in crate::runtime) gc_red_bxi_opportunities: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_red_ccbi_opportunities: usize,
+    pub(in crate::runtime) gc_red_ccbi_opportunities: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_red_cc_opportunities: usize,
+    pub(in crate::runtime) gc_red_cc_opportunities: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_red_cci_opportunities: usize,
+    pub(in crate::runtime) gc_red_cci_opportunities: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_red_ccbbcp_opportunities: usize,
+    pub(in crate::runtime) gc_red_ccbbcp_opportunities: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_red_flip_opportunities: usize,
+    pub(in crate::runtime) gc_red_flip_opportunities: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_young_profile_allocated_slots: Vec<NodeId>,
+    pub(in crate::runtime) gc_young_profile_allocated_slots: Vec<NodeId>,
     #[cfg(feature = "gc-phase-profile")]
-    gc_young_profile_last_slots: usize,
+    pub(in crate::runtime) gc_young_profile_last_slots: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_young_profile_last_live: usize,
+    pub(in crate::runtime) gc_young_profile_last_live: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_young_profile_last_dead: usize,
+    pub(in crate::runtime) gc_young_profile_last_dead: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_young_profile_last_old_to_young_sources: usize,
+    pub(in crate::runtime) gc_young_profile_last_old_to_young_sources: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_young_profile_last_old_to_young_edges: usize,
+    pub(in crate::runtime) gc_young_profile_last_old_to_young_edges: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_young_profile_total_slots: usize,
+    pub(in crate::runtime) gc_young_profile_total_slots: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_young_profile_total_live: usize,
+    pub(in crate::runtime) gc_young_profile_total_live: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_young_profile_total_dead: usize,
+    pub(in crate::runtime) gc_young_profile_total_dead: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_young_profile_total_old_to_young_sources: usize,
+    pub(in crate::runtime) gc_young_profile_total_old_to_young_sources: usize,
     #[cfg(feature = "gc-phase-profile")]
-    gc_young_profile_total_old_to_young_edges: usize,
-    gc_marked: Vec<bool>,
-    gc_mark_work: Vec<NodeId>,
-    gc_foreign_finalizer_marked: Vec<bool>,
-    gc_events: Vec<GcEventStats>,
-    stable_ptrs: Vec<Option<NodeId>>,
-    weak_nodes: Vec<NodeId>,
-    pending_weak_finalizers: Vec<NodeId>,
-    foreign_finalizers: Vec<Option<ForeignFinalizerState>>,
-    foreign_finalizer_free: Vec<usize>,
-    allocations: Vec<Option<Vec<u8>>>,
-    bfiles: Vec<Option<BFile>>,
-    dirs: Vec<Option<DirHandle>>,
-    program_args: Vec<Vec<u8>>,
-    executable_path: Option<Vec<u8>>,
-    arg_ref_array: Option<NodeId>,
-    errno_value: i32,
-    errno_ptr: Option<i64>,
-    masking_state: i64,
-    reductions: usize,
-    js_program_handle: Option<u32>,
-    js_wrapper_tags: Vec<String>,
-    prim_cache: PrimCache,
-    compound_cache: CompoundCache,
-    small_ints: [Option<NodeId>; SMALL_INT_COUNT],
-    world: Option<NodeId>,
-    profile: Option<EvalProfile>,
-    trace_expected_bytes: bool,
-    reduce_depth: usize,
+    pub(in crate::runtime) gc_young_profile_total_old_to_young_edges: usize,
+    pub(in crate::runtime) gc_marked: Vec<bool>,
+    pub(in crate::runtime) gc_mark_work: Vec<NodeId>,
+    pub(in crate::runtime) gc_foreign_finalizer_marked: Vec<bool>,
+    pub(in crate::runtime) gc_events: Vec<GcEventStats>,
+    pub(in crate::runtime) stable_ptrs: Vec<Option<NodeId>>,
+    pub(in crate::runtime) weak_nodes: Vec<NodeId>,
+    pub(in crate::runtime) pending_weak_finalizers: Vec<NodeId>,
+    pub(in crate::runtime) foreign_finalizers: Vec<Option<ForeignFinalizerState>>,
+    pub(in crate::runtime) foreign_finalizer_free: Vec<usize>,
+    pub(in crate::runtime) allocations: Vec<Option<Vec<u8>>>,
+    pub(in crate::runtime) bfiles: Vec<Option<BFile>>,
+    pub(in crate::runtime) dirs: Vec<Option<DirHandle>>,
+    pub(in crate::runtime) program_args: Vec<Vec<u8>>,
+    pub(in crate::runtime) executable_path: Option<Vec<u8>>,
+    pub(in crate::runtime) arg_ref_array: Option<NodeId>,
+    pub(in crate::runtime) errno_value: i32,
+    pub(in crate::runtime) errno_ptr: Option<i64>,
+    pub(in crate::runtime) masking_state: i64,
+    pub(in crate::runtime) reductions: usize,
+    pub(in crate::runtime) js_program_handle: Option<u32>,
+    pub(in crate::runtime) js_wrapper_tags: Vec<String>,
+    pub(in crate::runtime) prim_cache: PrimCache,
+    pub(in crate::runtime) compound_cache: CompoundCache,
+    pub(in crate::runtime) small_ints: [Option<NodeId>; SMALL_INT_COUNT],
+    pub(in crate::runtime) world: Option<NodeId>,
+    pub(in crate::runtime) profile: Option<EvalProfile>,
+    pub(in crate::runtime) trace_expected_bytes: bool,
+    pub(in crate::runtime) reduce_depth: usize,
 }
-

@@ -1,5 +1,7 @@
+use super::*;
+
 impl Program {
-    fn array_op(
+    pub(in crate::runtime) fn array_op(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -80,7 +82,7 @@ impl Program {
         Ok(rewrite)
     }
 
-    fn array_unop(
+    pub(in crate::runtime) fn array_unop(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -120,7 +122,7 @@ impl Program {
         Ok(Some((used, node)))
     }
 
-    fn stable_ptr_op(
+    pub(in crate::runtime) fn stable_ptr_op(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -146,7 +148,7 @@ impl Program {
         Ok(rewrite)
     }
 
-    fn stable_ptr_unop(
+    pub(in crate::runtime) fn stable_ptr_unop(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -167,7 +169,7 @@ impl Program {
         Ok(Some((1, node)))
     }
 
-    fn weak_ptr_op(
+    pub(in crate::runtime) fn weak_ptr_op(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -203,7 +205,7 @@ impl Program {
         Ok(rewrite)
     }
 
-    fn weak_ptr_unop(
+    pub(in crate::runtime) fn weak_ptr_unop(
         &mut self,
         name: &str,
         args: &[NodeId],

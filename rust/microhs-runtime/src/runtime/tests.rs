@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use super::{
+    use crate::runtime::{
         BFile, BFileKind, EvalFrameStack, EvalSpine, FORCE_REDUCTION_LIMIT,
         IGNORED_IO_SHORTCUT_RECURSION_LIMIT, MpzValue, PersistentSpine, bwt_decode, bwt_encode,
         lz77_compress, lz77_decompress, lzma_compress_payload, lzma_decompress_payload,

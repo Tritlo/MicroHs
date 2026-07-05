@@ -1,27 +1,29 @@
-const MPZ_BASE: u32 = 1_000_000_000;
+use super::*;
+
+pub(in crate::runtime) const MPZ_BASE: u32 = 1_000_000_000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct MpzValue {
-    negative: bool,
-    digits: Vec<u32>,
+pub(in crate::runtime) struct MpzValue {
+    pub(in crate::runtime) negative: bool,
+    pub(in crate::runtime) digits: Vec<u32>,
 }
 
 impl MpzValue {
-    fn zero() -> Self {
+    pub(in crate::runtime) fn zero() -> Self {
         Self {
             negative: false,
             digits: Vec::new(),
         }
     }
 
-    fn one() -> Self {
+    pub(in crate::runtime) fn one() -> Self {
         Self {
             negative: false,
             digits: vec![1],
         }
     }
 
-    fn from_u64(mut value: u64) -> Self {
+    pub(in crate::runtime) fn from_u64(mut value: u64) -> Self {
         let mut digits = Vec::new();
         let base = u64::from(MPZ_BASE);
         while value != 0 {
@@ -34,13 +36,13 @@ impl MpzValue {
         }
     }
 
-    fn from_i64(value: i64) -> Self {
+    pub(in crate::runtime) fn from_i64(value: i64) -> Self {
         let mut out = Self::from_u64(value.unsigned_abs());
         out.negative = value < 0 && !out.is_zero();
         out
     }
 
-    fn parse_decimal(bytes: &[u8]) -> Result<Self, ()> {
+    pub(in crate::runtime) fn parse_decimal(bytes: &[u8]) -> Result<Self, ()> {
         let (negative, digits) = match bytes {
             [b'-', rest @ ..] => (true, rest),
             [b'+', rest @ ..] => (false, rest),
@@ -61,7 +63,7 @@ impl MpzValue {
         Ok(value)
     }
 
-    fn to_decimal_bytes(&self) -> Vec<u8> {
+    pub(in crate::runtime) fn to_decimal_bytes(&self) -> Vec<u8> {
         if self.is_zero() {
             return b"0".to_vec();
         }
@@ -79,7 +81,7 @@ impl MpzValue {
         out
     }
 
-    fn normalize(&mut self) {
+    pub(in crate::runtime) fn normalize(&mut self) {
         while self.digits.last() == Some(&0) {
             self.digits.pop();
         }
@@ -88,22 +90,22 @@ impl MpzValue {
         }
     }
 
-    fn normalized(mut self) -> Self {
+    pub(in crate::runtime) fn normalized(mut self) -> Self {
         self.normalize();
         self
     }
 
-    fn is_zero(&self) -> bool {
+    pub(in crate::runtime) fn is_zero(&self) -> bool {
         self.digits.is_empty()
     }
 
-    fn abs(&self) -> Self {
+    pub(in crate::runtime) fn abs(&self) -> Self {
         let mut out = self.clone();
         out.negative = false;
         out
     }
 
-    fn cmp_abs(&self, other: &Self) -> Ordering {
+    pub(in crate::runtime) fn cmp_abs(&self, other: &Self) -> Ordering {
         match self.digits.len().cmp(&other.digits.len()) {
             Ordering::Equal => {
                 for (left, right) in self.digits.iter().rev().zip(other.digits.iter().rev()) {
@@ -118,7 +120,7 @@ impl MpzValue {
         }
     }
 
-    fn cmp(&self, other: &Self) -> Ordering {
+    pub(in crate::runtime) fn cmp(&self, other: &Self) -> Ordering {
         match (self.negative, other.negative) {
             (true, false) => Ordering::Less,
             (false, true) => Ordering::Greater,
@@ -127,7 +129,7 @@ impl MpzValue {
         }
     }
 
-    fn abs_add(&self, other: &Self) -> Self {
+    pub(in crate::runtime) fn abs_add(&self, other: &Self) -> Self {
         let mut out = Vec::with_capacity(self.digits.len().max(other.digits.len()) + 1);
         let mut carry = 0_u64;
         let base = u64::from(MPZ_BASE);
@@ -149,7 +151,7 @@ impl MpzValue {
         .normalized()
     }
 
-    fn abs_sub(&self, other: &Self) -> Self {
+    pub(in crate::runtime) fn abs_sub(&self, other: &Self) -> Self {
         debug_assert!(self.cmp_abs(other) != Ordering::Less);
         let mut out = Vec::with_capacity(self.digits.len());
         let mut borrow = 0_i64;
@@ -172,7 +174,7 @@ impl MpzValue {
         .normalized()
     }
 
-    fn add(&self, other: &Self) -> Self {
+    pub(in crate::runtime) fn add(&self, other: &Self) -> Self {
         if self.negative == other.negative {
             let mut out = self.abs_add(other);
             out.negative = self.negative && !out.is_zero();
@@ -193,7 +195,7 @@ impl MpzValue {
         }
     }
 
-    fn sub(&self, other: &Self) -> Self {
+    pub(in crate::runtime) fn sub(&self, other: &Self) -> Self {
         let mut neg_other = other.clone();
         if !neg_other.is_zero() {
             neg_other.negative = !neg_other.negative;
@@ -201,7 +203,7 @@ impl MpzValue {
         self.add(&neg_other)
     }
 
-    fn mul(&self, other: &Self) -> Self {
+    pub(in crate::runtime) fn mul(&self, other: &Self) -> Self {
         if self.is_zero() || other.is_zero() {
             return Self::zero();
         }
@@ -237,7 +239,7 @@ impl MpzValue {
         .normalized()
     }
 
-    fn mul_small_mut(&mut self, value: u32) {
+    pub(in crate::runtime) fn mul_small_mut(&mut self, value: u32) {
         if self.is_zero() || value == 1 {
             return;
         }
@@ -259,7 +261,7 @@ impl MpzValue {
         }
     }
 
-    fn add_small_mut(&mut self, value: u32) {
+    pub(in crate::runtime) fn add_small_mut(&mut self, value: u32) {
         if value == 0 {
             return;
         }
@@ -277,7 +279,7 @@ impl MpzValue {
         }
     }
 
-    fn div2_mut(&mut self) -> bool {
+    pub(in crate::runtime) fn div2_mut(&mut self) -> bool {
         let mut rem = 0_u64;
         let base = u64::from(MPZ_BASE);
         for digit in self.digits.iter_mut().rev() {
@@ -289,18 +291,18 @@ impl MpzValue {
         rem != 0
     }
 
-    fn shl1_mut(&mut self) {
+    pub(in crate::runtime) fn shl1_mut(&mut self) {
         self.mul_small_mut(2);
     }
 
-    fn shl_bits(mut self, bits: usize) -> Self {
+    pub(in crate::runtime) fn shl_bits(mut self, bits: usize) -> Self {
         for _ in 0..bits {
             self.shl1_mut();
         }
         self
     }
 
-    fn shr_abs_bits(&self, bits: usize) -> (Self, bool) {
+    pub(in crate::runtime) fn shr_abs_bits(&self, bits: usize) -> (Self, bool) {
         let mut out = self.abs();
         let mut dropped = false;
         for _ in 0..bits {
@@ -309,7 +311,7 @@ impl MpzValue {
         (out, dropped)
     }
 
-    fn fdiv_q_2exp(&self, bits: usize) -> Self {
+    pub(in crate::runtime) fn fdiv_q_2exp(&self, bits: usize) -> Self {
         let (mut quot, dropped) = self.shr_abs_bits(bits);
         if self.negative {
             if dropped {
@@ -322,7 +324,7 @@ impl MpzValue {
         quot
     }
 
-    fn to_bits_abs(&self) -> Vec<bool> {
+    pub(in crate::runtime) fn to_bits_abs(&self) -> Vec<bool> {
         let mut tmp = self.abs();
         let mut bits = Vec::new();
         while !tmp.is_zero() {
@@ -331,7 +333,7 @@ impl MpzValue {
         bits
     }
 
-    fn from_bits_abs(bits: &[bool]) -> Self {
+    pub(in crate::runtime) fn from_bits_abs(bits: &[bool]) -> Self {
         let mut out = Self::zero();
         for bit in bits.iter().rev() {
             out.shl1_mut();
@@ -342,11 +344,14 @@ impl MpzValue {
         out
     }
 
-    fn one_shl(bits: usize) -> Self {
+    pub(in crate::runtime) fn one_shl(bits: usize) -> Self {
         Self::one().shl_bits(bits)
     }
 
-    fn div_rem_abs(&self, divisor: &Self) -> Result<(Self, Self), EvalError> {
+    pub(in crate::runtime) fn div_rem_abs(
+        &self,
+        divisor: &Self,
+    ) -> Result<(Self, Self), EvalError> {
         if divisor.is_zero() {
             return Err(EvalError::InvalidByteString);
         }
@@ -370,18 +375,18 @@ impl MpzValue {
         Ok((quot, rem))
     }
 
-    fn tdiv_qr(&self, divisor: &Self) -> Result<(Self, Self), EvalError> {
+    pub(in crate::runtime) fn tdiv_qr(&self, divisor: &Self) -> Result<(Self, Self), EvalError> {
         let (mut quot, mut rem) = self.abs().div_rem_abs(&divisor.abs())?;
         quot.negative = self.negative != divisor.negative && !quot.is_zero();
         rem.negative = self.negative && !rem.is_zero();
         Ok((quot, rem))
     }
 
-    fn bit_len(&self) -> usize {
+    pub(in crate::runtime) fn bit_len(&self) -> usize {
         self.to_bits_abs().len()
     }
 
-    fn to_twos_bits(&self, width: usize) -> Vec<bool> {
+    pub(in crate::runtime) fn to_twos_bits(&self, width: usize) -> Vec<bool> {
         let mut bits = if self.negative {
             Self::one_shl(width).sub(&self.abs()).to_bits_abs()
         } else {
@@ -391,7 +396,7 @@ impl MpzValue {
         bits
     }
 
-    fn from_twos_bits(bits: &[bool]) -> Self {
+    pub(in crate::runtime) fn from_twos_bits(bits: &[bool]) -> Self {
         if bits.last() != Some(&true) {
             return Self::from_bits_abs(bits);
         }
@@ -403,7 +408,7 @@ impl MpzValue {
         out
     }
 
-    fn bitwise(&self, other: &Self, op: fn(bool, bool) -> bool) -> Self {
+    pub(in crate::runtime) fn bitwise(&self, other: &Self, op: fn(bool, bool) -> bool) -> Self {
         let width = self.bit_len().max(other.bit_len()) + 1;
         let left = self.to_twos_bits(width);
         let right = other.to_twos_bits(width);
@@ -415,23 +420,23 @@ impl MpzValue {
         Self::from_twos_bits(&bits)
     }
 
-    fn bitand(&self, other: &Self) -> Self {
+    pub(in crate::runtime) fn bitand(&self, other: &Self) -> Self {
         self.bitwise(other, |left, right| left & right)
     }
 
-    fn bitor(&self, other: &Self) -> Self {
+    pub(in crate::runtime) fn bitor(&self, other: &Self) -> Self {
         self.bitwise(other, |left, right| left | right)
     }
 
-    fn bitxor(&self, other: &Self) -> Self {
+    pub(in crate::runtime) fn bitxor(&self, other: &Self) -> Self {
         self.bitwise(other, |left, right| left ^ right)
     }
 
-    fn test_bit_abs(&self, bit: usize) -> bool {
+    pub(in crate::runtime) fn test_bit_abs(&self, bit: usize) -> bool {
         self.to_bits_abs().get(bit).copied().unwrap_or(false)
     }
 
-    fn test_bit_signed(&self, bit: usize) -> bool {
+    pub(in crate::runtime) fn test_bit_signed(&self, bit: usize) -> bool {
         if !self.negative {
             return self.test_bit_abs(bit);
         }
@@ -439,17 +444,17 @@ impl MpzValue {
         shifted.abs().test_bit_abs(0)
     }
 
-    fn signed_popcount(&self) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn signed_popcount(&self) -> Result<i64, EvalError> {
         let count = i64::try_from(self.to_bits_abs().into_iter().filter(|bit| *bit).count())
             .map_err(|_| EvalError::Overflow)?;
         Ok(if self.negative { -count } else { count })
     }
 
-    fn log2(&self) -> Result<i64, EvalError> {
+    pub(in crate::runtime) fn log2(&self) -> Result<i64, EvalError> {
         i64::try_from(self.bit_len().saturating_sub(1)).map_err(|_| EvalError::Overflow)
     }
 
-    fn to_u64_low(&self) -> u64 {
+    pub(in crate::runtime) fn to_u64_low(&self) -> u64 {
         let mut out = 0_u64;
         for (idx, bit) in self.to_bits_abs().into_iter().take(64).enumerate() {
             if bit {
@@ -459,7 +464,7 @@ impl MpzValue {
         out
     }
 
-    fn to_i64_wrapping(&self) -> i64 {
+    pub(in crate::runtime) fn to_i64_wrapping(&self) -> i64 {
         let low = self.to_u64_low();
         if self.negative {
             0_u64.wrapping_sub(low) as i64
@@ -470,7 +475,7 @@ impl MpzValue {
 
     #[cold]
     #[inline(never)]
-    fn to_f64(&self) -> f64 {
+    pub(in crate::runtime) fn to_f64(&self) -> f64 {
         let decimal = self.to_decimal_bytes();
         mpz_decimal_to_f64(&decimal)
     }
@@ -478,7 +483,7 @@ impl MpzValue {
 
 #[cold]
 #[inline(never)]
-fn mpz_decimal_to_f64(decimal: &[u8]) -> f64 {
+pub(in crate::runtime) fn mpz_decimal_to_f64(decimal: &[u8]) -> f64 {
     let text = std::str::from_utf8(decimal).expect("mpz decimal bytes are ASCII");
     text.parse::<f64>()
         .expect("mpz decimal bytes should parse as f64")

@@ -1,5 +1,7 @@
+use super::*;
+
 impl Program {
-    fn ffi_call(
+    pub(in crate::runtime) fn ffi_call(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -10,7 +12,7 @@ impl Program {
         }
     }
 
-    fn ffi_call_inner(
+    pub(in crate::runtime) fn ffi_call_inner(
         &mut self,
         name: &str,
         args: &[NodeId],
@@ -990,7 +992,10 @@ impl Program {
         Ok(Some((arity + 1, self.pair(result, args[arity]))))
     }
 
-    fn zero_arity_ffi_result(&mut self, name: &str) -> Result<Option<Node>, EvalError> {
+    pub(in crate::runtime) fn zero_arity_ffi_result(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<Node>, EvalError> {
         if let Some(value) = errno_constant(name) {
             return Ok(Some(Node::Int(value)));
         }
@@ -1019,7 +1024,7 @@ impl Program {
         Ok(Some(result))
     }
 
-    fn unary_math_ffi_result(
+    pub(in crate::runtime) fn unary_math_ffi_result(
         &mut self,
         name: &str,
         arg: NodeId,

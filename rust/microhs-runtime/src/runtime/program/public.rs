@@ -1,3 +1,5 @@
+use super::*;
+
 impl Program {
     pub fn resolve(&self, mut id: NodeId) -> Result<NodeId, EvalError> {
         loop {
@@ -18,7 +20,7 @@ impl Program {
     }
 
     #[inline]
-    fn resolve_whnf_trusted(&self, mut id: NodeId) -> NodeId {
+    pub(in crate::runtime) fn resolve_whnf_trusted(&self, mut id: NodeId) -> NodeId {
         loop {
             let cell = self.cell_trusted(id);
             match cell.tag_bits() {
@@ -34,7 +36,10 @@ impl Program {
         }
     }
 
-    fn resolve_profiled(&mut self, mut id: NodeId) -> Result<NodeId, EvalError> {
+    pub(in crate::runtime) fn resolve_profiled(
+        &mut self,
+        mut id: NodeId,
+    ) -> Result<NodeId, EvalError> {
         if self.profile.is_none() {
             return self.resolve(id);
         }
