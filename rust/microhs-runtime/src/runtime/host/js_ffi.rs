@@ -28,3 +28,29 @@ pub(in crate::runtime) fn validate_js_tags(tags: &[u8]) -> Result<(), EvalError>
     }
     Ok(())
 }
+
+#[cfg_attr(
+    not(all(target_arch = "wasm32", not(target_os = "wasi"))),
+    allow(dead_code)
+)]
+pub(in crate::runtime) enum JsArg {
+    Int(i32),
+    UInt(u32),
+    Double(f64),
+    Object(u32),
+    String(Vec<u8>),
+}
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum JsValue {
+    Unit,
+    Int(i32),
+    UInt(u32),
+    Double(f64),
+    Float(f32),
+    Bool(bool),
+    Pointer(u32),
+    Object(u32),
+    Bytes(Vec<u8>),
+}
