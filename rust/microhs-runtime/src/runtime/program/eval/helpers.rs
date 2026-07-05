@@ -375,19 +375,6 @@ impl Program {
         #[cfg(feature = "eval-phase-profile")]
         let profile_started = self.profile.is_some().then(Instant::now);
         #[cfg(feature = "eval-phase-profile")]
-        let site_shape = self.profile.is_some().then(|| {
-            let fun_shape = self.profile_node_shape_key(fun);
-            let arg_shape = self.profile_node_shape_key(arg);
-            let mut shape =
-                String::with_capacity(key.len() + fun_shape.len() + arg_shape.len() + 6);
-            shape.push_str(key);
-            shape.push_str(": ");
-            shape.push_str(&fun_shape);
-            shape.push(' ');
-            shape.push_str(&arg_shape);
-            shape
-        });
-        #[cfg(feature = "eval-phase-profile")]
         let resolved_site_shape = self.profile.is_some().then(|| {
             let fun_shape = self.profile_resolved_node_shape_key(fun);
             let arg_shape = self.profile_resolved_node_shape_key(arg);
@@ -410,13 +397,6 @@ impl Program {
                 .app_allocation_sites
                 .entry(key.to_owned())
                 .or_default() += 1;
-            #[cfg(feature = "eval-phase-profile")]
-            if let Some(site_shape) = site_shape {
-                *profile
-                    .app_allocation_site_shapes
-                    .entry(site_shape)
-                    .or_default() += 1;
-            }
             #[cfg(feature = "eval-phase-profile")]
             if let Some(resolved_site_shape) = resolved_site_shape {
                 *profile

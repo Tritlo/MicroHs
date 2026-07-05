@@ -290,26 +290,6 @@ impl Program {
     }
 
     #[cfg(feature = "eval-phase-profile")]
-    pub(in crate::runtime) fn profile_node_shape_key(&self, id: NodeId) -> String {
-        let cell = self.cell(id);
-        match cell.tag() {
-            CellTag::App => {
-                let fun = cell.id_payload();
-                match self.cell(fun).prim() {
-                    Some(prim) => format!("App({})", prim.name()),
-                    None => format!("App({})", self.profile_cell_shape_key(self.cell(fun))),
-                }
-            }
-            CellTag::Cold => self
-                .cold_node(id)
-                .map(cold_profile_key)
-                .unwrap_or("Cold")
-                .to_owned(),
-            _ => self.profile_cell_shape_key(cell).to_owned(),
-        }
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
     pub(in crate::runtime) fn profile_resolved_node_shape_key(&self, id: NodeId) -> String {
         let Some(id) = self.gc_profile_resolved_id(id) else {
             return "Free".to_owned();

@@ -262,10 +262,6 @@ pub(super) fn print_profile(profile: &ProfileBench, top: usize) {
     }
     #[cfg(feature = "eval-phase-profile")]
     {
-        println!("profile_app_allocation_site_shapes:");
-        for (site, count) in profile.profile.top_app_allocation_site_shapes(top) {
-            println!("  {site}: {count}");
-        }
         println!("profile_app_allocation_resolved_site_shapes:");
         for (site, count) in profile.profile.top_app_allocation_resolved_site_shapes(top) {
             println!("  {site}: {count}");
