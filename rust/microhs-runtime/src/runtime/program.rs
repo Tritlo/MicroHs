@@ -3,6 +3,8 @@ use super::*;
 
 mod bfile;
 mod core;
+#[cfg(any(test, feature = "moving-gc"))]
+mod evacuate;
 mod eval;
 mod gc;
 mod handles;
