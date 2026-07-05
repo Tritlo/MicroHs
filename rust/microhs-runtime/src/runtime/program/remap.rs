@@ -1,5 +1,4 @@
 //! Mutable NodeId remapping for future moving GC.
-#![allow(dead_code)]
 
 use super::*;
 
