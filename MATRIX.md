@@ -4520,6 +4520,15 @@ This is a no-code audit for the next structural heap step. Current GC can mark r
 | 100M/32M bounded A/B | 24-pair extended screen: base avg `1614.896ms`, candidate avg `1605.482ms` (`-0.583%`), but only `10/24` pairs were favorable. The first 16 pairs averaged base `1639.012ms` vs candidate `1607.198ms` (`-1.941%`, `8/16` favorable), then the final 8 pairs rejected the probe at base avg `1566.665ms` vs candidate avg `1602.049ms` (`+2.259%`, `2/8` favorable). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,856`/`33,949,858`, sink `661902`, and `cell_size_bytes=8` |
 | reading | The apparent average win depended on slow baseline outliers and did not survive the extension. Keep `apply_stack_frame_value` inlined, but leave the lower-level `set_app_node_at` helper compiler-chosen |
 
+## 2026-07-05 Cell Int Value Inline-Control Probe
+
+| item | result |
+|---|---|
+| probe | rejected narrow accessor inline-control probe after the frame-value keeper: changed only `Program::cell_int_value` to `#[inline(always)]` to see whether strict integer frames and immediate integer primitive paths benefited from call-site specialization. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1592.369`, `1556.297`, `1531.004`, `1555.399`, `1547.157`, `1548.650`, `1575.255`, `1546.823` (avg `1556.619`); candidate ms: `1641.718`, `1665.714`, `1571.967`, `1575.690`, `1641.022`, `1605.393`, `1618.300`, `1577.045` (avg `1612.106`, `+3.565%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,836`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Clear reject: `0/8` favorable. Like the broader accessor/resolver probes, forcing lower-level cell reads bloats or perturbs the hot code; keep these helpers ordinary `#[inline]` |
+
 ## Active Tradeoffs
 
 | item | reading |
