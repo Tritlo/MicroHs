@@ -7,10 +7,7 @@ impl Program {
         name: &str,
         args: &[NodeId],
     ) -> Result<Option<(usize, NodeId)>, EvalError> {
-        match self.ffi_call_inner(name, args) {
-            Ok(result) => Ok(result),
-            Err(err) => Err(self.trace_invalid_op_error("ffi", name, args, err)),
-        }
+        self.ffi_call_inner(name, args)
     }
 
     pub(in crate::runtime) fn ffi_call_inner(
