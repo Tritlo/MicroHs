@@ -456,19 +456,10 @@ impl Program {
 
     pub(in crate::runtime) fn int(&mut self, value: i64) -> NodeId {
         let Some(index) = small_int_index(value) else {
-            if self.profile.is_some() {
-                self.profile_non_small_int_allocation();
-            }
             return self.push_node(Node::Int(value));
         };
         if let Some(id) = self.small_ints[index] {
-            if self.profile.is_some() {
-                self.profile_small_int_cache_hit();
-            }
             return id;
-        }
-        if self.profile.is_some() {
-            self.profile_small_int_cache_miss();
         }
         let id = self.push_node(Node::Int(value));
         self.small_ints[index] = Some(id);

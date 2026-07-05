@@ -528,27 +528,6 @@ impl Program {
     }
 
     #[cold]
-    pub(in crate::runtime) fn profile_small_int_cache_hit(&mut self) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.small_int_cache_hits += 1;
-        }
-    }
-
-    #[cold]
-    pub(in crate::runtime) fn profile_small_int_cache_miss(&mut self) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.small_int_cache_misses += 1;
-        }
-    }
-
-    #[cold]
-    pub(in crate::runtime) fn profile_non_small_int_allocation(&mut self) {
-        if let Some(profile) = self.profile.as_mut() {
-            profile.non_small_int_allocations += 1;
-        }
-    }
-
-    #[cold]
     pub(in crate::runtime) fn profile_node_allocation(&mut self, node: &Node) {
         if let Some(profile) = self.profile.as_mut() {
             *profile
