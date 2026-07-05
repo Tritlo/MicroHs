@@ -34,6 +34,7 @@ impl Program {
         );
     }
 
+    #[cfg_attr(not(feature = "moving-gc"), allow(dead_code))]
     pub(in crate::runtime) fn remap_selected_heap_node_ids_for_moving_gc(
         &mut self,
         old_young_sources: &[usize],
@@ -183,6 +184,7 @@ fn remap_cell_node_ids(cell: &mut Cell, remap: &mut impl FnMut(NodeId) -> NodeId
     }
 }
 
+#[cfg_attr(not(feature = "moving-gc"), allow(dead_code))]
 fn remap_cell_and_cold_payload_node_ids(
     nodes: &mut [Cell],
     cold_nodes: &mut [Option<Node>],
