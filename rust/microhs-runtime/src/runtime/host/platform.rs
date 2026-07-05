@@ -81,7 +81,7 @@ pub(in crate::runtime) fn errno_i32(name: &str) -> i32 {
 pub(in crate::runtime) fn host_constant(name: &str) -> Option<i64> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        return Some(i64::from(match name {
+        Some(i64::from(match name {
             "F_SETFL" => libc::F_SETFL,
             "O_NONBLOCK" => libc::O_NONBLOCK,
             "SOL_SOCKET" => libc::SOL_SOCKET,
@@ -90,7 +90,7 @@ pub(in crate::runtime) fn host_constant(name: &str) -> Option<i64> {
             "SO_REUSEADDR" => libc::SO_REUSEADDR,
             "SO_TYPE" => libc::SO_TYPE,
             _ => return None,
-        }));
+        }))
     }
     #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
     {

@@ -294,12 +294,10 @@ impl Program {
         if let Some(index) = free_index {
             debug_assert_eq!(self.nodes[index].tag(), CellTag::Free);
             self.nodes[index] = Cell::from_node(node, &mut self.cold_nodes);
-            let id = NodeId::from_index(index);
-            id
+            NodeId::from_index(index)
         } else {
             let cell = Cell::from_node(node, &mut self.cold_nodes);
-            let id = self.push_cell(cell);
-            id
+            self.push_cell(cell)
         }
     }
 
@@ -310,11 +308,9 @@ impl Program {
         if let Some(index) = free_index {
             debug_assert_eq!(self.nodes[index].tag(), CellTag::Free);
             self.nodes[index] = Cell::app(fun, arg);
-            let id = NodeId::from_index(index);
-            id
+            NodeId::from_index(index)
         } else {
-            let id = self.push_cell(Cell::app(fun, arg));
-            id
+            self.push_cell(Cell::app(fun, arg))
         }
     }
 }
