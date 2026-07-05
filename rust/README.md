@@ -30,13 +30,23 @@ Where the time goes (at C-matched memory):
   spine descent misses cache. C's bitmap allocator returns the lowest free slot and
   self-densifies.
 
-**Codegen floor (measurement-only, not shipped).** A profile-guided (PGO) build of
-the same Rust source - no algorithmic change - runs the self-host at **45.5 s**
-at the 128M heap and **49.4 s** at C-matched memory. That is a Rust codegen floor,
-not a win over C: with the same larger heap C `-O3` is **40.3 s**, and C PGO is
-**38.6 s**. PGO is deliberately not shipped (it is a build flag that complicates
-the reproducible-build story); it only marks the floor. Build it with
-`tools/native/build-selfhost-pgo.sh`.
+**Codegen floor - the fair PGO/heap matrix (measurement-only, not shipped).** A
+profile-guided (PGO) build of the same Rust source - no algorithmic change - runs
+the self-host at 45.5 s (128M heap) / 49.4 s (C-matched memory). But that is a Rust
+codegen floor, not a win over C: give C the same compiler and heap treatment and it
+stays ahead. Self-host at the matched 128M heap, all runs byte-identical:
+
+| self-host @ 128M heap | `-O3` | PGO |
+|---|---|---|
+| **C `eval.c`** | 40.3 s | **38.6 s** |
+| **Rust** | 53.6 s | **45.5 s** |
+
+At C's own default heap, C `-O3` is 46.4 s (89 GCs); the 128M heap alone is a ~13%
+C win (GC drops from 89 to 34 collections). The decisive equalized peer is therefore
+**Rust-PGO@128M 45.5 s vs C-PGO@128M 38.6 s = 1.18x C**: PGO buys Rust a large
+speedup but does not erase the gap once C gets the same treatment. PGO is
+deliberately not shipped (a build flag that complicates the reproducible-build
+story); it only marks the floor. Build it with `tools/native/build-selfhost-pgo.sh`.
 
 Size: the Rust runtime is ~22k LOC (including tests, the wasm/JS-FFI boundary, and
 the bench harness) against ~8k for the C runtime.
