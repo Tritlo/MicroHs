@@ -685,36 +685,12 @@ impl Program {
                 self.poke_unsigned(ptr, 8, value as u64)?;
                 return Ok(Some((3, self.unit_pair(args[2]))));
             }
-            "peek_uint8" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_unsigned(ptr, 1)? as i64)
-            }
-            "poke_uint8" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_unsigned(ptr, 1, value as u64)?;
-                Node::prim("I")
-            }
-            "peek_uint16" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_unsigned(ptr, 2)? as i64)
-            }
-            "poke_uint16" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_unsigned(ptr, 2, value as u64)?;
-                Node::prim("I")
-            }
-            "peek_uint32" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_unsigned(ptr, 4)? as i64)
-            }
-            "poke_uint32" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_unsigned(ptr, 4, value as u64)?;
-                Node::prim("I")
-            }
+            "peek_uint8" => self.ffi_peek_unsigned_int(args, 1)?,
+            "poke_uint8" => self.ffi_poke_unsigned_unit(args, 1)?,
+            "peek_uint16" => self.ffi_peek_unsigned_int(args, 2)?,
+            "poke_uint16" => self.ffi_poke_unsigned_unit(args, 2)?,
+            "peek_uint32" => self.ffi_peek_unsigned_int(args, 4)?,
+            "poke_uint32" => self.ffi_poke_unsigned_unit(args, 4)?,
             "peek_uint64" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let result = self.push_node(Node::Int64(self.peek_unsigned(ptr, 8)? as i64));
@@ -726,186 +702,58 @@ impl Program {
                 self.poke_unsigned(ptr, 8, value as u64)?;
                 return Ok(Some((3, self.unit_pair(args[2]))));
             }
-            "peek_int8" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_signed(ptr, 1)?)
-            }
-            "poke_int8" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_signed(ptr, 1, value)?;
-                Node::prim("I")
-            }
-            "peek_int16" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_signed(ptr, 2)?)
-            }
-            "poke_int16" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_signed(ptr, 2, value)?;
-                Node::prim("I")
-            }
-            "peek_int32" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_signed(ptr, 4)?)
-            }
-            "poke_int32" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_signed(ptr, 4, value)?;
-                Node::prim("I")
-            }
-            "peek_int64" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int64(self.peek_signed(ptr, 8)?)
-            }
-            "poke_int64" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int64(args[1])?;
-                self.poke_signed(ptr, 8, value)?;
-                Node::prim("I")
-            }
-            "peek_char" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_c_char(ptr)?)
-            }
-            "poke_char" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_c_char(ptr, value)?;
-                Node::prim("I")
-            }
-            "peek_schar" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_signed(ptr, size_of::<std::os::raw::c_schar>())?)
-            }
-            "poke_schar" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_signed(ptr, size_of::<std::os::raw::c_schar>(), value)?;
-                Node::prim("I")
-            }
-            "peek_uchar" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_unsigned(ptr, size_of::<std::os::raw::c_uchar>())? as i64)
-            }
+            "peek_int8" => self.ffi_peek_signed_int(args, 1)?,
+            "poke_int8" => self.ffi_poke_signed_unit(args, 1)?,
+            "peek_int16" => self.ffi_peek_signed_int(args, 2)?,
+            "poke_int16" => self.ffi_poke_signed_unit(args, 2)?,
+            "peek_int32" => self.ffi_peek_signed_int(args, 4)?,
+            "poke_int32" => self.ffi_poke_signed_unit(args, 4)?,
+            "peek_int64" => self.ffi_peek_signed_int64(args, 8)?,
+            "poke_int64" => self.ffi_poke_signed_int64_unit(args, 8)?,
+            "peek_char" => self.ffi_peek_c_char_int(args)?,
+            "poke_char" => self.ffi_poke_c_char_unit(args)?,
+            "peek_schar" => self.ffi_peek_signed_int(args, size_of::<std::os::raw::c_schar>())?,
+            "poke_schar" => self.ffi_poke_signed_unit(args, size_of::<std::os::raw::c_schar>())?,
+            "peek_uchar" => self.ffi_peek_unsigned_int(args, size_of::<std::os::raw::c_uchar>())?,
             "poke_uchar" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_unsigned(ptr, size_of::<std::os::raw::c_uchar>(), value as u64)?;
-                Node::prim("I")
+                self.ffi_poke_unsigned_unit(args, size_of::<std::os::raw::c_uchar>())?
             }
-            "peek_short" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_signed(ptr, size_of::<std::os::raw::c_short>())?)
-            }
-            "poke_short" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_signed(ptr, size_of::<std::os::raw::c_short>(), value)?;
-                Node::prim("I")
-            }
+            "peek_short" => self.ffi_peek_signed_int(args, size_of::<std::os::raw::c_short>())?,
+            "poke_short" => self.ffi_poke_signed_unit(args, size_of::<std::os::raw::c_short>())?,
             "peek_ushort" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_unsigned(ptr, size_of::<std::os::raw::c_ushort>())? as i64)
+                self.ffi_peek_unsigned_int(args, size_of::<std::os::raw::c_ushort>())?
             }
             "poke_ushort" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_unsigned(ptr, size_of::<std::os::raw::c_ushort>(), value as u64)?;
-                Node::prim("I")
+                self.ffi_poke_unsigned_unit(args, size_of::<std::os::raw::c_ushort>())?
             }
-            "peek_int" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_signed(ptr, size_of::<std::os::raw::c_int>())?)
-            }
-            "poke_int" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_signed(ptr, size_of::<std::os::raw::c_int>(), value)?;
-                Node::prim("I")
-            }
-            "peek_uint" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_unsigned(ptr, size_of::<std::os::raw::c_uint>())? as i64)
-            }
-            "poke_uint" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_unsigned(ptr, size_of::<std::os::raw::c_uint>(), value as u64)?;
-                Node::prim("I")
-            }
-            "peek_long" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_signed(ptr, size_of::<std::os::raw::c_long>())?)
-            }
-            "poke_long" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_signed(ptr, size_of::<std::os::raw::c_long>(), value)?;
-                Node::prim("I")
-            }
-            "peek_ulong" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_unsigned(ptr, size_of::<std::os::raw::c_ulong>())? as i64)
-            }
+            "peek_int" => self.ffi_peek_signed_int(args, size_of::<std::os::raw::c_int>())?,
+            "poke_int" => self.ffi_poke_signed_unit(args, size_of::<std::os::raw::c_int>())?,
+            "peek_uint" => self.ffi_peek_unsigned_int(args, size_of::<std::os::raw::c_uint>())?,
+            "poke_uint" => self.ffi_poke_unsigned_unit(args, size_of::<std::os::raw::c_uint>())?,
+            "peek_long" => self.ffi_peek_signed_int(args, size_of::<std::os::raw::c_long>())?,
+            "poke_long" => self.ffi_poke_signed_unit(args, size_of::<std::os::raw::c_long>())?,
+            "peek_ulong" => self.ffi_peek_unsigned_int(args, size_of::<std::os::raw::c_ulong>())?,
             "poke_ulong" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_unsigned(ptr, size_of::<std::os::raw::c_ulong>(), value as u64)?;
-                Node::prim("I")
+                self.ffi_poke_unsigned_unit(args, size_of::<std::os::raw::c_ulong>())?
             }
             "peek_llong" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_signed(ptr, size_of::<std::os::raw::c_longlong>())?)
+                self.ffi_peek_signed_int(args, size_of::<std::os::raw::c_longlong>())?
             }
             "poke_llong" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_signed(ptr, size_of::<std::os::raw::c_longlong>(), value)?;
-                Node::prim("I")
+                self.ffi_poke_signed_unit(args, size_of::<std::os::raw::c_longlong>())?
             }
             "peek_ullong" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_unsigned(ptr, size_of::<std::os::raw::c_ulonglong>())? as i64)
+                self.ffi_peek_unsigned_int(args, size_of::<std::os::raw::c_ulonglong>())?
             }
             "poke_ullong" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_unsigned(ptr, size_of::<std::os::raw::c_ulonglong>(), value as u64)?;
-                Node::prim("I")
+                self.ffi_poke_unsigned_unit(args, size_of::<std::os::raw::c_ulonglong>())?
             }
-            "peek_size_t" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Int(self.peek_unsigned(ptr, size_of::<usize>())? as i64)
-            }
-            "poke_size_t" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_int(args[1])?;
-                self.poke_unsigned(ptr, size_of::<usize>(), value as u64)?;
-                Node::prim("I")
-            }
-            "peek_flt32" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Float32(f32::from_ne_bytes(self.peek_array(ptr)?))
-            }
-            "poke_flt32" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_float32(args[1])?;
-                self.write_pointer_bytes(ptr, &value.to_ne_bytes())?;
-                Node::prim("I")
-            }
-            "peek_flt64" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                Node::Float64(f64::from_ne_bytes(self.peek_array(ptr)?))
-            }
-            "poke_flt64" => {
-                let ptr = self.eval_pointer_value(args[0])?;
-                let value = self.eval_float64(args[1])?;
-                self.write_pointer_bytes(ptr, &value.to_ne_bytes())?;
-                Node::prim("I")
-            }
+            "peek_size_t" => self.ffi_peek_unsigned_int(args, size_of::<usize>())?,
+            "poke_size_t" => self.ffi_poke_unsigned_unit(args, size_of::<usize>())?,
+            "peek_flt32" => self.ffi_peek_float32(args)?,
+            "poke_flt32" => self.ffi_poke_float32_unit(args)?,
+            "peek_flt64" => self.ffi_peek_float64(args)?,
+            "poke_flt64" => self.ffi_poke_float64_unit(args)?,
             "atan2" => {
                 let x = self.eval_float64(args[0])?;
                 let y = self.eval_float64(args[1])?;
@@ -1001,5 +849,83 @@ impl Program {
             _ => return Ok(None),
         };
         Ok(Some(result))
+    }
+
+    fn ffi_peek_signed_int(&mut self, args: &[NodeId], size: usize) -> Result<Node, EvalError> {
+        let ptr = self.eval_pointer_value(args[0])?;
+        Ok(Node::Int(self.peek_signed(ptr, size)?))
+    }
+
+    fn ffi_poke_signed_unit(&mut self, args: &[NodeId], size: usize) -> Result<Node, EvalError> {
+        let ptr = self.eval_pointer_value(args[0])?;
+        let value = self.eval_int(args[1])?;
+        self.poke_signed(ptr, size, value)?;
+        Ok(Node::prim("I"))
+    }
+
+    fn ffi_peek_unsigned_int(&mut self, args: &[NodeId], size: usize) -> Result<Node, EvalError> {
+        let ptr = self.eval_pointer_value(args[0])?;
+        Ok(Node::Int(self.peek_unsigned(ptr, size)? as i64))
+    }
+
+    fn ffi_poke_unsigned_unit(&mut self, args: &[NodeId], size: usize) -> Result<Node, EvalError> {
+        let ptr = self.eval_pointer_value(args[0])?;
+        let value = self.eval_int(args[1])?;
+        self.poke_unsigned(ptr, size, value as u64)?;
+        Ok(Node::prim("I"))
+    }
+
+    fn ffi_peek_signed_int64(&mut self, args: &[NodeId], size: usize) -> Result<Node, EvalError> {
+        let ptr = self.eval_pointer_value(args[0])?;
+        Ok(Node::Int64(self.peek_signed(ptr, size)?))
+    }
+
+    fn ffi_poke_signed_int64_unit(
+        &mut self,
+        args: &[NodeId],
+        size: usize,
+    ) -> Result<Node, EvalError> {
+        let ptr = self.eval_pointer_value(args[0])?;
+        let value = self.eval_int64(args[1])?;
+        self.poke_signed(ptr, size, value)?;
+        Ok(Node::prim("I"))
+    }
+
+    fn ffi_peek_c_char_int(&mut self, args: &[NodeId]) -> Result<Node, EvalError> {
+        let ptr = self.eval_pointer_value(args[0])?;
+        Ok(Node::Int(self.peek_c_char(ptr)?))
+    }
+
+    fn ffi_poke_c_char_unit(&mut self, args: &[NodeId]) -> Result<Node, EvalError> {
+        let ptr = self.eval_pointer_value(args[0])?;
+        let value = self.eval_int(args[1])?;
+        self.poke_c_char(ptr, value)?;
+        Ok(Node::prim("I"))
+    }
+
+    fn ffi_peek_float32(&mut self, args: &[NodeId]) -> Result<Node, EvalError> {
+        let ptr = self.eval_pointer_value(args[0])?;
+        let bytes: [u8; 4] = self.peek_array(ptr)?;
+        Ok(Node::Float32(f32::from_ne_bytes(bytes)))
+    }
+
+    fn ffi_poke_float32_unit(&mut self, args: &[NodeId]) -> Result<Node, EvalError> {
+        let ptr = self.eval_pointer_value(args[0])?;
+        let value = self.eval_float32(args[1])?;
+        self.write_pointer_bytes(ptr, &value.to_ne_bytes())?;
+        Ok(Node::prim("I"))
+    }
+
+    fn ffi_peek_float64(&mut self, args: &[NodeId]) -> Result<Node, EvalError> {
+        let ptr = self.eval_pointer_value(args[0])?;
+        let bytes: [u8; 8] = self.peek_array(ptr)?;
+        Ok(Node::Float64(f64::from_ne_bytes(bytes)))
+    }
+
+    fn ffi_poke_float64_unit(&mut self, args: &[NodeId]) -> Result<Node, EvalError> {
+        let ptr = self.eval_pointer_value(args[0])?;
+        let value = self.eval_float64(args[1])?;
+        self.write_pointer_bytes(ptr, &value.to_ne_bytes())?;
+        Ok(Node::prim("I"))
     }
 }
