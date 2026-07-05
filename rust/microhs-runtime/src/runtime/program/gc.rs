@@ -62,6 +62,146 @@ impl Program {
         }
     }
 
+    #[cfg(feature = "moving-gc")]
+    pub(in crate::runtime) fn mark_young_node_id(
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        nursery_start: usize,
+        id: NodeId,
+    ) {
+        if id.index() < nursery_start {
+            return;
+        }
+        Self::mark_node_id(marked, work, id);
+    }
+
+    #[cfg(feature = "moving-gc")]
+    pub(in crate::runtime) fn mark_young_pointer_target(
+        &self,
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        nursery_start: usize,
+        ptr: i64,
+    ) {
+        if let Some(id) = self.node_pointer_target(ptr) {
+            Self::mark_young_node_id(marked, work, nursery_start, id);
+        }
+    }
+
+    #[cfg(feature = "moving-gc")]
+    pub(in crate::runtime) fn mark_young_edges_from_cell(
+        &self,
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        nursery_start: usize,
+        index: usize,
+        cell: Cell,
+    ) {
+        if let Some((fun, arg)) = cell.app_fields() {
+            Self::mark_young_node_id(marked, work, nursery_start, fun);
+            Self::mark_young_node_id(marked, work, nursery_start, arg);
+            return;
+        }
+        match cell.tag() {
+            CellTag::Indir => {
+                if let Some(target) = cell.option_id_word1() {
+                    Self::mark_young_node_id(marked, work, nursery_start, target);
+                }
+            }
+            CellTag::Cold => match self.cold_node(NodeId::from_index(index)) {
+                Some(Node::App(fun, arg)) => {
+                    Self::mark_young_node_id(marked, work, nursery_start, *fun);
+                    Self::mark_young_node_id(marked, work, nursery_start, *arg);
+                }
+                Some(Node::Indir(target) | Node::MVar(target)) => {
+                    if let Some(target) = *target {
+                        Self::mark_young_node_id(marked, work, nursery_start, target);
+                    }
+                }
+                Some(Node::Ptr(ptr) | Node::RawFunPtr(ptr)) => {
+                    self.mark_young_pointer_target(marked, work, nursery_start, *ptr);
+                }
+                Some(Node::ForeignPtr(foreign_ptr)) => {
+                    self.mark_young_pointer_target(marked, work, nursery_start, foreign_ptr.ptr);
+                }
+                Some(Node::Weak(weak)) => {
+                    for id in [weak.key, weak.value, weak.finalizer].into_iter().flatten() {
+                        Self::mark_young_node_id(marked, work, nursery_start, id);
+                    }
+                }
+                Some(Node::BytesView(view)) => {
+                    Self::mark_young_node_id(marked, work, nursery_start, view.base);
+                }
+                Some(Node::Array(items)) => {
+                    for id in items.iter() {
+                        Self::mark_young_node_id(marked, work, nursery_start, *id);
+                    }
+                }
+                Some(
+                    Node::Free(_)
+                    | Node::Prim(_)
+                    | Node::Int(_)
+                    | Node::Int64(_)
+                    | Node::Float64(_)
+                    | Node::Float32(_)
+                    | Node::ThreadId(_)
+                    | Node::BigInt(_)
+                    | Node::Bytes(_)
+                    | Node::MutableBytes(_)
+                    | Node::Ffi(_)
+                    | Node::JsCall(_)
+                    | Node::JsWrap { .. }
+                    | Node::FunPtr(_)
+                    | Node::Tick(_),
+                )
+                | None => {}
+            },
+            CellTag::App
+            | CellTag::Free
+            | CellTag::KnownPrim
+            | CellTag::RuntimePrim
+            | CellTag::Int
+            | CellTag::Float32
+            | CellTag::ThreadId => {}
+        }
+    }
+
+    #[cfg(feature = "moving-gc")]
+    pub(in crate::runtime) fn mark_young_edges_from_old_space(
+        &self,
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        nursery_start: usize,
+    ) {
+        for (index, cell) in self
+            .nodes
+            .iter()
+            .copied()
+            .enumerate()
+            .take(nursery_start.min(self.nodes.len()))
+        {
+            self.mark_young_edges_from_cell(marked, work, nursery_start, index, cell);
+        }
+    }
+
+    #[cfg(feature = "moving-gc")]
+    pub(in crate::runtime) fn mark_young_reachable(
+        &self,
+        marked: &mut [bool],
+        work: &mut Vec<NodeId>,
+        nursery_start: usize,
+    ) {
+        while let Some(id) = work.pop() {
+            if id.index() < nursery_start {
+                continue;
+            }
+            let Some(cell) = self.nodes.get(id.index()).copied() else {
+                continue;
+            };
+            self.mark_young_edges_from_cell(marked, work, nursery_start, id.index(), cell);
+        }
+    }
+
     pub(in crate::runtime) fn node_pointer_target(&self, ptr: i64) -> Option<NodeId> {
         if ptr <= 0 {
             return None;
@@ -857,6 +997,7 @@ impl Program {
     ) -> Result<usize, EvalError> {
         let started = Instant::now();
         let allocations_since_collect = self.gc_allocations_since_collect;
+        let nursery_start = self.gc_nursery_start.min(self.nodes.len());
         let mut marked = std::mem::take(&mut self.gc_marked);
         marked.clear();
         marked.resize(self.nodes.len(), false);
@@ -879,15 +1020,13 @@ impl Program {
             machine_stack.as_deref(),
         );
         for id in self.node_pointers.iter().copied() {
-            Self::mark_node_id(&mut marked, &mut work, id);
+            Self::mark_young_node_id(&mut marked, &mut work, nursery_start, id);
         }
-        self.mark_reachable(&mut marked, &mut work, &mut foreign_finalizer_marked);
-        let weak_finalizers =
-            self.sweep_weaks_after_mark(&mut marked, &mut work, &mut foreign_finalizer_marked);
+        self.mark_young_edges_from_old_space(&mut marked, &mut work, nursery_start);
+        self.mark_young_reachable(&mut marked, &mut work, nursery_start);
         #[cfg(feature = "gc-phase-profile")]
         let mark_nanos = mark_started.elapsed().as_nanos();
         work.clear();
-        self.run_dead_foreign_finalizers(&foreign_finalizer_marked)?;
         #[cfg(feature = "gc-phase-profile")]
         let (
             young_profile_slots,
@@ -895,14 +1034,32 @@ impl Program {
             young_profile_dead,
             young_profile_old_to_young_sources,
             young_profile_old_to_young_edges,
-        ) = self.gc_profile_young_candidate_stats(&marked);
+        ) = {
+            let slots = self.nodes.len().saturating_sub(nursery_start);
+            let live = marked[nursery_start..].iter().filter(|live| **live).count();
+            let dead = slots.saturating_sub(live);
+            let mut young = vec![false; marked.len()];
+            for index in nursery_start..marked.len() {
+                young[index] = marked[index];
+            }
+            let mut old_to_young_sources = 0usize;
+            let mut old_to_young_edges = 0usize;
+            for (index, cell) in self.nodes.iter().copied().enumerate().take(nursery_start) {
+                let edges = self.gc_profile_old_to_young_edges_for_cell(index, cell, &young);
+                if edges != 0 {
+                    old_to_young_sources += 1;
+                    old_to_young_edges += edges;
+                }
+            }
+            (slots, live, dead, old_to_young_sources, old_to_young_edges)
+        };
 
         #[cfg(feature = "gc-phase-profile")]
         let sweep_started = Instant::now();
-        self.pending_weak_finalizers.extend(weak_finalizers);
         let old_len = self.nodes.len();
-        let freed = self.evacuate_marked_heap_for_moving_gc(
+        let freed = self.evacuate_marked_nursery_for_moving_gc(
             &marked,
+            nursery_start,
             current_root,
             frame_stack,
             eval_spine,
