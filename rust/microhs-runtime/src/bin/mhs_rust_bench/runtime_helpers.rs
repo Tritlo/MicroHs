@@ -9,10 +9,6 @@ pub(super) fn bytes_sink(bytes: &[u8]) -> usize {
     sink
 }
 
-pub(super) fn main_input_sink(input: &[u8]) -> usize {
-    bytes_sink(input)
-}
-
 pub(super) fn reduce_main_or_panic(
     program: &mut Program,
     limit: usize,
@@ -23,7 +19,7 @@ pub(super) fn reduce_main_or_panic(
     match program.reduce_main(limit) {
         Ok((_, steps)) => RunOnce {
             steps,
-            serialize_sink: main_input_sink(input),
+            serialize_sink: bytes_sink(input),
             step_limited: false,
             gc: GcStats::default(),
         },
@@ -34,7 +30,7 @@ pub(super) fn reduce_main_or_panic(
             if message == b"ExitSuccess" {
                 RunOnce {
                     steps: program.reduction_count().saturating_sub(reductions),
-                    serialize_sink: main_input_sink(input),
+                    serialize_sink: bytes_sink(input),
                     step_limited: false,
                     gc: GcStats::default(),
                 }
@@ -44,7 +40,7 @@ pub(super) fn reduce_main_or_panic(
         }
         Err(EvalError::StepLimit { .. }) => RunOnce {
             steps: program.reduction_count().saturating_sub(reductions),
-            serialize_sink: main_input_sink(input),
+            serialize_sink: bytes_sink(input),
             step_limited: true,
             gc: GcStats::default(),
         },

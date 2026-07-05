@@ -1,5 +1,5 @@
 use super::config::BenchMode;
-use super::runtime_helpers::{bytes_sink, main_input_sink, reduce_main_or_panic};
+use super::runtime_helpers::{bytes_sink, reduce_main_or_panic};
 use super::*;
 
 pub(super) struct ParseBench {
@@ -150,7 +150,7 @@ fn eval_once(
                 }
                 Err(EvalError::StepLimit { .. }) => RunOnce {
                     steps: program.reduction_count().saturating_sub(reductions),
-                    serialize_sink: main_input_sink(input),
+                    serialize_sink: bytes_sink(input),
                     step_limited: true,
                     gc: GcStats::default(),
                 },
@@ -197,7 +197,7 @@ pub(super) fn profile_eval(
                 }
                 Err(EvalError::StepLimit { .. }) => RunOnce {
                     steps: program.reduction_count().saturating_sub(reductions),
-                    serialize_sink: main_input_sink(input),
+                    serialize_sink: bytes_sink(input),
                     step_limited: true,
                     gc: GcStats::default(),
                 },
