@@ -77,7 +77,7 @@ impl Program {
         self.eval_whnf_value(
             "Int",
             id,
-            |program, root| program.cell(root).int_value(),
+            |program, root| program.cell_int_value(root),
             EvalError::ExpectedInt,
         )
     }
@@ -86,7 +86,7 @@ impl Program {
         self.eval_whnf_value(
             "Int64",
             id,
-            |program, root| program.cell(root).int64_value(),
+            |program, root| program.cell_int64_value(root),
             EvalError::ExpectedInt64,
         )
     }
@@ -95,7 +95,7 @@ impl Program {
         self.eval_whnf_value(
             "Float64",
             id,
-            |program, root| program.cell(root).float64_value(),
+            |program, root| program.cell_float64_value(root),
             EvalError::ExpectedFloat64,
         )
     }
@@ -104,7 +104,7 @@ impl Program {
         self.eval_whnf_value(
             "Float32",
             id,
-            |program, root| program.cell(root).float32_value(),
+            |program, root| program.cell_float32_value(root),
             EvalError::ExpectedFloat32,
         )
     }
@@ -126,7 +126,7 @@ impl Program {
         self.eval_whnf_value(
             "ThreadId",
             id,
-            |program, root| program.cell(root).thread_id_value(),
+            |program, root| program.cell_thread_id_value(root),
             EvalError::ExpectedThreadId,
         )
     }
@@ -152,16 +152,16 @@ impl Program {
 
     pub(in crate::runtime) fn pointer_value_from_whnf(&self, root: NodeId) -> Option<i64> {
         let cell = self.cell(root);
-        if let Some(value) = cell.int_value() {
+        if let Some(value) = self.cell_int_value(root) {
             return Some(value);
         }
-        if let Some(value) = cell.ptr_value() {
+        if let Some(value) = self.cell_ptr_value(root) {
             return Some(value);
         }
-        if let Some(value) = cell.raw_fun_ptr_value() {
+        if let Some(value) = self.cell_raw_fun_ptr_value(root) {
             return Some(value);
         }
-        if let Some(value) = cell.thread_id_value() {
+        if let Some(value) = self.cell_thread_id_value(root) {
             return Some(value);
         }
         match cell.prim() {

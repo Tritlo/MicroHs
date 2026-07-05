@@ -31,8 +31,12 @@ pub enum Node {
 
 #[derive(Clone, Copy, Debug)]
 pub(in crate::runtime) struct Cell {
+    #[cfg(not(feature = "packed-cell"))]
     pub(in crate::runtime) word0: u64,
+    #[cfg(not(feature = "packed-cell"))]
     pub(in crate::runtime) word1: u64,
+    #[cfg(feature = "packed-cell")]
+    pub(in crate::runtime) word: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -52,9 +56,30 @@ pub(in crate::runtime) enum CellTag {
     Cold,
 }
 
+#[cfg(not(feature = "packed-cell"))]
 pub(in crate::runtime) const CELL_TAG_BITS: u64 = 0xff;
+#[cfg(feature = "packed-cell")]
+pub(in crate::runtime) const CELL_TAG_BITS: u64 = 0x0f;
+#[cfg(not(feature = "packed-cell"))]
 pub(in crate::runtime) const CELL_PAYLOAD_SHIFT: u64 = 8;
+#[cfg(feature = "packed-cell")]
+pub(in crate::runtime) const CELL_PAYLOAD_SHIFT: u64 = 4;
+#[cfg(not(feature = "packed-cell"))]
 pub(in crate::runtime) const CELL_NONE_ID: u64 = u64::MAX;
+#[cfg(feature = "packed-cell")]
+pub(in crate::runtime) const CELL_NONE_ID: u64 = (1_u64 << PACKED_ID_BITS) - 1;
+#[cfg(feature = "packed-cell")]
+pub(in crate::runtime) const PACKED_ID_BITS: u64 = 30;
+#[cfg(feature = "packed-cell")]
+pub(in crate::runtime) const PACKED_ID_MASK: u64 = (1_u64 << PACKED_ID_BITS) - 1;
+#[cfg(feature = "packed-cell")]
+pub(in crate::runtime) const PACKED_PAYLOAD1_SHIFT: u64 = CELL_PAYLOAD_SHIFT + PACKED_ID_BITS;
+#[cfg(feature = "packed-cell")]
+pub(in crate::runtime) const PACKED_SCALAR_PAYLOAD_MASK: u64 = (1_u64 << 60) - 1;
+#[cfg(feature = "packed-cell")]
+pub(in crate::runtime) const PACKED_INT_MIN: i64 = -(1_i64 << 59);
+#[cfg(feature = "packed-cell")]
+pub(in crate::runtime) const PACKED_INT_MAX: i64 = (1_i64 << 59) - 1;
 
 impl CellTag {
     pub(in crate::runtime) fn from_bits(bits: u64) -> Self {
@@ -98,7 +123,14 @@ impl CellTag {
 impl Cell {
     #[inline]
     pub(in crate::runtime) fn tag_bits(self) -> u64 {
-        self.word0 & CELL_TAG_BITS
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return self.word0 & CELL_TAG_BITS;
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return self.word & CELL_TAG_BITS;
+        }
     }
 
     #[inline]
@@ -113,12 +145,19 @@ impl Cell {
             Node::Free(next) => Self::free(next),
             Node::Prim(Prim::Known(known)) => Self::known_prim(known),
             Node::Prim(Prim::Runtime(runtime)) => Self::runtime_prim(runtime),
-            Node::Int(value) => Self::int(value),
+            Node::Int(value) if can_inline_int(value) => Self::int(value),
+            #[cfg(not(feature = "packed-cell"))]
             Node::Int64(value) => Self::int64(value),
+            #[cfg(not(feature = "packed-cell"))]
             Node::Float64(value) => Self::float64(value),
             Node::Float32(value) => Self::float32(value),
+            #[cfg(not(feature = "packed-cell"))]
             Node::ThreadId(value) => Self::thread_id(value),
+            #[cfg(feature = "packed-cell")]
+            Node::ThreadId(value) if can_inline_int(value) => Self::thread_id(value),
+            #[cfg(not(feature = "packed-cell"))]
             Node::Ptr(value) => Self::ptr(value),
+            #[cfg(not(feature = "packed-cell"))]
             Node::RawFunPtr(value) => Self::raw_fun_ptr(value),
             cold => {
                 let index = cold_nodes.len();
@@ -133,16 +172,27 @@ impl Cell {
             CellTag::App => Node::App(self.id_payload(), self.id_word1()),
             CellTag::Indir => Node::Indir(self.option_id_word1()),
             CellTag::Free => Node::Free(self.option_id_word1()),
-            CellTag::KnownPrim => Node::Prim(Prim::Known(decode_known_prim(self.word1 as u16))),
-            CellTag::RuntimePrim => Node::Prim(Prim::Runtime(RuntimePrim(self.word1 as u16))),
-            CellTag::Int => Node::Int(self.word1 as i64),
-            CellTag::Int64 => Node::Int64(self.word1 as i64),
-            CellTag::Float64 => Node::Float64(f64::from_bits(self.word1)),
-            CellTag::Float32 => Node::Float32(f32::from_bits(self.word1 as u32)),
-            CellTag::ThreadId => Node::ThreadId(self.word1 as i64),
-            CellTag::Ptr => Node::Ptr(self.word1 as i64),
-            CellTag::RawFunPtr => Node::RawFunPtr(self.word1 as i64),
-            CellTag::Cold => cold_nodes[self.word1 as usize]
+            CellTag::KnownPrim => {
+                Node::Prim(Prim::Known(decode_known_prim(self.payload0() as u16)))
+            }
+            CellTag::RuntimePrim => Node::Prim(Prim::Runtime(RuntimePrim(self.payload0() as u16))),
+            CellTag::Int => Node::Int(self.int_value().expect("Int cell must decode")),
+            CellTag::Int64 => Node::Int64(self.int64_value().expect("Int64 cell must decode")),
+            CellTag::Float64 => {
+                Node::Float64(self.float64_value().expect("Float64 cell must decode"))
+            }
+            CellTag::Float32 => {
+                Node::Float32(self.float32_value().expect("Float32 cell must decode"))
+            }
+            CellTag::ThreadId => {
+                Node::ThreadId(self.thread_id_value().expect("ThreadId cell must decode"))
+            }
+            CellTag::Ptr => Node::Ptr(self.ptr_value().expect("Ptr cell must decode")),
+            CellTag::RawFunPtr => Node::RawFunPtr(
+                self.raw_fun_ptr_value()
+                    .expect("RawFunPtr cell must decode"),
+            ),
+            CellTag::Cold => cold_nodes[self.cold_index().expect("Cold cell must decode")]
                 .as_ref()
                 .expect("live cold cell pointed at freed cold node")
                 .clone(),
@@ -154,106 +204,261 @@ impl Cell {
     }
 
     pub(in crate::runtime) fn app(fun: NodeId, arg: NodeId) -> Self {
-        Self {
-            word0: (u64::from(fun.0) << CELL_PAYLOAD_SHIFT) | CellTag::App.bits(),
-            word1: u64::from(arg.0),
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return Self {
+                word0: (u64::from(fun.0) << CELL_PAYLOAD_SHIFT) | CellTag::App.bits(),
+                word1: u64::from(arg.0),
+            };
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return Self::two_id_payloads(CellTag::App, fun, arg);
         }
     }
 
     pub(in crate::runtime) fn indir(target: Option<NodeId>) -> Self {
-        Self {
-            word0: CellTag::Indir.bits(),
-            word1: pack_option_id(target),
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return Self {
+                word0: CellTag::Indir.bits(),
+                word1: pack_option_id(target),
+            };
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return Self::with_payload0(CellTag::Indir, pack_option_id(target));
         }
     }
 
     pub(in crate::runtime) fn free(next: Option<NodeId>) -> Self {
-        Self {
-            word0: CellTag::Free.bits(),
-            word1: pack_option_id(next),
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return Self {
+                word0: CellTag::Free.bits(),
+                word1: pack_option_id(next),
+            };
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return Self::with_payload0(CellTag::Free, pack_option_id(next));
         }
     }
 
     pub(in crate::runtime) fn known_prim(known: KnownPrim) -> Self {
-        Self {
-            word0: CellTag::KnownPrim.bits(),
-            word1: u64::from(encode_known_prim(known)),
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return Self {
+                word0: CellTag::KnownPrim.bits(),
+                word1: u64::from(encode_known_prim(known)),
+            };
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return Self::with_payload0(CellTag::KnownPrim, u64::from(encode_known_prim(known)));
         }
     }
 
     pub(in crate::runtime) fn runtime_prim(runtime: RuntimePrim) -> Self {
-        Self {
-            word0: CellTag::RuntimePrim.bits(),
-            word1: u64::from(runtime.0),
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return Self {
+                word0: CellTag::RuntimePrim.bits(),
+                word1: u64::from(runtime.0),
+            };
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return Self::with_payload0(CellTag::RuntimePrim, u64::from(runtime.0));
         }
     }
 
     pub(in crate::runtime) fn int(value: i64) -> Self {
-        Self {
-            word0: CellTag::Int.bits(),
-            word1: value as u64,
+        debug_assert!(can_inline_int(value));
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return Self {
+                word0: CellTag::Int.bits(),
+                word1: value as u64,
+            };
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return Self::signed_payload(CellTag::Int, value);
         }
     }
 
+    #[cfg_attr(feature = "packed-cell", allow(dead_code))]
     pub(in crate::runtime) fn int64(value: i64) -> Self {
-        Self {
-            word0: CellTag::Int64.bits(),
-            word1: value as u64,
+        debug_assert!(can_inline_int(value));
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return Self {
+                word0: CellTag::Int64.bits(),
+                word1: value as u64,
+            };
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return Self::signed_payload(CellTag::Int64, value);
         }
     }
 
+    #[cfg_attr(feature = "packed-cell", allow(dead_code))]
     pub(in crate::runtime) fn float64(value: f64) -> Self {
-        Self {
-            word0: CellTag::Float64.bits(),
-            word1: value.to_bits(),
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return Self {
+                word0: CellTag::Float64.bits(),
+                word1: value.to_bits(),
+            };
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            let bits = value.to_bits();
+            debug_assert!(bits <= PACKED_ID_MASK);
+            return Self::with_payload0(CellTag::Float64, bits);
         }
     }
 
     pub(in crate::runtime) fn float32(value: f32) -> Self {
-        Self {
-            word0: CellTag::Float32.bits(),
-            word1: u64::from(value.to_bits()),
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return Self {
+                word0: CellTag::Float32.bits(),
+                word1: u64::from(value.to_bits()),
+            };
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return Self::unsigned_payload(CellTag::Float32, u64::from(value.to_bits()));
         }
     }
 
     pub(in crate::runtime) fn thread_id(value: i64) -> Self {
-        Self {
-            word0: CellTag::ThreadId.bits(),
-            word1: value as u64,
+        debug_assert!(can_inline_int(value));
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return Self {
+                word0: CellTag::ThreadId.bits(),
+                word1: value as u64,
+            };
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return Self::signed_payload(CellTag::ThreadId, value);
         }
     }
 
+    #[cfg_attr(feature = "packed-cell", allow(dead_code))]
     pub(in crate::runtime) fn ptr(value: i64) -> Self {
-        Self {
-            word0: CellTag::Ptr.bits(),
-            word1: value as u64,
+        debug_assert!(can_inline_int(value));
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return Self {
+                word0: CellTag::Ptr.bits(),
+                word1: value as u64,
+            };
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return Self::signed_payload(CellTag::Ptr, value);
         }
     }
 
+    #[cfg_attr(feature = "packed-cell", allow(dead_code))]
     pub(in crate::runtime) fn raw_fun_ptr(value: i64) -> Self {
-        Self {
-            word0: CellTag::RawFunPtr.bits(),
-            word1: value as u64,
+        debug_assert!(can_inline_int(value));
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return Self {
+                word0: CellTag::RawFunPtr.bits(),
+                word1: value as u64,
+            };
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return Self::signed_payload(CellTag::RawFunPtr, value);
         }
     }
 
     pub(in crate::runtime) fn cold(index: usize) -> Self {
-        Self {
-            word0: CellTag::Cold.bits(),
-            word1: u64::try_from(index).expect("cold node table exceeded u64"),
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return Self {
+                word0: CellTag::Cold.bits(),
+                word1: u64::try_from(index).expect("cold node table exceeded u64"),
+            };
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            let index = u64::try_from(index).expect("cold node table exceeded u64");
+            debug_assert!(index < CELL_NONE_ID);
+            return Self::with_payload0(CellTag::Cold, index);
         }
     }
 
     pub(in crate::runtime) fn id_payload(self) -> NodeId {
-        NodeId((self.word0 >> CELL_PAYLOAD_SHIFT) as u32)
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return NodeId((self.word0 >> CELL_PAYLOAD_SHIFT) as u32);
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return NodeId(self.payload0() as u32);
+        }
     }
 
     pub(in crate::runtime) fn id_word1(self) -> NodeId {
-        NodeId(self.word1 as u32)
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return NodeId(self.word1 as u32);
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return NodeId(self.payload1() as u32);
+        }
     }
 
     pub(in crate::runtime) fn option_id_word1(self) -> Option<NodeId> {
-        unpack_option_id(self.word1)
+        unpack_option_id(self.payload0())
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn app_fun_trusted(self) -> Option<NodeId> {
+        let tag = self.tag_bits();
+        if tag == CellTag::App.bits() {
+            Some(self.id_payload())
+        } else {
+            debug_assert_ne!(tag, CellTag::Indir.bits());
+            debug_assert_ne!(tag, CellTag::Free.bits());
+            None
+        }
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn indir_target_trusted(self) -> Option<NodeId> {
+        debug_assert_eq!(self.tag_bits(), CellTag::Indir.bits());
+        self.option_id_word1()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn pointer_payload(self) -> Option<i64> {
+        match self.tag() {
+            CellTag::Ptr => self.ptr_value(),
+            CellTag::RawFunPtr => self.raw_fun_ptr_value(),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    #[cfg(feature = "eval-phase-profile")]
+    pub(in crate::runtime) fn prim_name(self) -> Option<&'static str> {
+        match self.tag() {
+            CellTag::KnownPrim => Some(decode_known_prim(self.payload0() as u16).name()),
+            CellTag::RuntimePrim => Some(RuntimePrim(self.payload0() as u16).name()),
+            _ => None,
+        }
     }
 
     pub(in crate::runtime) fn app_fields(self) -> Option<(NodeId, NodeId)> {
@@ -264,54 +469,175 @@ impl Cell {
     #[inline(always)]
     pub(in crate::runtime) fn prim(self) -> Option<Prim> {
         match self.tag_bits() {
-            3 => Some(Prim::Known(decode_known_prim(self.word1 as u16))),
-            4 => Some(Prim::Runtime(RuntimePrim(self.word1 as u16))),
+            3 => Some(Prim::Known(decode_known_prim(self.payload0() as u16))),
+            4 => Some(Prim::Runtime(RuntimePrim(self.payload0() as u16))),
             _ => None,
         }
     }
 
     pub(in crate::runtime) fn int_value(self) -> Option<i64> {
-        self.has_tag(CellTag::Int).then_some(self.word1 as i64)
+        self.has_tag(CellTag::Int)
+            .then(|| self.signed_payload_value())
     }
 
     pub(in crate::runtime) fn int64_value(self) -> Option<i64> {
-        self.has_tag(CellTag::Int64).then_some(self.word1 as i64)
+        self.has_tag(CellTag::Int64)
+            .then(|| self.signed_payload_value())
     }
 
     pub(in crate::runtime) fn thread_id_value(self) -> Option<i64> {
-        self.has_tag(CellTag::ThreadId).then_some(self.word1 as i64)
+        self.has_tag(CellTag::ThreadId)
+            .then(|| self.signed_payload_value())
     }
 
     pub(in crate::runtime) fn ptr_value(self) -> Option<i64> {
-        self.has_tag(CellTag::Ptr).then_some(self.word1 as i64)
+        self.has_tag(CellTag::Ptr)
+            .then(|| self.signed_payload_value())
     }
 
     pub(in crate::runtime) fn raw_fun_ptr_value(self) -> Option<i64> {
         self.has_tag(CellTag::RawFunPtr)
-            .then_some(self.word1 as i64)
+            .then(|| self.signed_payload_value())
     }
 
     pub(in crate::runtime) fn float64_value(self) -> Option<f64> {
         self.has_tag(CellTag::Float64)
-            .then_some(f64::from_bits(self.word1))
+            .then(|| f64::from_bits(self.payload0()))
     }
 
     pub(in crate::runtime) fn float32_value(self) -> Option<f32> {
         self.has_tag(CellTag::Float32)
-            .then_some(f32::from_bits(self.word1 as u32))
+            .then(|| f32::from_bits(self.unsigned_payload_value() as u32))
     }
 
     pub(in crate::runtime) fn cold_index(self) -> Option<usize> {
-        self.has_tag(CellTag::Cold).then_some(self.word1 as usize)
+        self.has_tag(CellTag::Cold)
+            .then_some(self.payload0() as usize)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn payload0(self) -> u64 {
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return self.word1;
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return (self.word >> CELL_PAYLOAD_SHIFT) & PACKED_ID_MASK;
+        }
+    }
+
+    #[inline]
+    #[cfg_attr(not(feature = "packed-cell"), allow(dead_code))]
+    pub(in crate::runtime) fn payload1(self) -> u64 {
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return self.word1;
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return (self.word >> PACKED_PAYLOAD1_SHIFT) & PACKED_ID_MASK;
+        }
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn signed_payload_value(self) -> i64 {
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return self.word1 as i64;
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return (self.word as i64) >> CELL_PAYLOAD_SHIFT;
+        }
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn unsigned_payload_value(self) -> u64 {
+        #[cfg(not(feature = "packed-cell"))]
+        {
+            return self.word1;
+        }
+        #[cfg(feature = "packed-cell")]
+        {
+            return (self.word >> CELL_PAYLOAD_SHIFT) & PACKED_SCALAR_PAYLOAD_MASK;
+        }
+    }
+
+    #[cfg(feature = "packed-cell")]
+    #[inline]
+    pub(in crate::runtime) fn with_payload0(tag: CellTag, payload: u64) -> Self {
+        assert!(payload <= PACKED_ID_MASK, "packed cell payload overflow");
+        Self {
+            word: (payload << CELL_PAYLOAD_SHIFT) | tag.bits(),
+        }
+    }
+
+    #[cfg(feature = "packed-cell")]
+    #[inline]
+    pub(in crate::runtime) fn two_id_payloads(tag: CellTag, left: NodeId, right: NodeId) -> Self {
+        let left = pack_id_payload(left);
+        let right = pack_id_payload(right);
+        Self {
+            word: (right << PACKED_PAYLOAD1_SHIFT) | (left << CELL_PAYLOAD_SHIFT) | tag.bits(),
+        }
+    }
+
+    #[cfg(feature = "packed-cell")]
+    #[inline]
+    pub(in crate::runtime) fn signed_payload(tag: CellTag, value: i64) -> Self {
+        assert!(can_inline_int(value), "packed signed cell payload overflow");
+        Self {
+            word: ((value as u64) << CELL_PAYLOAD_SHIFT) | tag.bits(),
+        }
+    }
+
+    #[cfg(feature = "packed-cell")]
+    #[inline]
+    pub(in crate::runtime) fn unsigned_payload(tag: CellTag, value: u64) -> Self {
+        assert!(
+            value <= PACKED_SCALAR_PAYLOAD_MASK,
+            "packed unsigned cell payload overflow"
+        );
+        Self {
+            word: (value << CELL_PAYLOAD_SHIFT) | tag.bits(),
+        }
     }
 }
 
 pub(in crate::runtime) fn pack_option_id(id: Option<NodeId>) -> u64 {
-    id.map_or(CELL_NONE_ID, |id| u64::from(id.0))
+    id.map_or(CELL_NONE_ID, pack_id_payload)
 }
 
 pub(in crate::runtime) fn unpack_option_id(word: u64) -> Option<NodeId> {
     (word != CELL_NONE_ID).then_some(NodeId(word as u32))
+}
+
+#[inline]
+pub(in crate::runtime) fn pack_id_payload(id: NodeId) -> u64 {
+    #[cfg(not(feature = "packed-cell"))]
+    {
+        return u64::from(id.0);
+    }
+    #[cfg(feature = "packed-cell")]
+    {
+        let packed = u64::from(id.0);
+        assert!(packed < CELL_NONE_ID, "packed cell NodeId overflow");
+        return packed;
+    }
+}
+
+#[inline]
+pub(in crate::runtime) fn can_inline_int(value: i64) -> bool {
+    #[cfg(not(feature = "packed-cell"))]
+    {
+        let _ = value;
+        return true;
+    }
+    #[cfg(feature = "packed-cell")]
+    {
+        return (PACKED_INT_MIN..=PACKED_INT_MAX).contains(&value);
+    }
 }
 
 #[derive(Default)]

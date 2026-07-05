@@ -136,10 +136,14 @@ impl Program {
                 .option_id_word1()
                 .map(|id| Self::gc_profile_young_edge(young, id))
                 .unwrap_or(0),
-            CellTag::Ptr | CellTag::RawFunPtr => {
-                self.gc_profile_young_pointer_edge(young, cell.word1 as i64)
-            }
+            CellTag::Ptr | CellTag::RawFunPtr => cell
+                .pointer_payload()
+                .map(|ptr| self.gc_profile_young_pointer_edge(young, ptr))
+                .unwrap_or(0),
             CellTag::Cold => match self.cold_node(NodeId::from_index(index)) {
+                Some(Node::Ptr(ptr) | Node::RawFunPtr(ptr)) => {
+                    self.gc_profile_young_pointer_edge(young, *ptr)
+                }
                 Some(Node::ForeignPtr(foreign_ptr)) => {
                     self.gc_profile_young_pointer_edge(young, foreign_ptr.ptr)
                 }
@@ -484,7 +488,7 @@ impl Program {
         } else {
             id
         };
-        if let Some(value) = self.nodes.get(target.index())?.int_value() {
+        if let Some(value) = self.cell_int_value(target) {
             if let Some(slot) = small_int_index(value) {
                 if let Some(canonical) = self.small_ints[slot] {
                     if canonical != target {
@@ -698,9 +702,14 @@ impl Program {
             }
             match cell.tag() {
                 CellTag::Ptr | CellTag::RawFunPtr => {
-                    self.mark_pointer_target(marked, work, cell.word1 as i64);
+                    if let Some(ptr) = cell.pointer_payload() {
+                        self.mark_pointer_target(marked, work, ptr);
+                    }
                 }
                 CellTag::Cold => match self.cold_node(id) {
+                    Some(Node::Ptr(ptr) | Node::RawFunPtr(ptr)) => {
+                        self.mark_pointer_target(marked, work, *ptr);
+                    }
                     Some(Node::ForeignPtr(foreign_ptr)) => {
                         if let Some(finalizer) = foreign_ptr.finalizer {
                             if let Some(marked) = foreign_finalizer_marked.get_mut(finalizer) {

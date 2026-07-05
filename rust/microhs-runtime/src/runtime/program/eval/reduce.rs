@@ -515,7 +515,7 @@ impl Program {
             Some(Seq) if args_len >= 2 => Some((2, arg!(1))),
             Some(IsInt) if args_len >= 1 => {
                 let root = self.resolve(arg!(0))?;
-                let n = self.cell(root).int_value().unwrap_or(-1);
+                let n = self.cell_int_value(root).unwrap_or(-1);
                 Some((1, self.int(n)))
             }
             Some(Thnum) if args_len >= 1 => {

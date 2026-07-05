@@ -486,8 +486,9 @@ impl Program {
             CellTag::App => "App",
             CellTag::Indir => "Indir",
             CellTag::Free => "Free",
-            CellTag::KnownPrim => decode_known_prim(cell.word1 as u16).name(),
-            CellTag::RuntimePrim => RuntimePrim(cell.word1 as u16).name(),
+            CellTag::KnownPrim | CellTag::RuntimePrim => {
+                cell.prim_name().expect("primitive tag must decode")
+            }
             CellTag::Int => "Int",
             CellTag::Int64 => "Int64",
             CellTag::Float64 => "Float64",

@@ -85,6 +85,7 @@ pub(super) fn main() -> ExitCode {
     println!("mode: {}", config.mode.as_str());
     println!("bytes: {bytes}");
     println!("node_size_bytes: {}", size_of::<Node>());
+    println!("cell_size_bytes: {}", cell_size_bytes());
     println!("node_id_size_bytes: {}", size_of::<NodeId>());
     println!("prim_size_bytes: {}", size_of::<Prim>());
     println!("iters: {}", config.iters);
