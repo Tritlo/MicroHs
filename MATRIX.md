@@ -4493,6 +4493,15 @@ This is a no-code audit for the next structural heap step. Current GC can mark r
 | 100M/32M bounded A/B | base ms: `1653.532`, `1528.960`, `1540.230`, `1588.316`, `1542.450`, `1542.852`, `1534.841`, `1515.181` (avg `1555.795`); candidate ms: `1591.988`, `1543.627`, `1629.755`, `1564.703`, `1554.472`, `1529.097`, `1607.395`, `1549.475` (avg `1571.314`, `+0.997%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,856`, sink `661902`, and `cell_size_bytes=8` |
 | reading | Inlining the medium WHNF frame dispatcher bloats or perturbs the outer driver enough to lose; only `3/8` pairs were favorable. Keep `apply_stack_frame_value` inlined, but leave the larger frame-pop boundary out of line |
 
+## 2026-07-05 Resolve Wrapper Inline-Control Probe
+
+| item | result |
+|---|---|
+| probe | rejected narrow resolver inline-control probe after the frame-value keeper: changed only `Program::resolve_for_whnf` to `#[inline(always)]`, without forcing `cell_trusted`, `app_fun_trusted`, or `resolve_whnf_trusted`. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1665.012`, `1587.911`, `1536.247`, `1516.003`, `1539.869`, `1531.707`, `1526.656`, `1543.239` (avg `1555.830`); candidate ms: `1605.111`, `1746.007`, `1566.072`, `1620.214`, `1548.335`, `1552.345`, `1558.442`, `1535.284` (avg `1591.476`, `+2.291%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,864`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Even the narrow resolver wrapper inline loses after the frame-value keeper, with only `2/8` favorable pairs. Leave resolver inlining compiler-chosen; do not retry this path without a different representation change |
+
 ## Active Tradeoffs
 
 | item | reading |
