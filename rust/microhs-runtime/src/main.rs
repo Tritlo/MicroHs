@@ -10,10 +10,11 @@ use microhs_runtime::{EvalError, parse_program};
 enum Mode {
     Dump,
     Whnf,
+    Main,
 }
 
 fn usage() {
-    eprintln!("usage: mhs-rust [--dump|--whnf] [--profile] [--profile-top N] FILE");
+    eprintln!("usage: mhs-rust [--dump|--whnf|--main] [--profile] [--profile-top N] FILE");
 }
 
 fn main() -> ExitCode {
@@ -27,6 +28,7 @@ fn main() -> ExitCode {
         match arg.as_str() {
             "--dump" => mode = Mode::Dump,
             "--whnf" => mode = Mode::Whnf,
+            "--main" => mode = Mode::Main,
             "--profile" => profile = true,
             "--profile-top" => {
                 let Some(value) = args.next() else {
@@ -100,6 +102,19 @@ fn main() -> ExitCode {
             Ok((root, steps)) => {
                 println!("{}", program.render(root));
                 eprintln!("{steps} reductions");
+                maybe_print_profile(&mut program, profile_top);
+                ExitCode::SUCCESS
+            }
+            Err(err) => {
+                let code = report_eval_error(&mut program, &file, err);
+                maybe_print_profile(&mut program, profile_top);
+                code
+            }
+        },
+        // Drive the program as a full IO `main` (like `mhseval`): the program's own
+        // output goes straight to stdout during reduction; we print nothing extra.
+        Mode::Main => match program.reduce_main(usize::MAX) {
+            Ok(_) => {
                 maybe_print_profile(&mut program, profile_top);
                 ExitCode::SUCCESS
             }
