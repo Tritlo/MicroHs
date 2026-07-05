@@ -4484,6 +4484,15 @@ This is a no-code audit for the next structural heap step. Current GC can mark r
 | 80Mi fair-memory gate | same-session baseline was byte-identical at `54.571074s`, `55.134585s`, `54.122945s` (median `54.571074s`, avg `54.609535s`), `3,659,455,028` steps, `50` GCs, high-water `88,207,753`, same SHA. Candidate 3x was byte-identical at `53.735463s`, `54.315319s`, `54.484259s` (median `54.315319s`, avg `54.178347s`, `-0.469%` median), `3,659,455,123` steps, `50` GCs, high-water `88,207,735`, sink `661902`, same SHA and `cmp=0` |
 | reading | Keeper: unlike the broader resolver/accessor inlining probes, this one removes a small still-out-of-line frame-value helper and survives both full gates. It improves the current 128M speed gate but still leaves Rust well above non-PGO C default (`46.40s`), so continue codegen churn |
 
+## 2026-07-05 Finish-WHNF Frame Inline-Control Probe
+
+| item | result |
+|---|---|
+| probe | rejected source inline-control probe after the frame-value keeper: changed `Program::finish_whnf_stack_frame` to `#[inline(always)]` so the outer WHNF driver could see through the frame-pop/finish boundary. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1653.532`, `1528.960`, `1540.230`, `1588.316`, `1542.450`, `1542.852`, `1534.841`, `1515.181` (avg `1555.795`); candidate ms: `1591.988`, `1543.627`, `1629.755`, `1564.703`, `1554.472`, `1529.097`, `1607.395`, `1549.475` (avg `1571.314`, `+0.997%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,856`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Inlining the medium WHNF frame dispatcher bloats or perturbs the outer driver enough to lose; only `3/8` pairs were favorable. Keep `apply_stack_frame_value` inlined, but leave the larger frame-pop boundary out of line |
+
 ## Active Tradeoffs
 
 | item | reading |
