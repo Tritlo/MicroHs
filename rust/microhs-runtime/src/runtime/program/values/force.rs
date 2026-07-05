@@ -159,10 +159,13 @@ impl Program {
         &mut self,
         id: NodeId,
     ) -> Result<NodeId, EvalError> {
-        self.eval_whnf_value(
+        let root = self.eval_whnf_value(
             id,
             |program, root| {
-                if matches!(program.cold_node(root), Some(Node::ForeignPtr(_))) {
+                if matches!(
+                    program.cold_node(root),
+                    Some(Node::ForeignPtr(_) | Node::BigInt(_))
+                ) {
                     return Some(root);
                 }
                 match program.cell(root).prim() {
@@ -171,7 +174,22 @@ impl Program {
                 }
             },
             EvalError::ExpectedForeignPtr,
-        )
+        )?;
+        // A bare BigInt is an unrealized Integer (e.g. deserialized from a `%digits`
+        // literal by hDeserialize); the mpz FFI surface expects an Integer to be a
+        // ForeignPtr into GMP storage, so realize it in place: move the decimal into a
+        // fresh payload node and overwrite this node with a ForeignPtr pointing at it.
+        let decimal = match self.cold_node(root) {
+            Some(Node::BigInt(bytes)) => Some(bytes.as_slice().to_vec()),
+            _ => None,
+        };
+        if let Some(decimal) = decimal {
+            let payload = self.push_node(Node::bigint(decimal));
+            let ptr = self.pointer_for_node(payload, 0)?;
+            let foreign = self.foreign_ptr_node(None, 0, ptr);
+            self.set_node_at(root.index(), foreign);
+        }
+        Ok(root)
     }
 
     pub(in crate::runtime) fn eval_bytes(&mut self, id: NodeId) -> Result<Vec<u8>, EvalError> {
