@@ -671,32 +671,6 @@ impl fmt::Display for EvalError {
 
 impl std::error::Error for EvalError {}
 
-#[cfg_attr(
-    not(all(target_arch = "wasm32", not(target_os = "wasi"))),
-    allow(dead_code)
-)]
-pub(in crate::runtime) enum JsArg {
-    Int(i32),
-    UInt(u32),
-    Double(f64),
-    Object(u32),
-    String(Vec<u8>),
-}
-
-#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum JsValue {
-    Unit,
-    Int(i32),
-    UInt(u32),
-    Double(f64),
-    Float(f32),
-    Bool(bool),
-    Pointer(u32),
-    Object(u32),
-    Bytes(Vec<u8>),
-}
-
 #[derive(Clone, Debug)]
 pub struct Program {
     pub(in crate::runtime) nodes: Vec<Cell>,
