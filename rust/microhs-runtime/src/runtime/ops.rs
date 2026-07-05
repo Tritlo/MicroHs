@@ -570,7 +570,7 @@ pub(in crate::runtime) fn is_supported_runtime_prim_name(name: &str) -> bool {
     is_runtime_prim_name(name)
         && !matches!(
             name,
-            "IO.fork" | "IO.throwto" | "IO.threaddelay" | "IO.waitrdfd" | "IO.waitwrfd"
+            "IO.throwto" | "IO.threaddelay" | "IO.waitrdfd" | "IO.waitwrfd"
         )
 }
 

@@ -161,6 +161,7 @@ pub enum KnownPrim {
     IoTryReadMVar,
     IoTryTakeMVar,
     IoYield,
+    IoFork,
 }
 
 impl KnownPrim {
@@ -228,6 +229,7 @@ impl KnownPrim {
             "IO.tryreadmvar" => Self::IoTryReadMVar,
             "IO.trytakemvar" => Self::IoTryTakeMVar,
             "IO.yield" => Self::IoYield,
+            "IO.fork" => Self::IoFork,
             _ => {
                 if let Some(tag) = tag_index(name) {
                     return Some(Self::Tag(tag as u8));
@@ -313,6 +315,7 @@ impl KnownPrim {
             Self::IoTryReadMVar => "IO.tryreadmvar",
             Self::IoTryTakeMVar => "IO.trytakemvar",
             Self::IoYield => "IO.yield",
+            Self::IoFork => "IO.fork",
         }
     }
 }
@@ -383,6 +386,7 @@ pub(in crate::runtime) fn encode_known_prim(known: KnownPrim) -> u16 {
         KnownPrim::IoTryReadMVar => 58,
         KnownPrim::IoTryTakeMVar => 59,
         KnownPrim::IoYield => 60,
+        KnownPrim::IoFork => 62,
     }
 }
 
@@ -451,6 +455,7 @@ pub(in crate::runtime) fn decode_known_prim(code: u16) -> KnownPrim {
         58 => KnownPrim::IoTryReadMVar,
         59 => KnownPrim::IoTryTakeMVar,
         60 => KnownPrim::IoYield,
+        62 => KnownPrim::IoFork,
         64..=96 => KnownPrim::Tag((code - 64) as u8),
         128..=144 => KnownPrim::Tuple((code - 128) as u8),
         _ => unreachable!("invalid known prim code"),

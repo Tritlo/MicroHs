@@ -83,34 +83,60 @@ impl Program {
 
     pub fn reduce_main(&mut self, limit: usize) -> Result<(NodeId, usize), EvalError> {
         let world = self.world();
-        let root = self.app(self.root, world);
-        // Track the live computation in `self.root` so the GC (which always marks
-        // `self.root`) follows the running program rather than pinning the original
-        // `main` template. Otherwise nodes only reachable from the template — e.g. the
-        // key of a weak pointer that has gone out of scope — are never collected, so
-        // weak pointers never die and their finalizers never run.
-        self.root = root;
+        let main_root = self.app(self.root, world);
+        // `main` is thread slot 0 (id 1). Track it in `self.root` so the GC — which
+        // always marks `self.root` — follows the running program rather than pinning
+        // the original `main` template (weak pointers depend on that liveness).
+        self.threads = vec![Some(ThreadControl {
+            id: 1,
+            root: main_root,
+        })];
+        self.next_thread_id = 2;
+        self.run_queue = std::collections::VecDeque::from([0usize]);
+        self.current_thread = 0;
+        self.root = main_root;
         let start = self.reductions;
-        // Drive the computation in reduction slices. On StepLimit the local eval stack
-        // is discarded, but every completed reduction is memoized in the graph (redexes
-        // rewritten to indirections) and `self.root` advances to the continuation, so
-        // re-reducing resumes from the frontier without replaying side effects. Slicing
-        // is the substrate the cooperative scheduler needs; with a single thread it is
-        // transparent (same reductions, same effects).
+        // Cooperative round-robin scheduler. Each thread is a graph reduced in slices:
+        // on StepLimit the eval stack is discarded but the graph keeps every completed
+        // reduction (redexes rewritten to indirections) and the thread root advances to
+        // the continuation, so re-reducing resumes from the frontier without replaying
+        // side effects. With one thread this is exactly the transparent single-thread
+        // driver (byte-identical self-host).
         loop {
+            let Some(tid) = self.run_queue.pop_front() else {
+                return Err(EvalError::Deadlock);
+            };
+            let Some(root) = self.threads.get(tid).and_then(|t| t.as_ref()).map(|t| t.root) else {
+                continue; // reaped slot left in the queue
+            };
+            self.current_thread = tid;
+            self.root = root;
             let used = self.reductions - start;
             let remaining = limit.saturating_sub(used);
             if remaining == 0 {
                 return Err(EvalError::StepLimit { limit });
             }
             let slice = REDUCTION_SLICE.min(remaining);
-            match self.reduce_node_whnf(self.root, slice) {
-                Ok(root) => {
-                    self.root = root;
-                    return Ok((root, self.reductions - start));
+            match self.reduce_node_whnf(root, slice) {
+                Ok(final_root) => {
+                    if tid == 0 {
+                        // main finished: the program is done; other threads are dropped.
+                        self.root = final_root;
+                        return Ok((final_root, self.reductions - start));
+                    }
+                    self.threads[tid] = None; // reap a finished child
                 }
-                Err(EvalError::StepLimit { .. }) => continue,
-                Err(err) => return Err(err),
+                Err(EvalError::StepLimit { .. }) => {
+                    self.run_queue.push_back(tid); // slice expired; resume later
+                }
+                Err(err) => {
+                    if tid == 0 {
+                        return Err(err);
+                    }
+                    // A child died with an uncaught exception; reap it. (Refined when
+                    // the throwTo tests land.)
+                    self.threads[tid] = None;
+                }
             }
         }
     }

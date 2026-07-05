@@ -625,6 +625,7 @@ pub enum EvalError {
     UnsupportedForeignFinalizer(String),
     UnsupportedJsFfi,
     UnsupportedSerialization(NodeId),
+    Deadlock,
 }
 
 impl fmt::Display for EvalError {
@@ -661,8 +662,18 @@ impl fmt::Display for EvalError {
             Self::UnsupportedSerialization(id) => {
                 write!(f, "cannot serialize node {id:?}")
             }
+            Self::Deadlock => write!(f, "all threads blocked indefinitely"),
         }
     }
+}
+
+/// A cooperative green thread: an IO computation reduced in slices by the
+/// scheduler. `root` is the stable node whose in-place reduction advances the
+/// thread's continuation; re-reducing it resumes where a slice left off.
+#[derive(Clone, Debug)]
+pub(in crate::runtime) struct ThreadControl {
+    pub(in crate::runtime) id: i64,
+    pub(in crate::runtime) root: NodeId,
 }
 
 impl std::error::Error for EvalError {}
@@ -732,4 +743,12 @@ pub struct Program {
     #[cfg(feature = "profile")]
     pub(in crate::runtime) profile: Option<EvalProfile>,
     pub(in crate::runtime) reduce_depth: usize,
+    /// Green threads, indexed by slot; `None` is a reaped thread. Slot 0 is `main`.
+    pub(in crate::runtime) threads: Vec<Option<ThreadControl>>,
+    /// Runnable thread slots in round-robin order.
+    pub(in crate::runtime) run_queue: std::collections::VecDeque<usize>,
+    /// Slot of the thread currently being reduced.
+    pub(in crate::runtime) current_thread: usize,
+    /// Monotonic thread-id counter; `main` is 1 (matching the C runtime).
+    pub(in crate::runtime) next_thread_id: i64,
 }

@@ -93,6 +93,10 @@ impl Program {
             #[cfg(feature = "profile")]
             profile: None,
             reduce_depth: 0,
+            threads: Vec::new(),
+            run_queue: std::collections::VecDeque::new(),
+            current_thread: 0,
+            next_thread_id: 1,
         }
     }
 

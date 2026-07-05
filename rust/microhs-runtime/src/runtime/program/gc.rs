@@ -143,6 +143,11 @@ impl Program {
     ) {
         Self::mark_node_id(marked, work, self.root);
         Self::mark_node_id(marked, work, current_root);
+        // Every live thread's continuation is a root, else a suspended thread's graph
+        // would be collected out from under it.
+        for thread in self.threads.iter().flatten() {
+            Self::mark_node_id(marked, work, thread.root);
+        }
         for id in self.stable_ptrs.iter().flatten() {
             Self::mark_node_id(marked, work, *id);
         }
