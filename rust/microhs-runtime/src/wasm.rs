@@ -1,7 +1,8 @@
 use std::alloc::{Layout, alloc, dealloc};
 use std::cell::RefCell;
 
-use crate::{EvalError, JsValue, Program, parse_program};
+use crate::runtime::JsValue;
+use crate::{EvalError, Program, parse_program};
 
 const CALLBACK_LIMIT: usize = 100_000;
 

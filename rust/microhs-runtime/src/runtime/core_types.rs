@@ -683,8 +683,9 @@ pub(in crate::runtime) enum JsArg {
     String(Vec<u8>),
 }
 
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 #[derive(Clone, Debug, PartialEq)]
-pub enum JsValue {
+pub(crate) enum JsValue {
     Unit,
     Int(i32),
     UInt(u32),

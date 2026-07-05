@@ -85,6 +85,7 @@ impl Program {
         Ok(index)
     }
 
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     pub(in crate::runtime) fn js_value_node(
         &mut self,
         tag: u8,
@@ -104,6 +105,7 @@ impl Program {
         Ok(self.push_value_node(node))
     }
 
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     pub(in crate::runtime) fn js_value_from_node(
         &mut self,
         tag: u8,
