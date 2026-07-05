@@ -7,14 +7,6 @@ impl Program {
         name: &str,
         args: &[NodeId],
     ) -> Result<Option<(usize, NodeId)>, EvalError> {
-        self.bytes_op_inner(name, args)
-    }
-
-    pub(in crate::runtime) fn bytes_op_inner(
-        &mut self,
-        name: &str,
-        args: &[NodeId],
-    ) -> Result<Option<(usize, NodeId)>, EvalError> {
         if let Some(op) = BytesBinOp::from_prim(name) {
             let x = self.eval_bytes_id(args[0])?;
             let y = self.eval_bytes_id(args[1])?;
@@ -181,14 +173,6 @@ impl Program {
     }
 
     pub(in crate::runtime) fn bytes_unop(
-        &mut self,
-        name: &str,
-        args: &[NodeId],
-    ) -> Result<Option<(usize, NodeId)>, EvalError> {
-        self.bytes_unop_inner(name, args)
-    }
-
-    pub(in crate::runtime) fn bytes_unop_inner(
         &mut self,
         name: &str,
         args: &[NodeId],
