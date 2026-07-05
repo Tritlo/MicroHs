@@ -349,6 +349,24 @@ impl Program {
                 let unit = self.prim("I");
                 Some((1, self.pair(unit, arg!(0))))
             }
+            Some(IoFork) if args_len >= 2 => {
+                // forkIO action: spawn a runnable child reducing `action world`, and
+                // return its ThreadId to the current thread. Preemption is by slice, so
+                // the child runs when the current thread's slice expires.
+                let action = arg!(0);
+                let world = self.world();
+                let child_root = self.app(action, world);
+                let id = self.next_thread_id;
+                self.next_thread_id += 1;
+                let slot = self.threads.len();
+                self.threads.push(Some(ThreadControl {
+                    id,
+                    root: child_root,
+                }));
+                self.run_queue.push_back(slot);
+                let thread_id = self.push_node(Node::ThreadId(id));
+                Some((2, self.pair(thread_id, arg!(1))))
+            }
             Some(IoGetMaskingState) if args_len >= 1 => {
                 let state = self.int(self.masking_state);
                 Some((1, self.pair(state, arg!(0))))
