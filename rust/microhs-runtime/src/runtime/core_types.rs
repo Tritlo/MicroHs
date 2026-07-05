@@ -396,17 +396,17 @@ impl MutableBytesNode {
 }
 
 impl Node {
-    pub fn prim(name: &str) -> Self {
+    pub(crate) fn prim(name: &str) -> Self {
         let prim = Prim::from_name(name)
             .unwrap_or_else(|| panic!("unknown runtime primitive requested internally: {name}"));
         Self::Prim(prim)
     }
 
-    pub fn bigint(bytes: Vec<u8>) -> Self {
+    pub(crate) fn bigint(bytes: Vec<u8>) -> Self {
         Self::BigInt(Box::new(bytes))
     }
 
-    pub fn bytes(bytes: Vec<u8>) -> Self {
+    pub(crate) fn bytes(bytes: Vec<u8>) -> Self {
         Self::Bytes(Box::new(bytes))
     }
 
@@ -414,25 +414,25 @@ impl Node {
         Self::BytesView(Box::new(BytesViewNode { base, offset, len }))
     }
 
-    pub fn array(items: Vec<NodeId>) -> Self {
+    pub(crate) fn array(items: Vec<NodeId>) -> Self {
         Self::Array(Box::new(items))
     }
 
-    pub fn ffi(name: String) -> Self {
+    pub(crate) fn ffi(name: String) -> Self {
         Self::Ffi(Box::new(name))
     }
 
-    pub fn js_wrap(tags: String) -> Self {
+    pub(crate) fn js_wrap(tags: String) -> Self {
         Self::JsWrap {
             tags: Box::new(tags),
         }
     }
 
-    pub fn fun_ptr(name: impl Into<String>) -> Self {
+    pub(crate) fn fun_ptr(name: impl Into<String>) -> Self {
         Self::FunPtr(Box::new(name.into()))
     }
 
-    pub fn tick(bytes: Vec<u8>) -> Self {
+    pub(crate) fn tick(bytes: Vec<u8>) -> Self {
         Self::Tick(Box::new(bytes))
     }
 }
