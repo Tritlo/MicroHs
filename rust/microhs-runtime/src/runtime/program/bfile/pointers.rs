@@ -100,7 +100,7 @@ impl Program {
         &self,
         ptr: i64,
     ) -> Result<(usize, usize), EvalError> {
-        if ptr < ALLOCATION_PTR_BASE || ptr >= 0 {
+        if !(ALLOCATION_PTR_BASE..0).contains(&ptr) {
             return Err(EvalError::InvalidByteString);
         }
         let raw = ptr
@@ -147,7 +147,7 @@ impl Program {
         &self,
         ptr: i64,
     ) -> Result<Option<&[u8]>, EvalError> {
-        if ptr < ALLOCATION_PTR_BASE || ptr >= 0 {
+        if !(ALLOCATION_PTR_BASE..0).contains(&ptr) {
             return Ok(None);
         }
         let (slot, offset) = self.decode_allocation_pointer(ptr)?;
@@ -193,7 +193,7 @@ impl Program {
         ptr: i64,
         bytes: &[u8],
     ) -> Result<(), EvalError> {
-        if ptr >= ALLOCATION_PTR_BASE && ptr < 0 {
+        if (ALLOCATION_PTR_BASE..0).contains(&ptr) {
             let (slot, offset) = self.decode_allocation_pointer(ptr)?;
             let write_len = bytes.len();
             let available = self.allocations[slot]
