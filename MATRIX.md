@@ -4540,6 +4540,15 @@ This is a no-code audit for the next structural heap step. Current GC can mark r
 | 80Mi fair-memory gate | same-session baseline was byte-identical at `53.876516s`, `54.674004s`, `53.817361s` (median `53.876516s`, avg `54.122627s`), `3,659,454,876` steps, `50` GCs, high-water `88,207,717`, same SHA. Candidate 3x was byte-identical at `52.718458s`, `52.811665s`, `52.822633s` (median `52.811665s`, avg `52.784252s`, `-1.976%` median), same steps/GCs/high-water/sink, same SHA and `cmp=0` |
 | reading | Keeper: unlike inlining the WHNF dispatcher, cold/out-of-line layout for the two frame-completion dispatchers survives both full gates. Current Rust default is now around `50.04s` at 128M and `52.81s` at 80Mi, still above non-PGO C default (`46.40s`), so keep churning |
 
+## 2026-07-06 Rethread Segment Cold-Layout Probe
+
+| item | result |
+|---|---|
+| probe | rejected adjacent cold-layout probe after the frame-completion keeper: marked `Program::rethread_stack_app_segment` as `#[cold] #[inline(never)]`, trying to move stack rethread repair out of the hot layout near WHNF/fallback frame return. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1589.603`, `1747.486`, `1497.133`, `1497.095`, `1512.937`, `1501.213`, `1520.981`, `1520.779` (avg `1548.403`); candidate ms: `1519.551`, `1536.965`, `1542.521`, `1545.813`, `1580.646`, `1493.653`, `1548.950`, `1531.998` (avg `1537.512`, `-0.703%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,784`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Reject despite the apparent average: only `3/8` pairs were favorable and the average depended on a slow baseline outlier. The frame-completion cold bundle is useful, but pushing adjacent rethread repair cold does not show a stable bounded win |
+
 ## Active Tradeoffs
 
 | item | reading |
