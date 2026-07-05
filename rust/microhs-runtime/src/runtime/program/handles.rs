@@ -245,7 +245,6 @@ impl Program {
 
     pub(in crate::runtime) fn eval_weak_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
-            "Weak",
             id,
             |program, root| match program.cold_node(root) {
                 Some(Node::Weak(_)) => Some(root),
@@ -281,7 +280,6 @@ impl Program {
 
     pub(in crate::runtime) fn eval_mvar_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
-            "MVar",
             id,
             |program, root| match program.cold_node(root) {
                 Some(Node::MVar(_)) => Some(root),
@@ -367,8 +365,6 @@ impl Program {
         root: NodeId,
         limit: usize,
     ) -> Result<NodeId, EvalError> {
-        #[cfg(feature = "eval-phase-profile")]
-        self.profile_reduce_node_whnf_entry(root);
         self.reduce_whnf_from(root, limit, false, false)
             .map(|(root, _)| root)
     }

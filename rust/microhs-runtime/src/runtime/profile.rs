@@ -151,12 +151,6 @@ pub struct EvalProfile {
     pub stack_continue_next_heads: HashMap<String, usize>,
     #[cfg(feature = "eval-phase-profile")]
     pub app_allocation_resolved_site_shapes: HashMap<String, usize>,
-    #[cfg(feature = "eval-phase-profile")]
-    pub eval_whnf_value_calls: HashMap<String, usize>,
-    #[cfg(feature = "eval-phase-profile")]
-    pub eval_whnf_value_slow: HashMap<String, usize>,
-    #[cfg(feature = "eval-phase-profile")]
-    pub reduce_node_whnf_entry_shapes: HashMap<String, usize>,
     pub persistent_forces: usize,
     pub persistent_fallbacks: usize,
     pub fallback_eval_loop_steps: usize,
@@ -272,21 +266,6 @@ impl EvalProfile {
     #[cfg(feature = "eval-phase-profile")]
     pub fn top_app_allocation_resolved_site_shapes(&self, limit: usize) -> Vec<(&str, usize)> {
         sorted_profile_counts(&self.app_allocation_resolved_site_shapes, limit)
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_eval_whnf_value_calls(&self, limit: usize) -> Vec<(&str, usize)> {
-        sorted_profile_counts(&self.eval_whnf_value_calls, limit)
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_eval_whnf_value_slow(&self, limit: usize) -> Vec<(&str, usize)> {
-        sorted_profile_counts(&self.eval_whnf_value_slow, limit)
-    }
-
-    #[cfg(feature = "eval-phase-profile")]
-    pub fn top_reduce_node_whnf_entry_shapes(&self, limit: usize) -> Vec<(&str, usize)> {
-        sorted_profile_counts(&self.reduce_node_whnf_entry_shapes, limit)
     }
 }
 

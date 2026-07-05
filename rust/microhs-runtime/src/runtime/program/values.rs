@@ -55,19 +55,14 @@ impl Program {
     #[inline]
     pub(in crate::runtime) fn eval_whnf_value<T>(
         &mut self,
-        _kind: &'static str,
         id: NodeId,
         extract: impl Fn(&Self, NodeId) -> Option<T>,
         expected: impl Fn(NodeId) -> EvalError,
     ) -> Result<T, EvalError> {
         let root = self.resolve(id)?;
         if let Some(value) = extract(self, root) {
-            #[cfg(feature = "eval-phase-profile")]
-            self.profile_eval_whnf_value(_kind, true);
             return Ok(value);
         }
-        #[cfg(feature = "eval-phase-profile")]
-        self.profile_eval_whnf_value(_kind, false);
         let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
         let root = self.resolve(root)?;
         extract(self, root).ok_or_else(|| expected(root))
@@ -75,7 +70,6 @@ impl Program {
 
     pub(in crate::runtime) fn eval_int(&mut self, id: NodeId) -> Result<i64, EvalError> {
         self.eval_whnf_value(
-            "Int",
             id,
             |program, root| program.cell_int_value(root),
             EvalError::ExpectedInt,
@@ -84,7 +78,6 @@ impl Program {
 
     pub(in crate::runtime) fn eval_int64(&mut self, id: NodeId) -> Result<i64, EvalError> {
         self.eval_whnf_value(
-            "Int64",
             id,
             |program, root| program.cell_int64_value(root),
             EvalError::ExpectedInt64,
@@ -93,7 +86,6 @@ impl Program {
 
     pub(in crate::runtime) fn eval_float64(&mut self, id: NodeId) -> Result<f64, EvalError> {
         self.eval_whnf_value(
-            "Float64",
             id,
             |program, root| program.cell_float64_value(root),
             EvalError::ExpectedFloat64,
@@ -102,7 +94,6 @@ impl Program {
 
     pub(in crate::runtime) fn eval_float32(&mut self, id: NodeId) -> Result<f32, EvalError> {
         self.eval_whnf_value(
-            "Float32",
             id,
             |program, root| program.cell_float32_value(root),
             EvalError::ExpectedFloat32,
@@ -111,7 +102,6 @@ impl Program {
 
     pub(in crate::runtime) fn eval_bool(&mut self, id: NodeId) -> Result<bool, EvalError> {
         self.eval_whnf_value(
-            "Bool",
             id,
             |program, root| match program.cell(root).prim() {
                 Some(Prim::Known(KnownPrim::A)) => Some(true),
@@ -124,7 +114,6 @@ impl Program {
 
     pub(in crate::runtime) fn eval_thread_id(&mut self, id: NodeId) -> Result<i64, EvalError> {
         self.eval_whnf_value(
-            "ThreadId",
             id,
             |program, root| program.cell_thread_id_value(root),
             EvalError::ExpectedThreadId,
@@ -134,13 +123,9 @@ impl Program {
     pub(in crate::runtime) fn eval_pointer_value(&mut self, id: NodeId) -> Result<i64, EvalError> {
         let root = self.resolve(id)?;
         if let Some(value) = self.pointer_value_from_whnf(root) {
-            #[cfg(feature = "eval-phase-profile")]
-            self.profile_eval_whnf_value("Pointer", true);
             self.trace_suspicious_pointer_value(root, value);
             return Ok(value);
         }
-        #[cfg(feature = "eval-phase-profile")]
-        self.profile_eval_whnf_value("Pointer", false);
         let root = self.reduce_node_whnf(root, FORCE_REDUCTION_LIMIT)?;
         let root = self.resolve(root)?;
         let value = self
@@ -225,7 +210,6 @@ impl Program {
         id: NodeId,
     ) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
-            "ForeignPtr",
             id,
             |program, root| {
                 if matches!(program.cold_node(root), Some(Node::ForeignPtr(_))) {
@@ -247,7 +231,6 @@ impl Program {
 
     pub(in crate::runtime) fn eval_bytes_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
-            "Bytes",
             id,
             |program, root| match program.cold_node(root) {
                 Some(Node::Bytes(_) | Node::BytesView(_) | Node::MutableBytes(_)) => Some(root),
@@ -259,7 +242,6 @@ impl Program {
 
     pub(in crate::runtime) fn eval_array_id(&mut self, id: NodeId) -> Result<NodeId, EvalError> {
         self.eval_whnf_value(
-            "Array",
             id,
             |program, root| match program.cold_node(root) {
                 Some(Node::Array(_)) => Some(root),
