@@ -364,6 +364,9 @@ impl Program {
                     root: child_root,
                 }));
                 self.run_queue.push_back(slot);
+                // Leave the (previously single-thread, unbounded) slice so the scheduler
+                // switches to preemptive slicing now that a second thread exists.
+                self.reschedule_now = true;
                 let thread_id = self.push_node(Node::ThreadId(id));
                 Some((2, self.pair(thread_id, arg!(1))))
             }

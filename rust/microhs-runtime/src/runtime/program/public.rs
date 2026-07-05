@@ -116,7 +116,15 @@ impl Program {
             if remaining == 0 {
                 return Err(EvalError::StepLimit { limit });
             }
-            let slice = REDUCTION_SLICE.min(remaining);
+            // A lone runnable thread runs unbounded — full single-thread speed with no
+            // slicing overhead (the self-host stays byte-identical and fast). Once a
+            // second thread exists, slice preemptively so threads interleave.
+            let alive = self.threads.iter().filter(|t| t.is_some()).count();
+            let slice = if alive > 1 {
+                REDUCTION_SLICE.min(remaining)
+            } else {
+                remaining
+            };
             match self.reduce_node_whnf(root, slice) {
                 Ok(final_root) => {
                     if tid == 0 {
@@ -127,7 +135,13 @@ impl Program {
                     self.threads[tid] = None; // reap a finished child
                 }
                 Err(EvalError::StepLimit { .. }) => {
-                    self.run_queue.push_back(tid); // slice expired; resume later
+                    if std::mem::take(&mut self.reschedule_now) {
+                        // Yielded right after a fork: keep running this thread next so it
+                        // makes progress before the new child (preserves output order).
+                        self.run_queue.push_front(tid);
+                    } else {
+                        self.run_queue.push_back(tid); // slice expired; resume later
+                    }
                 }
                 Err(err) => {
                     if tid == 0 {
