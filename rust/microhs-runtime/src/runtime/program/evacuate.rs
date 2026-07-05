@@ -3,7 +3,6 @@
 use super::*;
 
 impl Program {
-    #[cfg_attr(not(feature = "moving-gc"), allow(dead_code))]
     pub(in crate::runtime) fn evacuate_marked_nursery_for_moving_gc(
         &mut self,
         marked: &[bool],
