@@ -4446,6 +4446,15 @@ This is a no-code audit for the next structural heap step. Current GC can mark r
 | 100M/32M bounded A/B | base ms: `1648.774`, `1557.196`, `1637.945`, `1588.946` (avg `1608.215`); candidate ms: `1836.949`, `1852.534`, `1560.032`, `1547.226` (avg `1699.185`, `+5.66%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,840`, sink `661902`, and `cell_size_bytes=8` |
 | reading | The global inline-threshold knob is even worse after the targeted source inlining keeper. Keep source-local inline decisions; do not ship the LLVM inline-threshold flag |
 
+## 2026-07-05 KnownPrim Dispatch-Order Probe
+
+| item | result |
+|---|---|
+| probe | rejected source layout probe: reordered the main `KnownPrim` rewrite match by old hot-head frequencies (`B`, `C`, `S'`, `C'`, `S`, `C'B`, `P`, `K`, then the rest) while preserving guard order within overlapping primitives. Source diff was reverted |
+| verification before timing | `cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --all-targets`, `cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile`, and candidate release `mhs-rust-bench` build passed |
+| 100M/32M bounded A/B | base ms: `1559.336`, `1571.774`, `1568.413`, `1598.320`, `1571.595`, `1555.292`, `1558.182`, `1547.115` (avg `1566.253`); candidate ms: `1596.304`, `1544.913`, `1550.161`, `1553.176`, `1564.487`, `1536.746`, `1595.673`, `1591.359` (avg `1566.602`, `+0.022%`). All samples used `100,807,543` steps, `3` GCs, high-water `33,949,836`, sink `661902`, and `cell_size_bytes=8` |
+| reading | Flat average and mixed pair direction (`5/8` favorable) are noise, not a codegen win. Preserve the original semantic/grouped dispatch order unless a later profile points to a narrower branch-layout change |
+
 ## Active Tradeoffs
 
 | item | reading |
