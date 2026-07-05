@@ -1,10 +1,13 @@
-struct CInProcessBench {
-    mode: BenchMode,
-    ns_per_iter: f64,
-    sink: usize,
+use super::config::BenchMode;
+use super::*;
+
+pub(super) struct CInProcessBench {
+    pub(super) mode: BenchMode,
+    pub(super) ns_per_iter: f64,
+    pub(super) sink: usize,
 }
 
-fn bench_c_mhsbench(
+pub(super) fn bench_c_mhsbench(
     input: &[u8],
     c_mhsbench: &str,
     mode: BenchMode,

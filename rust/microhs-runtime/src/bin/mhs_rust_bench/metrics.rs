@@ -1,12 +1,14 @@
-fn millis(duration: Duration) -> f64 {
+use super::*;
+
+pub(super) fn millis(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
 }
 
-fn nanos_millis(nanos: u128) -> f64 {
+pub(super) fn nanos_millis(nanos: u128) -> f64 {
     nanos as f64 / 1_000_000.0
 }
 
-fn print_gc_events(label: &str, gc: &GcStats) {
+pub(super) fn print_gc_events(label: &str, gc: &GcStats) {
     println!("{label}:");
     for event in &gc.events {
         #[cfg(feature = "gc-phase-profile")]
@@ -41,11 +43,11 @@ fn print_gc_events(label: &str, gc: &GcStats) {
     }
 }
 
-fn nanos_per_iter(duration: Duration, iters: usize) -> f64 {
+pub(super) fn nanos_per_iter(duration: Duration, iters: usize) -> f64 {
     duration.as_secs_f64() * 1_000_000_000.0 / iters as f64
 }
 
-fn mib_per_s(bytes: usize, iters: usize, duration: Duration) -> f64 {
+pub(super) fn mib_per_s(bytes: usize, iters: usize, duration: Duration) -> f64 {
     let mib = (bytes as f64 * iters as f64) / (1024.0 * 1024.0);
     mib / duration.as_secs_f64()
 }
