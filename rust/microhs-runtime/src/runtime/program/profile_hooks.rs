@@ -434,9 +434,6 @@ impl Program {
         if let Some(profile) = self.profile.as_mut() {
             profile.stack_app_updates += 1;
             profile.stack_app_update_apps += used;
-            if used == 0 {
-                profile.stack_app_update_allocations += 1;
-            }
         }
     }
 
