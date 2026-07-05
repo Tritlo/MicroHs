@@ -29,11 +29,17 @@ pub enum Node {
     Tick(Box<Vec<u8>>),
 }
 
+/// One hot heap slot.
+///
+/// A cell stores the common graph shapes in one word. Values that do not fit in
+/// the 4-bit tag plus 60-bit payload are represented as `CellTag::Cold` and
+/// live in `Program::cold_nodes`.
 #[derive(Clone, Copy, Debug)]
 pub(in crate::runtime) struct Cell {
     pub(in crate::runtime) word: u64,
 }
 
+/// Packed-cell tags for the hot arena representation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::runtime) enum CellTag {
     App,
@@ -661,6 +667,12 @@ impl fmt::Display for EvalError {
 
 impl std::error::Error for EvalError {}
 
+/// Loaded comb program plus all mutable runtime state.
+///
+/// `Program` owns the packed heap, cold payload table, host resources, caches,
+/// GC scratch buffers, and reduction counters. Methods are split across
+/// `runtime/program/*` modules, but the state intentionally stays together so
+/// the evaluator can mutate the heap and host tables without extra indirection.
 #[derive(Clone, Debug)]
 pub struct Program {
     pub(in crate::runtime) nodes: Vec<Cell>,

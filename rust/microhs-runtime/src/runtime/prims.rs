@@ -1,6 +1,10 @@
 //! MicroHs primitive identifiers and name/code mappings.
 use super::*;
 
+/// Stable index into the packed-cell arena.
+///
+/// The runtime keeps node ids stable across GC. Host handles, temporary eval
+/// state, and serialized graph references can therefore hold ids directly.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct NodeId(pub u32);
 

@@ -2,6 +2,8 @@
 use super::*;
 
 impl Program {
+    /// Run the hot explicit-stack reducer until it spends `budget` reductions,
+    /// reaches WHNF, or delegates to the fallback runtime path.
     pub(in crate::runtime) fn stack_eval_step(
         &mut self,
         mut head: NodeId,

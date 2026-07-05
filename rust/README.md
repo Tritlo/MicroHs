@@ -63,6 +63,7 @@ analysis live in `MATRIX.md` and `NOTES.md` at the repository root._
 | `microhs-runtime/src/bin/mhs-rust-bench.rs` | primary benchmark and self-host harness |
 | `microhs-runtime/src/wasm.rs` | browser wasm exports and JS-FFI boundary |
 | `microhs-runtime/src/runtime/` | evaluator, GC, host support, codecs, and tests |
+| `microhs-runtime/ARCHITECTURE.md` | reducer, heap, GC, and host-boundary overview |
 | `microhs-runtime/tools/native/` | native self-host comparison and PGO helpers |
 | `microhs-runtime/tools/wasm/browser/` | browser-shaped wasm/JS-FFI harnesses and C/Emscripten comparison |
 | `microhs-runtime/tools/wasm/wasi/` | WASI self-host harness |
