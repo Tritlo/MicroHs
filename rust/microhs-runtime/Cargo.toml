@@ -9,7 +9,6 @@ default = []
 profile = []
 eval-phase-profile = ["profile"]
 gc-phase-profile = []
-moving-gc = []
 
 [dependencies]
 libc = "0.2.186"
