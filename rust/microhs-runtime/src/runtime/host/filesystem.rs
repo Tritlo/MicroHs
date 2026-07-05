@@ -103,8 +103,6 @@ pub(in crate::runtime) fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 pub(in crate::runtime) fn getenv_bytes(name: &[u8]) -> Option<Vec<u8>> {
-    #[cfg(target_os = "wasi")]
-    wasi_trace_host("getenv", &String::from_utf8_lossy(name));
     let name = std::str::from_utf8(name).ok()?;
     std::env::var_os(name).map(|value| value.to_string_lossy().into_owned().into_bytes())
 }
@@ -143,15 +141,6 @@ pub(in crate::runtime) fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 pub(in crate::runtime) fn setenv_bytes(name: &[u8], value: &[u8], overwrite: i64) -> HostIntResult {
-    #[cfg(target_os = "wasi")]
-    wasi_trace_host(
-        "setenv",
-        &format!(
-            "name={} value_len={} overwrite={overwrite}",
-            String::from_utf8_lossy(name),
-            value.len()
-        ),
-    );
     if name.is_empty() || name.contains(&b'=') {
         return HostIntResult::err(errno_i32("EINVAL"));
     }
@@ -191,8 +180,6 @@ pub(in crate::runtime) fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 pub(in crate::runtime) fn unsetenv_bytes(name: &[u8]) -> HostIntResult {
-    #[cfg(target_os = "wasi")]
-    wasi_trace_host("unsetenv", &String::from_utf8_lossy(name));
     if name.is_empty() || name.contains(&b'=') {
         return HostIntResult::err(errno_i32("EINVAL"));
     }
@@ -268,8 +255,6 @@ pub(in crate::runtime) fn remove_path_bytes(path: &[u8]) -> HostIntResult {
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 pub(in crate::runtime) fn remove_path_bytes(path: &[u8]) -> HostIntResult {
-    #[cfg(target_os = "wasi")]
-    wasi_trace_host("remove", &String::from_utf8_lossy(path));
     let Ok(path) = std::str::from_utf8(path) else {
         return HostIntResult::err(errno_i32("EINVAL"));
     };
@@ -346,8 +331,6 @@ pub(in crate::runtime) fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 pub(in crate::runtime) fn chdir_path_bytes(path: &[u8]) -> HostIntResult {
-    #[cfg(target_os = "wasi")]
-    wasi_trace_host("chdir", &String::from_utf8_lossy(path));
     let Ok(path) = std::str::from_utf8(path) else {
         return HostIntResult::err(errno_i32("EINVAL"));
     };
@@ -380,11 +363,6 @@ pub(in crate::runtime) fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntRes
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 pub(in crate::runtime) fn mkdir_path_bytes(path: &[u8], mode: i64) -> HostIntResult {
-    #[cfg(target_os = "wasi")]
-    wasi_trace_host(
-        "mkdir",
-        &format!("path={} mode={mode}", String::from_utf8_lossy(path)),
-    );
     let _ = mode;
     let Ok(path) = std::str::from_utf8(path) else {
         return HostIntResult::err(errno_i32("EINVAL"));
@@ -411,8 +389,6 @@ pub(in crate::runtime) fn current_dir_bytes() -> Result<Vec<u8>, i32> {
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 pub(in crate::runtime) fn current_dir_bytes() -> Result<Vec<u8>, i32> {
-    #[cfg(target_os = "wasi")]
-    wasi_trace_host("getcwd", "");
     std::env::current_dir()
         .map(|path| path.to_string_lossy().into_owned().into_bytes())
         .map_err(|err| io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT")))
@@ -434,8 +410,6 @@ pub(in crate::runtime) fn executable_path_bytes() -> Result<Vec<u8>, i32> {
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 pub(in crate::runtime) fn executable_path_bytes() -> Result<Vec<u8>, i32> {
-    #[cfg(target_os = "wasi")]
-    wasi_trace_host("get_executable_path", "");
     std::env::current_exe()
         .map(|path| path.to_string_lossy().into_owned().into_bytes())
         .map_err(|err| io_error_errno(&err).unwrap_or_else(|| errno_i32("ENOENT")))
@@ -559,8 +533,6 @@ pub(in crate::runtime) fn get_permissions_path_bytes(path: &[u8]) -> HostIntResu
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 pub(in crate::runtime) fn get_permissions_path_bytes(path: &[u8]) -> HostIntResult {
-    #[cfg(target_os = "wasi")]
-    wasi_trace_host("get_permissions", &String::from_utf8_lossy(path));
     let Ok(path) = std::str::from_utf8(path) else {
         return HostIntResult::err(errno_i32("EINVAL"));
     };
@@ -641,14 +613,6 @@ pub(in crate::runtime) fn set_permissions_path_bytes(
     path: &[u8],
     permissions: i64,
 ) -> HostIntResult {
-    #[cfg(target_os = "wasi")]
-    wasi_trace_host(
-        "set_permissions",
-        &format!(
-            "path={} permissions={permissions}",
-            String::from_utf8_lossy(path)
-        ),
-    );
     let _ = permissions;
     let Ok(path) = std::str::from_utf8(path) else {
         return HostIntResult::err(errno_i32("EINVAL"));
@@ -694,8 +658,6 @@ pub(in crate::runtime) fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 pub(in crate::runtime) fn dir_entries_path_bytes(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
-    #[cfg(target_os = "wasi")]
-    wasi_trace_host("opendir", &String::from_utf8_lossy(path));
     let path = std::str::from_utf8(path).map_err(|_| errno_i32("EINVAL"))?;
     let mut entries = vec![b".".to_vec(), b"..".to_vec()];
     for entry in std::fs::read_dir(path)
@@ -751,15 +713,6 @@ pub(in crate::runtime) fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result
 
 #[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
 pub(in crate::runtime) fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result<BFile, i32> {
-    #[cfg(target_os = "wasi")]
-    wasi_trace_host(
-        "fopen",
-        &format!(
-            "path={} mode={}",
-            String::from_utf8_lossy(path),
-            String::from_utf8_lossy(mode)
-        ),
-    );
     let path = std::str::from_utf8(path).map_err(|_| errno_i32("EINVAL"))?;
     let mode = parse_native_file_mode(mode).ok_or_else(|| errno_i32("EINVAL"))?;
     let file = open_native_file(std::path::Path::new(path), mode)?;

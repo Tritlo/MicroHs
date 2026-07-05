@@ -86,8 +86,6 @@ impl Program {
             BFileKind::NativeFile { file, ungot } => {
                 use std::io::Read as _;
 
-                #[cfg(target_os = "wasi")]
-                wasi_trace_host("readb_native", &format!("len={len}"));
                 let mut bytes = vec![0; len];
                 let mut read = 0;
                 while read < len {
@@ -238,8 +236,6 @@ impl Program {
             BFileKind::NativeFile { file, .. } => {
                 use std::io::Write as _;
 
-                #[cfg(target_os = "wasi")]
-                wasi_trace_host("writeb_native", &format!("len={}", bytes.len()));
                 file.borrow_mut()
                     .write_all(bytes)
                     .map_err(|_| EvalError::InvalidHandle)?;

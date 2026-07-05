@@ -163,8 +163,6 @@ impl Program {
             BFileKind::NativeFile { file, .. } => {
                 use std::io::Write as _;
 
-                #[cfg(target_os = "wasi")]
-                wasi_trace_every("putb_native", 8192);
                 file.borrow_mut()
                     .write_all(&[byte as u8])
                     .map_err(|_| EvalError::InvalidHandle)

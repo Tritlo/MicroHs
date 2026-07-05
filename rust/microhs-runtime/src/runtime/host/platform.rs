@@ -125,41 +125,6 @@ pub(in crate::runtime) fn strerror_bytes(errno: i32) -> Vec<u8> {
         .into_bytes()
 }
 
-#[cfg(target_os = "wasi")]
-pub(in crate::runtime) fn wasi_trace_enabled() -> bool {
-    std::env::var_os("MHS_WASI_TRACE").is_some()
-}
-
-#[cfg(target_os = "wasi")]
-pub(in crate::runtime) fn wasi_trace_host(event: &str, detail: &str) {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    static COUNT: AtomicUsize = AtomicUsize::new(0);
-    if !wasi_trace_enabled() {
-        return;
-    }
-    let count = COUNT.fetch_add(1, Ordering::Relaxed);
-    if count < 256 {
-        eprintln!("wasi_host[{count}] {event} {detail}");
-    } else if count == 256 {
-        eprintln!("wasi_host trace capped");
-    }
-}
-
-#[cfg(target_os = "wasi")]
-pub(in crate::runtime) fn wasi_trace_every(event: &str, interval: usize) {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    static COUNT: AtomicUsize = AtomicUsize::new(0);
-    if !wasi_trace_enabled() {
-        return;
-    }
-    let count = COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    if count % interval == 0 {
-        eprintln!("wasi_host {event} count={count}");
-    }
-}
-
 #[cfg(all(
     any(target_os = "linux", target_os = "android"),
     not(target_arch = "wasm32")
