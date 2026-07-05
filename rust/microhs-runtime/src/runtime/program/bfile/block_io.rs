@@ -226,7 +226,7 @@ impl Program {
                 if end > buffer.len() {
                     buffer.resize(end, 0);
                 }
-                buffer[*pos..end].copy_from_slice(&bytes);
+                buffer[*pos..end].copy_from_slice(bytes);
                 *pos = end;
             }
             BFileKind::ReadOnlyMemoryView { .. } => {

@@ -318,7 +318,7 @@ mod tests {
         }
         assert_eq!(program.cell(new_app).app_fields(), Some((new_bytes, new_i)));
         match program.node_for_debug(new_pointer_target) {
-            Node::Bytes(bytes) => assert_eq!(&*bytes, &[b'z']),
+            Node::Bytes(bytes) => assert_eq!(&*bytes, b"z"),
             other => panic!("expected Bytes, got {other:?}"),
         }
 
