@@ -2,7 +2,7 @@
 set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-repo_root=$(cd -- "$script_dir/../.." && pwd)
+repo_root=$(cd -- "$script_dir/../../../.." && pwd)
 manifest="$repo_root/rust/microhs-runtime/Cargo.toml"
 
 input=${MHS_SELFHOST_COMB:-/tmp/mhs-selfhost.comb}

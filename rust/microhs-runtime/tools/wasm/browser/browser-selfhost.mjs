@@ -7,7 +7,7 @@ import createCModule from "./browser-bench-c.mjs";
 import { instantiateMicroHsRuntime } from "./host.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repo = path.resolve(here, "../../..");
+const repo = path.resolve(here, "../../../../..");
 const defaultInput = "/tmp/mhs-selfhost.comb";
 const rustWasm = path.join(repo, "target/wasm32-unknown-unknown/release/microhs_runtime.wasm");
 const compilerArgs = [
@@ -243,7 +243,7 @@ function parseArgs(argv) {
       case "-h":
       case "--help":
         console.log(
-          "usage: node rust/microhs-runtime/js/browser-selfhost.mjs " +
+          "usage: node rust/microhs-runtime/tools/wasm/browser/browser-selfhost.mjs " +
             "[--target both|rust|c] [--input FILE]"
         );
         process.exit(0);

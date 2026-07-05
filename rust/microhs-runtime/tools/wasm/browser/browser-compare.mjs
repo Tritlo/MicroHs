@@ -24,7 +24,7 @@ export async function runComparison(options = {}) {
   const reduceLimit = options.reduceLimit ?? DEFAULT_REDUCE_LIMIT;
   const rustWasm =
     options.rustWasm ??
-    new URL("../../../target/wasm32-unknown-unknown/release/microhs_runtime.wasm", import.meta.url);
+    new URL("../../../../../target/wasm32-unknown-unknown/release/microhs_runtime.wasm", import.meta.url);
   const runtime = await instantiateMicroHsRuntime(rustWasm);
   const rows = [];
 
@@ -358,7 +358,7 @@ function parseNonNegativeInt(value, arg) {
 
 function printUsage() {
   console.log(
-    "usage: node rust/microhs-runtime/js/browser-compare.mjs " +
+    "usage: node rust/microhs-runtime/tools/wasm/browser/browser-compare.mjs " +
       "[--iters N] [--warmup-iters N] [--scenario NAME:N] [--json]"
   );
 }

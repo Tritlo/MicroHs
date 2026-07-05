@@ -1,119 +1,92 @@
-# MicroHs Rust Rewrite
+# MicroHs Rust Runtime
 
-This directory is the staged Rust rewrite of the MicroHs runtime. The Haskell
-compiler stays Haskell and remains the authoritative `.comb` producer.
+This directory contains the staged Rust replacement for the MicroHs runtime.
+The Haskell compiler remains the authoritative `.comb` producer; Rust consumes
+and executes compiler-produced `.comb` files.
 
-The compatibility boundary is the existing combinator file format. Tier 0 keeps
-the C runtime as the oracle and teaches Rust to parse and reduce small pure
-programs from the same `.comb` data. Later tiers grow the runtime surface until
-the Rust implementation can replace `src/runtime/eval.c` for native and wasm
-targets.
+## Layout
 
-## Tiers
+| path | purpose |
+|---|---|
+| `microhs-runtime/src/lib.rs` | library entry point and public parser/runtime API |
+| `microhs-runtime/src/main.rs` | native `mhs-rust` CLI |
+| `microhs-runtime/src/bin/mhs-rust-bench.rs` | primary benchmark and self-host harness |
+| `microhs-runtime/src/wasm.rs` | browser wasm exports and JS-FFI boundary |
+| `microhs-runtime/src/runtime/` | evaluator, GC, host support, codecs, and tests |
+| `microhs-runtime/tools/native/` | native self-host comparison and PGO helpers |
+| `microhs-runtime/tools/wasm/browser/` | browser-shaped wasm/JS-FFI harnesses and C/Emscripten comparison |
+| `microhs-runtime/tools/wasm/wasi/` | WASI self-host harness |
 
-1. Parse `.comb` `v8.4` files and reduce the core pure combinators.
-2. Add literals, primitive arithmetic, strings, and arrays.
-3. Add IO actions, scheduler behavior, exceptions, and GC-owned data.
-4. Add C FFI, foreign exports, stable pointers, and ByteString/ForeignPtr parity.
-5. Add wasm builds, including the current JavaScript FFI bridge semantics.
-6. Switch selected MicroHs build targets from the C runtime to the Rust runtime.
+Generated local artifacts are ignored: `target/`,
+`microhs-runtime/tools/wasm/node_modules/`, and
+`microhs-runtime/tools/wasm/browser/browser-bench-c.mjs`.
 
-## Performance Gates
-
-Every tier should carry benchmarks alongside correctness checks. Tier 0 includes
-`mhs-rust-bench`, a dependency-free microbenchmark for parsing and reducing
-`.comb` programs:
+## Core Checks
 
 ```sh
-cargo run --release --bin mhs-rust-bench -- --scenario identity-chain:1000 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario arith-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario int64-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario float64-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario float32-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario bytes-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario cstring-pack:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario unpack-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario fromutf8-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario foreignptr-slice:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario array-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario io-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario io-array-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario io-bytes-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario io-control-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario performio-apply-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario argref-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario stdio-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario ffi-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario ffi-math-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario ffi-const-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario ffi-mem-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario ffi-wide-mem-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario ffi-word-mem-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario ffi-ptr-mem-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario ffi-strcpy-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario md5-string-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario getenv-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario env-set-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario errno-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario getcwd-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario dir-read-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario remove-missing-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario file-read-close-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario utf8-bfile-read-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario crlf-bfile-read-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario base64-bfile-read-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario lz77-bfile-read-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario bwt-bfile-read-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario lzma-bfile-read-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario rle-bfile-read-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario buf-bfile-read-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario bfile-read-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario mvar-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario ptr-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario rnf-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario stableptr-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario weak-chain:200 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario zoo-chain:300 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --scenario data-chain:300 --iters 1000
-cargo run --release --bin mhs-rust-bench -- --input path/to/file.comb --iters 100
-cargo run --release --bin mhs-rust-bench -- --scenario identity-chain:1000 --iters 100 \
-  --c-mhseval ./bin/mhseval
+cargo fmt --check --manifest-path rust/microhs-runtime/Cargo.toml
+cargo test --manifest-path rust/microhs-runtime/Cargo.toml --lib
+cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features eval-phase-profile
+cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features gc-phase-profile
+cargo build --release --manifest-path rust/microhs-runtime/Cargo.toml --bin mhs-rust-bench
+```
+
+## Native Benchmarks
+
+Run the Rust harness directly:
+
+```sh
+target/release/mhs-rust-bench --scenario identity-chain:1000 --iters 1000
+target/release/mhs-rust-bench --input /tmp/mhs-selfhost.comb --mode main \
+  --warmup-iters 0 --iters 1 -- \
+  ./bin/mhs -i -imhs -isrc -ilib MicroHs.Main -o/tmp/mhs-selfhost-out.comb
+```
+
+For C comparisons, use the in-process C benchmark, not the old process-spawning
+`mhseval` path:
+
+```sh
 make bin/mhsbench
-cargo run --release --bin mhs-rust-bench -- --scenario identity-chain:1000 --iters 100 \
+target/release/mhs-rust-bench --scenario identity-chain:1000 --iters 100 \
   --warmup-iters 100 --c-mhsbench ./bin/mhsbench
 ```
 
-With `--c-mhseval`, the benchmark runs the C evaluator on the same `.comb`
-input using `+RTS -rFILE -o/dev/null -RTS`. That measures C process
-parse/load/serialize wall time; keep it only as a legacy baseline. With
-`--c-mhsbench`, the benchmark runs `bin/mhsbench` once and the C runtime loops
-over parse, eval, and serialize in-process. The Rust runner passes
-`--mode whnf` by default, so C evaluates the same expression-shaped benchmark to
-WHNF that Rust evaluates. Use `--c-mhsbench-mode main` only for a real MicroHs
-main program that expects the runtime `World` argument. The comparable C number
-is `c_parse_eval_serialize_ns_per_iter`; the comparable Rust number is
-`parse_reduce_render_ns_per_iter`. Both sides serialize the WHNF result as a
-`.comb` fragment before updating the sink. Rust `whnf_steps` counts
-driver-visible WHNF rewrites. Strict primitive forcing that still happens inside
-helper evaluators is included in elapsed time but not always counted as
-separate steps; F2 strict-result marker forcing through the unified WHNF driver
-stack is counted in the driver.
-
-For main-program benchmarks, pass exact program argv after `--`, including
-`argv[0]`, for example:
+The self-host neutrality and PGO helpers live under `tools/native/`:
 
 ```sh
-target/release/mhs-rust-bench --input /tmp/mhs-selfhost.comb --mode main \
-  --warmup-iters 0 --iters 1 \
-  --c-mhsbench ./bin/mhsbench --c-mhsbench-mode main \
-  -- ./bin/mhs -i -imhs -isrc -ilib MicroHs.Main -o/tmp/mhs-selfhost-out.comb
+rust/microhs-runtime/tools/native/bench-selfhost-neutrality.sh
+rust/microhs-runtime/tools/native/build-selfhost-pgo.sh
 ```
 
-In `main` mode both harnesses measure parse plus execution and avoid serializing
-the whole post-run root graph; validate the output artifact separately.
+## Browser/WASM
 
-Treat `parse_ns_per_iter` as a parser diagnostic, not as a clean component of
-`parse_reduce_render_ns_per_iter`. The reduce path mutates the graph before
-Rust drops it, while parse-only drops the original graph, so the two rows can
-have different destruction costs. Use repeated runs, matching `--warmup-iters`,
-and the `serialize_sink` / `c_bench_sink` rows when judging C/Rust ratios.
+Build the Rust browser wasm plus the C/Emscripten comparison module:
+
+```sh
+rust/microhs-runtime/tools/wasm/browser/build-browser-bench.sh
+```
+
+Then run the browser-shaped Node harnesses:
+
+```sh
+node rust/microhs-runtime/tools/wasm/browser/browser-compare.mjs --iters 1000 --warmup-iters 100
+node rust/microhs-runtime/tools/wasm/browser/browser-selfhost.mjs --target rust
+node rust/microhs-runtime/tools/wasm/browser/browser-selfhost.mjs --target c
+```
+
+## WASI
+
+Install the JS WASI shim once from the wasm tool root:
+
+```sh
+cd rust/microhs-runtime/tools/wasm
+npm install
+```
+
+Build and run the WASI self-host harness:
+
+```sh
+cargo build --release --manifest-path rust/microhs-runtime/Cargo.toml \
+  --target wasm32-wasip1 --bin mhs-rust-bench
+node rust/microhs-runtime/tools/wasm/wasi/wasi-selfhost.mjs /tmp/mhs-selfhost.comb
+```

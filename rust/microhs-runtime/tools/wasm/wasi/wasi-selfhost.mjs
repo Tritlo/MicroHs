@@ -5,9 +5,9 @@
 // bespoke host.mjs JS-FFI bridge, and — unlike node's native `node:wasi` — the
 // pure-JS shim tolerates the ~627MB arena growth the full self-host needs.
 //
-// Prereq:  npm install            (in this directory; pulls @bjorn3/browser_wasi_shim)
+// Prereq:  npm install            (in rust/microhs-runtime/tools/wasm)
 //          cargo build --release --target wasm32-wasip1 --bin mhs-rust-bench
-// Usage:   node wasi-selfhost.mjs [comb] [gcInterval]
+// Usage:   node rust/microhs-runtime/tools/wasm/wasi/wasi-selfhost.mjs [comb] [gcInterval]
 import { WASI, File, Directory, PreopenDirectory, OpenFile, ConsoleStdout } from "@bjorn3/browser_wasi_shim";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repo = path.resolve(here, "../../..");
+const repo = path.resolve(here, "../../../../..");
 const wasmPath = path.join(repo, "target/wasm32-wasip1/release/mhs-rust-bench.wasm");
 const combPath = process.argv[2] ?? "/tmp/mhs-selfhost.comb";
 const gcInterval = process.argv[3] ?? "33554432";

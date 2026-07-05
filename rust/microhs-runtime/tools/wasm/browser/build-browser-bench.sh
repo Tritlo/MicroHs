@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
 emcc="${EMCC:-/home/tritlo/emsdk/upstream/emscripten/emcc}"
 em_cache="${EM_CACHE:-/tmp/mhs-emcc-cache}"
-out="$repo/rust/microhs-runtime/js/browser-bench-c.mjs"
+out="$repo/rust/microhs-runtime/tools/wasm/browser/browser-bench-c.mjs"
 
 if [[ ! -x "$emcc" ]]; then
   echo "emcc not found at $emcc; set EMCC=/path/to/emcc" >&2
