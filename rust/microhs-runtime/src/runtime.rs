@@ -2,7 +2,7 @@
 use std::cmp::Ordering;
 #[cfg(feature = "profile")]
 use std::collections::BTreeMap;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::mem::{MaybeUninit, size_of};
 #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]

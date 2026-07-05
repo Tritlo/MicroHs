@@ -2,10 +2,9 @@
 #[cfg(test)]
 mod tests {
     use crate::runtime::{
-        BFile, BFileKind, EvalFrameStack, EvalSpine, FORCE_REDUCTION_LIMIT,
-        IGNORED_IO_SHORTCUT_RECURSION_LIMIT, MpzValue, PersistentSpine, bwt_decode, bwt_encode,
-        lz77_compress, lz77_decompress, lzma_compress_payload, lzma_decompress_payload,
-        serialize_bytes_quoted,
+        BFile, BFileKind, EvalSpine, FORCE_REDUCTION_LIMIT, IGNORED_IO_SHORTCUT_RECURSION_LIMIT,
+        MpzValue, bwt_decode, bwt_encode, lz77_compress, lz77_decompress, lzma_compress_payload,
+        lzma_decompress_payload, serialize_bytes_quoted,
     };
     use crate::{EvalError, KnownPrim, Node, NodeId, ParseError, Prim, Program, parse_program};
 
@@ -17,15 +16,7 @@ mod tests {
 
     fn collect_for_test(program: &mut Program, root: NodeId) {
         program
-            .collect_garbage_between_steps(
-                root,
-                &EvalFrameStack::default(),
-                &EvalSpine::default(),
-                &PersistentSpine::default(),
-                &[],
-                &[],
-                None,
-            )
+            .collect_garbage_between_steps(root, &EvalSpine::default(), &[], &[], None)
             .unwrap();
     }
 

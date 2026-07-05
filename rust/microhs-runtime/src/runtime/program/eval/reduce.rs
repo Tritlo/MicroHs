@@ -77,24 +77,6 @@ impl Program {
         node
     }
 
-    pub(in crate::runtime) fn strict_redex_from_eval_spine(
-        &mut self,
-        root: NodeId,
-        used: usize,
-        spine: &EvalSpine,
-        scratch_apps: &mut Vec<NodeId>,
-    ) -> StrictRedex {
-        if spine.len() == used {
-            return StrictRedex::Root(root);
-        }
-        spine.write_apps_head_order(scratch_apps);
-        StrictRedex::Spine {
-            root,
-            used,
-            apps: scratch_apps.clone(),
-        }
-    }
-
     pub(in crate::runtime) fn eval_loop_result(
         &mut self,
         profile_head: ProfileHead,
@@ -125,9 +107,7 @@ impl Program {
         budget: usize,
         spine: &mut EvalSpine,
         scratch_args: &mut Vec<NodeId>,
-        scratch_apps: &mut Vec<NodeId>,
-        frame_stack: &mut EvalFrameStack,
-        strict_markers: bool,
+        _scratch_apps: &mut Vec<NodeId>,
     ) -> Result<Option<EvalLoopStep>, EvalError> {
         if self.profiling_enabled() {
             self.profile_fallback_eval_loop_step();
@@ -164,52 +144,14 @@ impl Program {
                 return Ok(Some(self.eval_loop_result(profile_head, node, $reductions)));
             }};
         }
-        macro_rules! strict_marker_step {
-            ($used:expr, $variant:ident, $frame:ident, $kind:expr, $next:expr) => {{
-                let redex = self.strict_redex_from_eval_spine(root, $used, spine, scratch_apps);
-                if self.profiling_enabled() {
-                    self.profile_eval_frame_push(stringify!($variant));
-                }
-                frame_stack.push(EvalFrame::$variant($frame {
-                    redex,
-                    profile_head,
-                    kind: $kind,
-                }));
-                return Ok(Some(EvalLoopStep {
-                    node: $next,
-                    reductions: 0,
-                }));
-            }};
-        }
-        macro_rules! strict_int64_shift_marker_step {
-            ($used:expr, $op:expr, $x:expr, $next:expr) => {{
-                let redex = self.strict_redex_from_eval_spine(root, $used, spine, scratch_apps);
-                if self.profiling_enabled() {
-                    self.profile_eval_frame_push("Int64Shift");
-                }
-                frame_stack.push(EvalFrame::Int64Shift(Int64ShiftFrame {
-                    redex,
-                    profile_head,
-                    op: $op,
-                    x: $x,
-                }));
-                return Ok(Some(EvalLoopStep {
-                    node: $next,
-                    reductions: 0,
-                }));
-            }};
-        }
-
         let head_dispatch = match self.cell(head).prim() {
             Some(Prim::Known(known)) => EvalHead::Known(known),
             Some(Prim::Runtime(runtime)) => {
                 let name = runtime.name();
                 let action = runtime.strict_action(args_len);
-                let needs_fallback_name =
-                    !strict_markers || matches!(action, StrictPrimitiveAction::None);
                 EvalHead::Other {
                     action,
-                    fallback_name: needs_fallback_name.then_some(name),
+                    fallback_name: Some(name),
                 }
             }
             None => match self.cold_node(head) {
@@ -225,7 +167,7 @@ impl Program {
             },
         };
 
-        let (known, strict_action, fallback_name) = match head_dispatch {
+        let (known, fallback_name) = match head_dispatch {
             EvalHead::Ffi(name) => {
                 if self.profiling_enabled() {
                     self.profile_arg_materialization(args_len);
@@ -257,11 +199,8 @@ impl Program {
                 };
                 rewrite_step!(used, node, 1);
             }
-            EvalHead::Known(known) => (Some(known), StrictPrimitiveAction::None, None),
-            EvalHead::Other {
-                action,
-                fallback_name,
-            } => (None, action, fallback_name),
+            EvalHead::Known(known) => (Some(known), None),
+            EvalHead::Other { fallback_name, .. } => (None, fallback_name),
             EvalHead::Whnf => return Ok(None),
         };
         use KnownPrim::*;
@@ -295,119 +234,6 @@ impl Program {
                 let next = self.app(arg!(1), result);
                 let node = self.app(next, arg!(2));
                 rewrite_step!(3, node, 2);
-            }
-        }
-
-        if strict_markers {
-            match known {
-                Some(IoStrict) if args_len >= 2 => {
-                    strict_marker_step!(
-                        2,
-                        Whnf,
-                        WhnfFrame,
-                        WhnfFrameKind::IoStrict {
-                            action: arg!(0),
-                            value: arg!(1),
-                        },
-                        arg!(1)
-                    );
-                }
-                Some(Seq) if args_len >= 2 => {
-                    strict_marker_step!(
-                        2,
-                        Whnf,
-                        WhnfFrame,
-                        WhnfFrameKind::Seq { result: arg!(1) },
-                        arg!(0)
-                    );
-                }
-                Some(IsInt) if args_len >= 1 => {
-                    strict_marker_step!(1, Whnf, WhnfFrame, WhnfFrameKind::IsInt, arg!(0));
-                }
-                _ => {}
-            }
-        }
-
-        if strict_markers && known.is_none() {
-            match strict_action {
-                StrictPrimitiveAction::IntBin(op) => {
-                    let x = arg!(0);
-                    strict_marker_step!(
-                        2,
-                        Int,
-                        IntFrame,
-                        IntFrameKind::BinSecond { op, x },
-                        arg!(1)
-                    );
-                }
-                StrictPrimitiveAction::IntUn(op) => {
-                    strict_marker_step!(1, Int, IntFrame, IntFrameKind::Un { op }, arg!(0));
-                }
-                StrictPrimitiveAction::Int64Bin(op) => {
-                    if op.rhs_is_shift() {
-                        strict_int64_shift_marker_step!(2, op, arg!(0), arg!(1));
-                    } else if op.driver_marker_safe() {
-                        strict_marker_step!(
-                            2,
-                            Int64,
-                            Int64Frame,
-                            Int64FrameKind::BinSecond { op, x: arg!(0) },
-                            arg!(1)
-                        );
-                    }
-                }
-                StrictPrimitiveAction::Int64Un(op) => {
-                    strict_marker_step!(1, Int64, Int64Frame, Int64FrameKind::Un { op }, arg!(0));
-                }
-                StrictPrimitiveAction::Float64Bin(op) => {
-                    strict_marker_step!(
-                        2,
-                        Float64,
-                        Float64Frame,
-                        Float64FrameKind::BinSecond { op, x: arg!(0) },
-                        arg!(1)
-                    );
-                }
-                StrictPrimitiveAction::Float64Un(op) => {
-                    strict_marker_step!(
-                        1,
-                        Float64,
-                        Float64Frame,
-                        Float64FrameKind::Un { op },
-                        arg!(0)
-                    );
-                }
-                StrictPrimitiveAction::Float32Bin(op) => {
-                    strict_marker_step!(
-                        2,
-                        Float32,
-                        Float32Frame,
-                        Float32FrameKind::BinSecond { op, x: arg!(0) },
-                        arg!(1)
-                    );
-                }
-                StrictPrimitiveAction::Float32Un(op) => {
-                    strict_marker_step!(
-                        1,
-                        Float32,
-                        Float32Frame,
-                        Float32FrameKind::Un { op },
-                        arg!(0)
-                    );
-                }
-                StrictPrimitiveAction::BytesBin(op) => {
-                    strict_marker_step!(
-                        2,
-                        Bytes,
-                        BytesFrame,
-                        BytesFrameKind::BinSecond { op, x: arg!(0) },
-                        arg!(1)
-                    );
-                }
-                StrictPrimitiveAction::Conversion(kind) => {
-                    strict_marker_step!(1, Conversion, ConversionFrame, kind, arg!(0));
-                }
-                StrictPrimitiveAction::None => {}
             }
         }
 

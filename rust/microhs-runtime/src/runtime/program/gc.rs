@@ -62,99 +62,6 @@ impl Program {
         }
     }
 
-    pub(in crate::runtime) fn mark_strict_redex(
-        marked: &mut [bool],
-        work: &mut Vec<NodeId>,
-        redex: &StrictRedex,
-    ) {
-        match redex {
-            StrictRedex::Root(root) => Self::mark_node_id(marked, work, *root),
-            StrictRedex::Spine { root, apps, .. } => {
-                Self::mark_node_id(marked, work, *root);
-                for id in apps {
-                    Self::mark_node_id(marked, work, *id);
-                }
-            }
-        }
-    }
-
-    pub(in crate::runtime) fn mark_eval_frame(
-        &self,
-        marked: &mut [bool],
-        work: &mut Vec<NodeId>,
-        frame: &EvalFrame,
-    ) {
-        match frame {
-            EvalFrame::Whnf(frame) => {
-                Self::mark_strict_redex(marked, work, &frame.redex);
-                match &frame.kind {
-                    WhnfFrameKind::Seq { result } => Self::mark_node_id(marked, work, *result),
-                    WhnfFrameKind::IoStrict { action, value } => {
-                        Self::mark_node_id(marked, work, *action);
-                        Self::mark_node_id(marked, work, *value);
-                    }
-                    WhnfFrameKind::IsInt => {}
-                }
-            }
-            EvalFrame::Int(frame) => {
-                Self::mark_strict_redex(marked, work, &frame.redex);
-                match &frame.kind {
-                    IntFrameKind::BinSecond { x, .. } => Self::mark_node_id(marked, work, *x),
-                    IntFrameKind::BinFirst { .. } | IntFrameKind::Un { .. } => {}
-                }
-            }
-            EvalFrame::Int64(frame) => {
-                Self::mark_strict_redex(marked, work, &frame.redex);
-                match &frame.kind {
-                    Int64FrameKind::BinSecond { x, .. } => Self::mark_node_id(marked, work, *x),
-                    Int64FrameKind::BinFirst { .. }
-                    | Int64FrameKind::ShiftFirst { .. }
-                    | Int64FrameKind::Un { .. } => {}
-                }
-            }
-            EvalFrame::Int64Shift(frame) => {
-                Self::mark_strict_redex(marked, work, &frame.redex);
-                Self::mark_node_id(marked, work, frame.x);
-            }
-            EvalFrame::Float64(frame) => {
-                Self::mark_strict_redex(marked, work, &frame.redex);
-                if let Float64FrameKind::BinSecond { x, .. } = &frame.kind {
-                    Self::mark_node_id(marked, work, *x);
-                }
-            }
-            EvalFrame::Float32(frame) => {
-                Self::mark_strict_redex(marked, work, &frame.redex);
-                if let Float32FrameKind::BinSecond { x, .. } = &frame.kind {
-                    Self::mark_node_id(marked, work, *x);
-                }
-            }
-            EvalFrame::Bytes(frame) => {
-                Self::mark_strict_redex(marked, work, &frame.redex);
-                match &frame.kind {
-                    BytesFrameKind::BinSecond { x, .. } => Self::mark_node_id(marked, work, *x),
-                    BytesFrameKind::BinFirst { y, .. } => Self::mark_node_id(marked, work, *y),
-                }
-            }
-            EvalFrame::Conversion(frame) => {
-                Self::mark_strict_redex(marked, work, &frame.redex);
-            }
-        }
-    }
-
-    pub(in crate::runtime) fn mark_eval_stack(
-        &self,
-        marked: &mut [bool],
-        work: &mut Vec<NodeId>,
-        stack: &EvalFrameStack,
-    ) {
-        if let Some(frame) = &stack.top {
-            self.mark_eval_frame(marked, work, frame);
-        }
-        for frame in &stack.rest {
-            self.mark_eval_frame(marked, work, frame);
-        }
-    }
-
     pub(in crate::runtime) fn mark_machine_stack(
         &self,
         marked: &mut [bool],
@@ -224,24 +131,12 @@ impl Program {
         }
     }
 
-    pub(in crate::runtime) fn mark_persistent_spine(
-        marked: &mut [bool],
-        work: &mut Vec<NodeId>,
-        spine: &PersistentSpine,
-    ) {
-        for id in &spine.apps {
-            Self::mark_node_id(marked, work, *id);
-        }
-    }
-
     pub(in crate::runtime) fn mark_program_roots(
         &self,
         marked: &mut [bool],
         work: &mut Vec<NodeId>,
         current_root: NodeId,
-        frame_stack: &EvalFrameStack,
         eval_spine: &EvalSpine,
-        persistent_spine: &PersistentSpine,
         scratch_args: &[NodeId],
         scratch_apps: &[NodeId],
         machine_stack: Option<&EvalStack>,
@@ -293,12 +188,10 @@ impl Program {
         {
             Self::mark_node_id(marked, work, id);
         }
-        self.mark_eval_stack(marked, work, frame_stack);
         if let Some(machine_stack) = machine_stack {
             self.mark_machine_stack(marked, work, machine_stack);
         }
         Self::mark_eval_spine(marked, work, eval_spine);
-        Self::mark_persistent_spine(marked, work, persistent_spine);
         for id in scratch_args.iter().chain(scratch_apps) {
             Self::mark_node_id(marked, work, *id);
         }
@@ -571,9 +464,7 @@ impl Program {
     pub(in crate::runtime) fn collect_garbage_between_steps(
         &mut self,
         current_root: NodeId,
-        frame_stack: &EvalFrameStack,
         eval_spine: &EvalSpine,
-        persistent_spine: &PersistentSpine,
         scratch_args: &[NodeId],
         scratch_apps: &[NodeId],
         machine_stack: Option<&EvalStack>,
@@ -594,9 +485,7 @@ impl Program {
             &mut marked,
             &mut work,
             current_root,
-            frame_stack,
             eval_spine,
-            persistent_spine,
             scratch_args,
             scratch_apps,
             machine_stack,
@@ -669,9 +558,7 @@ impl Program {
     pub(in crate::runtime) fn maybe_collect_garbage_between_steps(
         &mut self,
         current_root: NodeId,
-        frame_stack: &EvalFrameStack,
         eval_spine: &EvalSpine,
-        persistent_spine: &PersistentSpine,
         scratch_args: &[NodeId],
         scratch_apps: &[NodeId],
         machine_stack: Option<&EvalStack>,
@@ -687,9 +574,7 @@ impl Program {
         }
         self.collect_garbage_between_steps(
             current_root,
-            frame_stack,
             eval_spine,
-            persistent_spine,
             scratch_args,
             scratch_apps,
             machine_stack,
