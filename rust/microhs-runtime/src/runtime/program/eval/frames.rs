@@ -74,7 +74,7 @@ impl Program {
         let redex = stack.app_unchecked(redex_index);
         let wrote_indirection = node != redex;
         if wrote_indirection {
-            self.set_app_cell_at(redex.index(), Cell::indir(Some(node)));
+            self.set_app_cell_at(redex.index(), Cell::indir_trusted(node));
         }
         if self.profiling_enabled() {
             self.profile_stack_rewrite(used, wrote_indirection);
@@ -107,12 +107,12 @@ impl Program {
     pub(in crate::runtime) fn set_app_int_result_at(&mut self, index: usize, result: IntResult) {
         match result {
             IntResult::Int(n) if can_inline_int(n) => {
-                self.set_app_cell_at(index, Cell::int(n));
+                self.set_app_cell_at(index, Cell::int_trusted(n));
             }
             IntResult::Bool(value) => {
                 self.set_app_cell_at(
                     index,
-                    Cell::known_prim(if value { KnownPrim::A } else { KnownPrim::K }),
+                    Cell::known_prim_trusted(if value { KnownPrim::A } else { KnownPrim::K }),
                 );
             }
             IntResult::Ordering(ord) => {
@@ -121,7 +121,7 @@ impl Program {
                     Ordering::Equal => KnownPrim::KK,
                     Ordering::Greater => KnownPrim::KA,
                 };
-                self.set_app_cell_at(index, Cell::known_prim(known));
+                self.set_app_cell_at(index, Cell::known_prim_trusted(known));
             }
             IntResult::Int(n) => self.set_app_node_at(index, Node::Int(n)),
         }
@@ -151,7 +151,7 @@ impl Program {
             Int64Result::Bool(value) => {
                 self.set_app_cell_at(
                     index,
-                    Cell::known_prim(if value { KnownPrim::A } else { KnownPrim::K }),
+                    Cell::known_prim_trusted(if value { KnownPrim::A } else { KnownPrim::K }),
                 );
             }
             Int64Result::Ordering(ord) => {
@@ -160,7 +160,7 @@ impl Program {
                     Ordering::Equal => KnownPrim::KK,
                     Ordering::Greater => KnownPrim::KA,
                 };
-                self.set_app_cell_at(index, Cell::known_prim(known));
+                self.set_app_cell_at(index, Cell::known_prim_trusted(known));
             }
             Int64Result::Int64(n) => self.set_app_node_at(index, Node::Int64(n)),
         }
@@ -218,7 +218,7 @@ impl Program {
             debug_assert!(used <= app_end);
             let redex_index = app_end - used;
             let redex = stack.app_unchecked(redex_index);
-            self.set_app_cell_at(redex.index(), Cell::app(fun, arg));
+            self.set_app_cell_at(redex.index(), Cell::app_trusted(fun, arg));
             stack.apps.truncate(redex_index);
             redex
         }
@@ -235,7 +235,7 @@ impl Program {
             let Some((_, arg)) = self.cell(app).app_fields() else {
                 return Err(EvalError::DanglingIndirection(app));
             };
-            self.set_app_cell_at(app.index(), Cell::app(node, arg));
+            self.set_app_cell_at(app.index(), Cell::app_trusted(node, arg));
             node = app;
         }
         stack.apps.truncate(base);
@@ -274,7 +274,7 @@ impl Program {
                 self.profile_reduction(frame.profile_head, 1);
                 let wrote_indirection = result != frame.redex;
                 if wrote_indirection {
-                    self.set_app_cell_at(frame.redex.index(), Cell::indir(Some(result)));
+                    self.set_app_cell_at(frame.redex.index(), Cell::indir_trusted(result));
                 }
                 if self.profiling_enabled() {
                     self.profile_stack_rewrite(frame.used, wrote_indirection);
@@ -286,7 +286,7 @@ impl Program {
                 if self.profiling_enabled() {
                     self.profile_stack_app_update(frame.used);
                 }
-                self.set_app_cell_at(frame.redex.index(), Cell::app(action, value));
+                self.set_app_cell_at(frame.redex.index(), Cell::app_trusted(action, value));
                 return Ok((frame.redex, 1));
             }
             WhnfFrameKind::IsInt => {

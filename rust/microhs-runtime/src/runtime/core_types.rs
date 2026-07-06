@@ -154,8 +154,40 @@ impl Cell {
         Self::two_id_payloads(CellTag::App, fun, arg)
     }
 
+    /// `Cell::app` for ids that are known to fit the packed field.
+    ///
+    /// INVARIANT (packed-id fit): every `NodeId` created by the runtime is
+    /// `< CELL_NONE_ID`. `NodeId`s are only minted by the node arena, and
+    /// [`Program::push_cell`] asserts `nodes.len() < CELL_NONE_ID` on every
+    /// growth, so no id can ever overflow the packed cell field. That lets the
+    /// hot rewrite/allocation paths skip the id-range handling `Cell::app`
+    /// would otherwise do. The `debug_assert`s re-check the invariant in debug
+    /// builds (exercised by the debug-build test suite); if it were violated
+    /// the packed id would alias adjacent fields and later index the arena out
+    /// of bounds, so callers must only pass existing heap `NodeId`s.
+    #[inline(always)]
+    pub(in crate::runtime) fn app_trusted(fun: NodeId, arg: NodeId) -> Self {
+        debug_assert!(u64::from(fun.0) < CELL_NONE_ID);
+        debug_assert!(u64::from(arg.0) < CELL_NONE_ID);
+        Self {
+            word: (u64::from(arg.0) << PACKED_PAYLOAD1_SHIFT)
+                | (u64::from(fun.0) << CELL_PAYLOAD_SHIFT)
+                | CellTag::App.bits(),
+        }
+    }
+
     pub(in crate::runtime) fn indir(target: Option<NodeId>) -> Self {
         Self::with_payload0(CellTag::Indir, pack_option_id(target))
+    }
+
+    /// `Cell::indir(Some(target))` relying on the packed-id-fit invariant
+    /// documented on [`Cell::app_trusted`].
+    #[inline(always)]
+    pub(in crate::runtime) fn indir_trusted(target: NodeId) -> Self {
+        debug_assert!(u64::from(target.0) < CELL_NONE_ID);
+        Self {
+            word: (u64::from(target.0) << CELL_PAYLOAD_SHIFT) | CellTag::Indir.bits(),
+        }
     }
 
     pub(in crate::runtime) fn free(next: Option<NodeId>) -> Self {
@@ -166,6 +198,17 @@ impl Cell {
         Self::with_payload0(CellTag::KnownPrim, u64::from(encode_known_prim(known)))
     }
 
+    /// `Cell::known_prim` for the hot result paths. `encode_known_prim` always
+    /// returns a small fixed code that fits the packed field, so this is
+    /// unconditionally sound; it exists only to inline the fast construction.
+    #[inline(always)]
+    pub(in crate::runtime) fn known_prim_trusted(known: KnownPrim) -> Self {
+        Self {
+            word: (u64::from(encode_known_prim(known)) << CELL_PAYLOAD_SHIFT)
+                | CellTag::KnownPrim.bits(),
+        }
+    }
+
     pub(in crate::runtime) fn runtime_prim(runtime: RuntimePrim) -> Self {
         Self::with_payload0(CellTag::RuntimePrim, u64::from(runtime.0))
     }
@@ -173,6 +216,17 @@ impl Cell {
     pub(in crate::runtime) fn int(value: i64) -> Self {
         debug_assert!(can_inline_int(value));
         Self::signed_payload(CellTag::Int, value)
+    }
+
+    /// `Cell::int` for callers that have already checked `can_inline_int`
+    /// (i.e. the value fits the packed signed payload). The `debug_assert`
+    /// re-checks it; an out-of-range value would corrupt the tag bits.
+    #[inline(always)]
+    pub(in crate::runtime) fn int_trusted(value: i64) -> Self {
+        debug_assert!(can_inline_int(value));
+        Self {
+            word: ((value as u64) << CELL_PAYLOAD_SHIFT) | CellTag::Int.bits(),
+        }
     }
 
     pub(in crate::runtime) fn float32(value: f32) -> Self {

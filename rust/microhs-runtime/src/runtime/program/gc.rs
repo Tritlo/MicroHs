@@ -241,7 +241,7 @@ impl Program {
             }
         }
         if depth > 1 {
-            self.set_cell_at(id.index(), Cell::indir(Some(current)));
+            self.set_cell_at(id.index(), Cell::indir_trusted(current));
         }
         Some(current)
     }
@@ -262,7 +262,7 @@ impl Program {
             if let Some(slot) = small_int_index(value) {
                 if let Some(canonical) = self.small_ints[slot] {
                     if canonical != target {
-                        self.set_cell_at(target.index(), Cell::indir(Some(canonical)));
+                        self.set_cell_at(target.index(), Cell::indir_trusted(canonical));
                     }
                     return Some(canonical);
                 }
@@ -305,7 +305,7 @@ impl Program {
                 let fun = self.mark_canonical_child(marked, work, fun);
                 let arg = self.mark_canonical_child(marked, work, arg);
                 if fun != cell.id_payload() || arg != cell.id_word1() {
-                    self.set_app_cell_at(id.index(), Cell::app(fun, arg));
+                    self.set_app_cell_at(id.index(), Cell::app_trusted(fun, arg));
                 }
                 continue;
             }

@@ -26,20 +26,20 @@ impl Program {
         debug_assert!(used <= len);
         if used == 0 && len == 0 {
             if node != root {
-                self.set_cell_at(root.index(), Cell::indir(Some(node)));
+                self.set_cell_at(root.index(), Cell::indir_trusted(node));
             }
             return node;
         }
         if used > 0 {
             let redex = spine.app(used - 1);
             if node != redex {
-                self.set_app_cell_at(redex.index(), Cell::indir(Some(node)));
+                self.set_app_cell_at(redex.index(), Cell::indir_trusted(node));
             }
         }
         for head_idx in used..len {
             let app = spine.app(head_idx);
             let arg = spine.arg(head_idx);
-            self.set_app_cell_at(app.index(), Cell::app(node, arg));
+            self.set_app_cell_at(app.index(), Cell::app_trusted(node, arg));
             node = app;
         }
         node
@@ -59,19 +59,19 @@ impl Program {
             self.app(fun, arg)
         } else {
             let redex = spine.app(used - 1);
-            self.set_app_cell_at(redex.index(), Cell::app(fun, arg));
+            self.set_app_cell_at(redex.index(), Cell::app_trusted(fun, arg));
             redex
         };
         if used == 0 && len == 0 {
             if node != root {
-                self.set_cell_at(root.index(), Cell::indir(Some(node)));
+                self.set_cell_at(root.index(), Cell::indir_trusted(node));
             }
             return node;
         }
         for head_idx in used..len {
             let app = spine.app(head_idx);
             let arg = spine.arg(head_idx);
-            self.set_app_cell_at(app.index(), Cell::app(node, arg));
+            self.set_app_cell_at(app.index(), Cell::app_trusted(node, arg));
             node = app;
         }
         node
