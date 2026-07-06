@@ -339,6 +339,27 @@ impl Program {
     }
 
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    pub(crate) fn wasm_read_pointer_bytes(
+        &self,
+        ptr: i64,
+        len: usize,
+    ) -> Result<Vec<u8>, EvalError> {
+        self.read_pointer_bytes(ptr, len)
+    }
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    pub(crate) fn wasm_c_string_len(&self, ptr: i64) -> Result<usize, EvalError> {
+        self.c_string_len(ptr)
+    }
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    pub(crate) fn wasm_alloc_bytes(&mut self, bytes: &[u8]) -> Result<i64, EvalError> {
+        let ptr = self.alloc_memory(bytes.len())?;
+        self.write_pointer_bytes(ptr, bytes)?;
+        Ok(ptr)
+    }
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     fn apply_js_wrapper(
         &mut self,
         tags: &str,

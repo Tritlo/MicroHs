@@ -595,6 +595,7 @@ pub struct ForeignPtrNode {
 pub(in crate::runtime) enum ForeignFinalizer {
     Free,
     CloseB,
+    JsObjFree,
     RawZero,
 }
 
