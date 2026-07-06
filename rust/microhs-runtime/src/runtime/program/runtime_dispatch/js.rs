@@ -19,8 +19,8 @@ impl Program {
             let arg = match tag {
                 b'D' => JsArg::Double(self.eval_float64(args[idx])?),
                 b'F' => JsArg::Double(f64::from(self.eval_float32(args[idx])?)),
-                b'B' => JsArg::Int(i32::from(self.eval_bool(args[idx])?)),
-                b'P' => JsArg::UInt(self.eval_pointer_value(args[idx])? as u32),
+                b'B' => JsArg::Bool(self.eval_bool(args[idx])?),
+                b'P' => JsArg::Pointer(self.eval_pointer_value(args[idx])?),
                 b'J' => JsArg::Object(self.eval_js_object_handle(args[idx])?),
                 b'S' => JsArg::String(self.eval_bytes(args[idx])?),
                 b'U' => JsArg::UInt(self.eval_int(args[idx])? as u32),
@@ -36,7 +36,7 @@ impl Program {
             }
             b'D' => Node::Float64(host_js_call_double(body, arity, &js_args)?),
             b'F' => Node::Float32(host_js_call_double(body, arity, &js_args)? as f32),
-            b'P' => Node::Ptr(i64::from(host_js_call_ptr(body, arity, &js_args)?)),
+            b'P' => Node::Ptr(host_js_call_ptr(body, arity, &js_args)?),
             b'B' => Node::prim(if host_js_call_bool(body, arity, &js_args)? {
                 "A"
             } else {
@@ -97,7 +97,7 @@ impl Program {
             (b'D', JsValue::Double(value)) => Node::Float64(*value),
             (b'F', JsValue::Float(value)) => Node::Float32(*value),
             (b'B', JsValue::Bool(value)) => return Ok(self.prim(if *value { "A" } else { "K" })),
-            (b'P', JsValue::Pointer(value)) => Node::Ptr(i64::from(*value)),
+            (b'P', JsValue::Pointer(value)) => Node::Ptr(*value),
             (b'J', JsValue::Object(value)) => self.js_object_node(*value),
             (b'S', JsValue::Bytes(value)) => Node::bytes(value.clone()),
             _ => return Err(EvalError::InvalidByteString),
@@ -123,9 +123,7 @@ impl Program {
             b'D' => Ok(JsValue::Double(self.eval_float64(id)?)),
             b'F' => Ok(JsValue::Float(self.eval_float32(id)?)),
             b'B' => Ok(JsValue::Bool(self.eval_bool(id)?)),
-            b'P' => Ok(JsValue::Pointer(
-                u32::try_from(self.eval_pointer_value(id)?).map_err(|_| EvalError::Overflow)?,
-            )),
+            b'P' => Ok(JsValue::Pointer(self.eval_pointer_value(id)?)),
             b'J' => Ok(JsValue::Object(self.eval_js_object_handle(id)?)),
             b'S' => Ok(JsValue::Bytes(self.eval_bytes(id)?)),
             _ => Err(EvalError::InvalidByteString),

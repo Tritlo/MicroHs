@@ -6,8 +6,6 @@ use std::mem::size_of;
 use crate::runtime::JsValue;
 use crate::{EvalError, Program, parse_program};
 
-const CALLBACK_LIMIT: usize = 100_000;
-
 thread_local! {
     static PROGRAMS: RefCell<Vec<Option<Program>>> = const { RefCell::new(Vec::new()) };
     static ACTIVE_PROGRAMS: RefCell<Vec<(u32, *mut Program)>> = const { RefCell::new(Vec::new()) };
@@ -146,6 +144,46 @@ pub unsafe extern "C" fn mhs_rust_program_set_executable_path(
         Ok(()) => 0,
         Err(()) => 1,
     }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mhs_rust_active_read(ptr: i64, dst: *mut u8, len: usize) -> i32 {
+    if dst.is_null() && len != 0 {
+        return 1;
+    }
+    let Ok(bytes) =
+        with_current_active_program_mut(|program| program.wasm_read_pointer_bytes(ptr, len))
+    else {
+        return 1;
+    };
+    if len != 0 {
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, len);
+        }
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mhs_rust_active_cstring_len(ptr: i64) -> isize {
+    with_current_active_program_mut(|program| {
+        let len = program.wasm_c_string_len(ptr)?;
+        isize::try_from(len).map_err(|_| EvalError::Overflow)
+    })
+    .unwrap_or(-1)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mhs_rust_active_alloc(src: *const u8, len: usize) -> i64 {
+    if src.is_null() && len != 0 {
+        return 0;
+    }
+    let bytes = if len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(src, len) }
+    };
+    with_current_active_program_mut(|program| program.wasm_alloc_bytes(bytes)).unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
@@ -330,7 +368,7 @@ pub extern "C" fn mhs_rust_wrapper_invoke(
         Err(()) => return 1,
     };
     match with_program_mut(program_handle, |program| {
-        program.apply_js_wrapper_index(wrapper_index, stable_ptr as usize, &args, CALLBACK_LIMIT)
+        program.apply_js_wrapper_index(wrapper_index, stable_ptr as usize, &args, usize::MAX)
     }) {
         Ok(value) => match set_wrapper_result(&value) {
             Ok(()) => 0,
@@ -483,6 +521,19 @@ fn with_active_program_mut<R>(
     })
 }
 
+fn with_current_active_program_mut<R>(
+    f: impl FnOnce(&mut Program) -> Result<R, crate::EvalError>,
+) -> Result<R, ()> {
+    ACTIVE_PROGRAMS.with(|active| {
+        let program = {
+            let active = active.try_borrow().map_err(|_| ())?;
+            active.last().map(|(_, program)| *program).ok_or(())?
+        };
+        let program = unsafe { program.as_mut() }.ok_or(())?;
+        f(program).map_err(|_| ())
+    })
+}
+
 fn read_wrapper_args(tags: &[u8]) -> Result<Vec<JsValue>, ()> {
     let mut args = Vec::with_capacity(tags.len().saturating_sub(1));
     for (idx, tag) in tags[1..].iter().copied().enumerate() {
@@ -490,8 +541,8 @@ fn read_wrapper_args(tags: &[u8]) -> Result<Vec<JsValue>, ()> {
         let value = match tag {
             b'D' => JsValue::Double(unsafe { mhs_js_arg_dbl(idx) }),
             b'F' => JsValue::Float(unsafe { mhs_js_arg_dbl(idx) } as f32),
-            b'B' => JsValue::Bool(unsafe { mhs_js_arg_int(idx) } != 0),
-            b'P' => JsValue::Pointer(unsafe { mhs_js_arg_uint(idx) }),
+            b'B' => JsValue::Bool(unsafe { mhs_js_arg_bool(idx) } != 0),
+            b'P' => JsValue::Pointer(unsafe { mhs_js_arg_ptr(idx) }),
             b'J' => JsValue::Object(unsafe { mhs_js_arg_obj(idx) }),
             b'S' => {
                 let ptr = unsafe { mhs_js_arg_str(idx) };
@@ -512,10 +563,11 @@ fn set_wrapper_result(value: &JsValue) -> Result<(), ()> {
         match value {
             JsValue::Unit => mhs_js_set_res_undef(),
             JsValue::Int(value) => mhs_js_set_res_num(f64::from(*value)),
-            JsValue::UInt(value) | JsValue::Pointer(value) => mhs_js_set_res_num(f64::from(*value)),
+            JsValue::UInt(value) => mhs_js_set_res_num(f64::from(*value)),
+            JsValue::Pointer(value) => mhs_js_set_res_ptr(*value),
             JsValue::Double(value) => mhs_js_set_res_num(*value),
             JsValue::Float(value) => mhs_js_set_res_num(f64::from(*value)),
-            JsValue::Bool(value) => mhs_js_set_res_num(f64::from(i32::from(*value))),
+            JsValue::Bool(value) => mhs_js_set_res_bool(i32::from(*value)),
             JsValue::Object(value) => mhs_js_set_res_obj(*value),
             JsValue::Bytes(bytes) => {
                 let len = i32::try_from(bytes.len()).map_err(|_| ())?;
@@ -530,17 +582,25 @@ fn copy_host_bytes(ptr: *const std::os::raw::c_char, len: usize) -> Result<Vec<u
     if ptr.is_null() {
         return if len == 0 { Ok(Vec::new()) } else { Err(()) };
     }
-    Ok(unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) }.to_vec())
+    let result = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) }.to_vec();
+    unsafe {
+        mhs_rust_dealloc(ptr.cast_mut().cast::<u8>(), len);
+    }
+    Ok(result)
 }
 
 #[link(wasm_import_module = "env")]
 unsafe extern "C" {
     fn mhs_js_arg_int(index: i32) -> i32;
     fn mhs_js_arg_uint(index: i32) -> u32;
+    fn mhs_js_arg_bool(index: i32) -> i32;
+    fn mhs_js_arg_ptr(index: i32) -> i64;
     fn mhs_js_arg_dbl(index: i32) -> f64;
     fn mhs_js_arg_obj(index: i32) -> u32;
     fn mhs_js_arg_str(index: i32) -> *const std::os::raw::c_char;
     fn mhs_js_set_res_num(value: f64);
+    fn mhs_js_set_res_bool(value: i32);
+    fn mhs_js_set_res_ptr(value: i64);
     fn mhs_js_set_res_obj(handle: u32);
     fn mhs_js_set_res_str(ptr: *const u8, len: i32);
     fn mhs_js_set_res_undef();

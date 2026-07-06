@@ -20,6 +20,9 @@ export async function instantiateMicroHsRuntime(wasm, options = {}) {
     wargs: [],
     obj: [null],
     objfree: [],
+    ptr: new Map(),
+    ptrReverse: new Map(),
+    nextPtr: 0x100000000,
     err: null,
     slen: 0,
     wres: undefined,
@@ -34,7 +37,7 @@ export async function instantiateMicroHsRuntime(wasm, options = {}) {
     return handle;
   };
 
-  const imports = { env: makeImports(state) };
+  const imports = { env: makeImports(state, options) };
   const source = await loadWasmSource(wasm);
   const { instance, module } =
     source instanceof WebAssembly.Module
@@ -194,7 +197,7 @@ function isNodeFileSource(wasm) {
   return typeof wasm === "string" && !/^[a-z][a-z0-9+.-]*:/i.test(wasm);
 }
 
-function makeImports(state) {
+function makeImports(state, options) {
   return {
     mhs_host_result_copy(dst, len) {
       const bytes = state.hostResult.subarray(0, len);
@@ -272,6 +275,13 @@ function makeImports(state) {
         state.hostFs.write(handle, new Uint8Array(state.memory.buffer, src, len))
       );
     },
+    mhs_host_stdio_write(handle, src, len) {
+      return hostCall(() => {
+        const bytes = new Uint8Array(state.memory.buffer, src, len);
+        writeStdio(options, handle, bytes);
+        return len;
+      });
+    },
     mhs_host_file_flush(handle) {
       return hostCallI64(() => state.hostFs.flush(handle));
     },
@@ -290,7 +300,9 @@ function makeImports(state) {
     mhs_js_set_haskellCallback(callback) {
       globalThis._haskellCallback = callback;
     },
-    mhs_js_setup() {},
+    mhs_js_setup() {
+      installStringHelpers(state);
+    },
     mhs_js_register(bodyp, arity) {
       const body = readCString(state, bodyp);
       const names = [];
@@ -320,6 +332,12 @@ function makeImports(state) {
     mhs_js_push_dbl(value) {
       state.argbuf.push(value);
     },
+    mhs_js_push_bool(value) {
+      state.argbuf.push(value !== 0);
+    },
+    mhs_js_push_ptr(value) {
+      state.argbuf.push(ptrToJs(state, value));
+    },
     mhs_js_push_obj(handle) {
       state.argbuf.push(state.obj[handle]);
     },
@@ -336,7 +354,7 @@ function makeImports(state) {
       return callJs(state, idx, 0, (value) => +value);
     },
     mhs_js_call_ptr(idx) {
-      return callJs(state, idx, 0, (value) => value >>> 0);
+      return ptrFromJs(state, callJs(state, idx, 0, (value) => value));
     },
     mhs_js_call_obj(idx) {
       return callJs(state, idx, 0, (value) => state.intern(value));
@@ -374,6 +392,15 @@ function makeImports(state) {
       };
       return state.intern(fn);
     },
+    mhs_js_obj_free(handle) {
+      if (
+        handle >= 1 &&
+        Object.prototype.hasOwnProperty.call(state.obj, handle)
+      ) {
+        delete state.obj[handle];
+        state.objfree.push(handle);
+      }
+    },
     mhs_js_arg_int(index) {
       try {
         return state.wargs[state.wargs.length - 1][index] | 0;
@@ -386,6 +413,20 @@ function makeImports(state) {
         return state.wargs[state.wargs.length - 1][index] >>> 0;
       } catch {
         return 0;
+      }
+    },
+    mhs_js_arg_bool(index) {
+      try {
+        return state.wargs[state.wargs.length - 1][index] ? 1 : 0;
+      } catch {
+        return 0;
+      }
+    },
+    mhs_js_arg_ptr(index) {
+      try {
+        return ptrFromJs(state, state.wargs[state.wargs.length - 1][index]);
+      } catch {
+        return 0n;
       }
     },
     mhs_js_arg_dbl(index) {
@@ -411,6 +452,12 @@ function makeImports(state) {
     },
     mhs_js_set_res_num(value) {
       state.wres = value;
+    },
+    mhs_js_set_res_bool(value) {
+      state.wres = value !== 0;
+    },
+    mhs_js_set_res_ptr(value) {
+      state.wres = ptrToJs(state, value);
     },
     mhs_js_set_res_obj(handle) {
       state.wres = state.obj[handle];
@@ -439,6 +486,92 @@ function callJs(state, idx, fallback, convert) {
   } catch (error) {
     state.err = String(error);
     return fallback;
+  }
+}
+
+function installStringHelpers(state) {
+  globalThis.UTF8ToString = (ptr, maxBytesToRead, ignoreNul) => {
+    try {
+      if (maxBytesToRead == null) {
+        const len = state.exports.mhs_rust_active_cstring_len(ptrFromJs(state, ptr));
+        if (len < 0) return "";
+        return decoder.decode(activePointerBytes(state, ptr, len));
+      }
+      const len = Number(maxBytesToRead);
+      if (!Number.isSafeInteger(len) || len <= 0) return "";
+      const bytes = activePointerBytes(state, ptr, len);
+      if (ignoreNul) return decoder.decode(bytes);
+      const nul = bytes.indexOf(0);
+      return decoder.decode(nul < 0 ? bytes : bytes.subarray(0, nul));
+    } catch {
+      return "";
+    }
+  };
+  globalThis.lengthBytesUTF8 = (value) => encoder.encode(String(value)).length;
+  globalThis.stringToNewUTF8 = (value) => {
+    const bytes = encoder.encode(String(value));
+    const out = new Uint8Array(bytes.length + 1);
+    out.set(bytes);
+    const scratch = allocBytes(state, out);
+    try {
+      const ptr = state.exports.mhs_rust_active_alloc(scratch, out.length);
+      return ptrToJs(state, ptr);
+    } finally {
+      state.exports.mhs_rust_dealloc(scratch, out.length);
+    }
+  };
+}
+
+function activePointerBytes(state, ptr, len) {
+  if (len === 0) return new Uint8Array();
+  const scratch = state.exports.mhs_rust_alloc(len);
+  if (scratch === 0) throw new Error("MicroHs wasm allocation failed");
+  try {
+    const status = state.exports.mhs_rust_active_read(ptrFromJs(state, ptr), scratch, len);
+    if (status !== 0) throw new Error("MicroHs pointer read failed");
+    return readBytes(state, scratch, len);
+  } finally {
+    state.exports.mhs_rust_dealloc(scratch, len);
+  }
+}
+
+function ptrToJs(state, value) {
+  const ptr = BigInt.asIntN(64, BigInt(value));
+  if (ptr >= 0n && ptr <= 0xffffffffn) return Number(ptr);
+  const key = ptr.toString();
+  const existing = state.ptrReverse.get(key);
+  if (existing !== undefined) return existing;
+  const handle = state.nextPtr;
+  state.nextPtr += 1;
+  state.ptr.set(handle, ptr);
+  state.ptrReverse.set(key, handle);
+  return handle;
+}
+
+function ptrFromJs(state, value) {
+  if (typeof value === "bigint") return BigInt.asIntN(64, value);
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0n;
+  if (Number.isInteger(number) && state.ptr.has(number)) {
+    return state.ptr.get(number);
+  }
+  return BigInt.asUintN(32, BigInt(number >>> 0));
+}
+
+function writeStdio(options, handle, bytes) {
+  const sink = Number(handle) === 2 ? options.stderr : options.stdout;
+  const out = toBytes(bytes);
+  if (sink) {
+    sink(out);
+  } else if (isProbablyNode()) {
+    process[Number(handle) === 2 ? "stderr" : "stdout"].write(Buffer.from(out));
+  } else {
+    const text = decoder.decode(out);
+    if (Number(handle) === 2) {
+      console.error(text);
+    } else {
+      console.log(text);
+    }
   }
 }
 
