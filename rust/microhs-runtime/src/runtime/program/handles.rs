@@ -349,6 +349,9 @@ impl Program {
         &mut self,
         interruptible_blocking_point: bool,
     ) -> Result<(), EvalError> {
+        if self.pending_async_count == 0 {
+            return Ok(());
+        }
         let mask = self.masking_state;
         if mask == MASK_UNINTERRUPTIBLE
             || (!interruptible_blocking_point && mask == MASK_INTERRUPTIBLE)
@@ -361,6 +364,7 @@ impl Program {
             .and_then(Option::as_mut)
             .and_then(|thread| thread.pending_exception.take())
         {
+            self.pending_async_count -= 1;
             return Err(EvalError::Raised(exn));
         }
         Ok(())
@@ -498,8 +502,13 @@ impl Program {
         let Some(thread) = self.threads.get_mut(slot).and_then(Option::as_mut) else {
             return Ok(());
         };
+        let was_empty = thread.pending_exception.is_none();
         thread.pending_exception = Some(exn);
-        if thread.masking_state != MASK_UNINTERRUPTIBLE {
+        let should_unpark = thread.masking_state != MASK_UNINTERRUPTIBLE;
+        if was_empty {
+            self.pending_async_count += 1;
+        }
+        if should_unpark {
             self.unpark_thread(slot);
         }
         Ok(())

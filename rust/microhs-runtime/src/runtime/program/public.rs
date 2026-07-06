@@ -94,6 +94,8 @@ impl Program {
         })];
         self.thread_ids = vec![1];
         self.thread_states = vec![ThreadState::Runnable];
+        self.live_thread_count = 1;
+        self.pending_async_count = 0;
         self.next_thread_id = 2;
         self.run_queue = std::collections::VecDeque::from([0usize]);
         self.mvar_waiters.clear();
@@ -136,7 +138,7 @@ impl Program {
             // A lone runnable thread runs unbounded — full single-thread speed with no
             // slicing overhead (the self-host stays byte-identical and fast). Once a
             // second thread exists, slice preemptively so threads interleave.
-            let alive = self.threads.iter().filter(|t| t.is_some()).count();
+            let alive = self.live_thread_count;
             let slice = if alive > 1 {
                 REDUCTION_SLICE.min(remaining)
             } else {
@@ -192,6 +194,16 @@ impl Program {
 
     pub(in crate::runtime) fn finish_thread(&mut self, tid: usize, root: NodeId) {
         self.save_current_thread_state(tid, root);
+        self.live_thread_count -= 1;
+        if self
+            .threads
+            .get(tid)
+            .and_then(Option::as_ref)
+            .and_then(|thread| thread.pending_exception)
+            .is_some()
+        {
+            self.pending_async_count -= 1;
+        }
         if let Some(state) = self.thread_states.get_mut(tid) {
             *state = ThreadState::Finished;
         }

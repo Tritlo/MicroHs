@@ -472,7 +472,12 @@ impl Program {
         world: NodeId,
     ) -> Result<NodeId, EvalError> {
         let old_mask = self.masking_state;
-        match self.reduce_node_whnf(action, REDUCTION_SLICE) {
+        let limit = if self.live_thread_count > 1 {
+            REDUCTION_SLICE
+        } else {
+            FORCE_REDUCTION_LIMIT
+        };
+        match self.reduce_node_whnf(action, limit) {
             Ok(result) => Ok(result),
             Err(EvalError::Raised(exn)) => {
                 self.masking_state = MASK_INTERRUPTIBLE;

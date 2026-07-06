@@ -580,7 +580,7 @@ impl Program {
             if self.reschedule_now {
                 return Err(EvalError::StepLimit { limit });
             }
-            if steps > 0 {
+            if steps > 0 && self.pending_async_count > 0 {
                 self.check_pending_async_exception(false)?;
             }
             self.maybe_collect_garbage_between_steps(
