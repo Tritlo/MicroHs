@@ -4,14 +4,10 @@ use super::*;
 impl Program {
     pub(crate) fn new(nodes: Vec<Node>, root: NodeId, labels: HashMap<usize, NodeId>) -> Self {
         let boot_time_micro = current_time_micro();
-        #[cfg(target_os = "wasi")]
-        let default_gc_node_interval = WASI_GC_NODE_INTERVAL;
-        #[cfg(not(target_os = "wasi"))]
-        let default_gc_node_interval = GC_NODE_INTERVAL;
         let gc_node_interval = std::env::var("MHS_GC_NODE_INTERVAL")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(default_gc_node_interval);
+            .unwrap_or(GC_NODE_INTERVAL);
         let high_water_nodes = nodes.len();
         let mut cold_nodes = Vec::new();
         let nodes = nodes
