@@ -30,7 +30,7 @@ matched within ~1% (Rust 796 MB vs C 787 MB), every Rust output byte-identical:*
 | runtime (~790 MB RSS) | wall (median) | Rust ÷ C |
 |---|---:|---:|
 | C `eval.c` (`-O3`) | 48.2 s | — |
-| **Rust (shipped, `cargo build --release`)** | 48.0 s | **0.995x — 0.5% faster** |
+| **Rust (shipped, `cargo build --release`)** | 48.0 s | **≈1.0x — ties (±0.5% across runs)** |
 | C `eval.c` (`-O3`, PGO) | 46.5 s | — |
 | **Rust (PGO)** | 43.0 s | **0.924x — 7.6% faster** |
 
