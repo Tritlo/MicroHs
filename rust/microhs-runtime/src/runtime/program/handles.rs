@@ -335,9 +335,69 @@ impl Program {
         )
     }
 
-    pub(in crate::runtime) fn read_mvar(&self, id: NodeId) -> Result<Option<NodeId>, EvalError> {
+    pub(in crate::runtime) fn scheduler_now_micros(&self) -> u128 {
+        self.scheduler_epoch.elapsed().as_nanos() / 1_000
+    }
+
+    pub(in crate::runtime) fn current_thread_mut(&mut self) -> Option<&mut ThreadControl> {
+        self.threads
+            .get_mut(self.current_thread)
+            .and_then(Option::as_mut)
+    }
+
+    pub(in crate::runtime) fn check_pending_async_exception(
+        &mut self,
+        interruptible_blocking_point: bool,
+    ) -> Result<(), EvalError> {
+        let mask = self.masking_state;
+        if mask == MASK_UNINTERRUPTIBLE
+            || (!interruptible_blocking_point && mask == MASK_INTERRUPTIBLE)
+        {
+            return Ok(());
+        }
+        if let Some(exn) = self
+            .threads
+            .get_mut(self.current_thread)
+            .and_then(Option::as_mut)
+            .and_then(|thread| thread.pending_exception.take())
+        {
+            return Err(EvalError::Raised(exn));
+        }
+        Ok(())
+    }
+
+    pub(in crate::runtime) fn block_current_thread_at(
+        &mut self,
+        reason: BlockReason,
+        restart_root: NodeId,
+    ) -> EvalError {
+        self.save_current_thread_state(self.current_thread, restart_root);
+        EvalError::Blocked(reason)
+    }
+
+    pub(in crate::runtime) fn register_mvar(&mut self, id: NodeId) {
+        self.mvar_waiters.entry(id).or_default();
+    }
+
+    pub(in crate::runtime) fn read_mvar(
+        &mut self,
+        id: NodeId,
+        blocking: bool,
+    ) -> Result<Option<NodeId>, EvalError> {
+        if let Some(value) = self
+            .threads
+            .get_mut(self.current_thread)
+            .and_then(Option::as_mut)
+            .and_then(|thread| thread.delivered_value.take())
+        {
+            return Ok(Some(value));
+        }
         match self.cold_node(id) {
-            Some(Node::MVar(value)) => Ok(*value),
+            Some(Node::MVar(Some(value))) => Ok(Some(*value)),
+            Some(Node::MVar(None)) if blocking => {
+                Err(EvalError::Blocked(BlockReason::ReadMVar(id)))
+            }
+            Some(Node::MVar(None)) => Ok(None),
             _ => Err(EvalError::ExpectedMVar(id)),
         }
     }
@@ -345,37 +405,116 @@ impl Program {
     pub(in crate::runtime) fn take_mvar(
         &mut self,
         id: NodeId,
+        blocking: bool,
     ) -> Result<Option<NodeId>, EvalError> {
-        match self.cold_node_mut(id) {
-            Some(Node::MVar(value)) => Ok(value.take()),
-            _ => Err(EvalError::ExpectedMVar(id)),
-        }
+        let value = match self.cold_node_mut(id) {
+            Some(Node::MVar(value @ Some(_))) => value.take(),
+            Some(Node::MVar(None)) if blocking => {
+                return Err(EvalError::Blocked(BlockReason::TakeMVar(id)));
+            }
+            Some(Node::MVar(None)) => return Ok(None),
+            _ => return Err(EvalError::ExpectedMVar(id)),
+        };
+        self.wake_one_takeput(id);
+        Ok(value)
     }
 
     pub(in crate::runtime) fn put_mvar(
         &mut self,
         id: NodeId,
-        value: NodeId,
-    ) -> Result<(), EvalError> {
-        if !self.try_put_mvar(id, value)? {
-            return Err(EvalError::InvalidMVar);
-        }
-        Ok(())
-    }
-
-    pub(in crate::runtime) fn try_put_mvar(
-        &mut self,
-        id: NodeId,
         new_value: NodeId,
+        blocking: bool,
     ) -> Result<bool, EvalError> {
         match self.cold_node_mut(id) {
             Some(Node::MVar(value)) if value.is_none() => {
                 *value = Some(new_value);
+                self.wake_one_takeput(id);
+                self.wake_all_readers(id, new_value);
                 Ok(true)
             }
+            Some(Node::MVar(_)) if blocking => Err(EvalError::Blocked(BlockReason::PutMVar(id))),
             Some(Node::MVar(_)) => Ok(false),
             _ => Err(EvalError::ExpectedMVar(id)),
         }
+    }
+
+    pub(in crate::runtime) fn wake_one_takeput(&mut self, id: NodeId) {
+        loop {
+            let Some(slot) = self
+                .mvar_waiters
+                .get_mut(&id)
+                .and_then(|queues| queues.takeput.pop_front())
+            else {
+                return;
+            };
+            if self.make_runnable(slot) {
+                return;
+            }
+        }
+    }
+
+    pub(in crate::runtime) fn wake_all_readers(&mut self, id: NodeId, value: NodeId) {
+        let readers = self
+            .mvar_waiters
+            .get_mut(&id)
+            .map(|queues| queues.read.drain(..).collect::<Vec<_>>())
+            .unwrap_or_default();
+        for slot in readers {
+            if let Some(thread) = self.threads.get_mut(slot).and_then(Option::as_mut) {
+                thread.delivered_value = Some(value);
+            }
+            self.make_runnable(slot);
+        }
+    }
+
+    pub(in crate::runtime) fn make_runnable(&mut self, slot: usize) -> bool {
+        if self.threads.get(slot).and_then(Option::as_ref).is_none() {
+            return false;
+        }
+        if let Some(state) = self.thread_states.get_mut(slot) {
+            *state = ThreadState::Runnable;
+        }
+        self.delay_wakeups.remove(&slot);
+        if slot != self.current_thread && !self.run_queue.contains(&slot) {
+            self.run_queue.push_back(slot);
+        }
+        true
+    }
+
+    pub(in crate::runtime) fn thread_slot_for_id(&self, id: i64) -> Option<usize> {
+        self.thread_ids
+            .iter()
+            .position(|thread_id| *thread_id == id)
+    }
+
+    pub(in crate::runtime) fn throw_to_thread(
+        &mut self,
+        id: i64,
+        exn: NodeId,
+    ) -> Result<(), EvalError> {
+        let Some(slot) = self.thread_slot_for_id(id) else {
+            return Ok(());
+        };
+        let Some(thread) = self.threads.get_mut(slot).and_then(Option::as_mut) else {
+            return Ok(());
+        };
+        thread.pending_exception = Some(exn);
+        if thread.masking_state != MASK_UNINTERRUPTIBLE {
+            self.unpark_thread(slot);
+        }
+        Ok(())
+    }
+
+    pub(in crate::runtime) fn unpark_thread(&mut self, slot: usize) {
+        for queues in self.mvar_waiters.values_mut() {
+            queues.takeput.retain(|waiter| *waiter != slot);
+            queues.read.retain(|waiter| *waiter != slot);
+        }
+        if let Some(thread) = self.threads.get_mut(slot).and_then(Option::as_mut) {
+            thread.delivered_value = None;
+        }
+        self.delay_wakeups.remove(&slot);
+        self.make_runnable(slot);
     }
 
     pub(in crate::runtime) fn int_list(&mut self, values: impl IntoIterator<Item = i64>) -> NodeId {
