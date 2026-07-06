@@ -29,28 +29,35 @@ pub enum Node {
     Tick(Box<Vec<u8>>),
 }
 
-/// One hot heap slot.
-///
-/// The default representation stores the common graph shapes in one packed
-/// word. Values that do not fit in the 4-bit tag plus 60-bit payload are
-/// represented as `CellTag::Cold` and live in `Program::cold_nodes`.
-///
-/// The `wide-cell` feature is an opt-in correctness escape hatch: it keeps the
-/// same cold-node policy but widens each slot to 16 bytes so App/Indir/Free ids
-/// are stored directly as u32 payloads and the arena cap rises to u32::MAX.
-#[cfg_attr(feature = "wide-cell", repr(C, align(8)))]
-#[derive(Clone, Copy, Debug)]
-pub(in crate::runtime) struct Cell {
-    #[cfg(not(feature = "wide-cell"))]
-    pub(in crate::runtime) word: u64,
-    #[cfg(feature = "wide-cell")]
-    pub(in crate::runtime) tag: u8,
-    #[cfg(feature = "wide-cell")]
-    pub(in crate::runtime) _pad: [u8; 3],
-    #[cfg(feature = "wide-cell")]
-    pub(in crate::runtime) left: u32,
-    #[cfg(feature = "wide-cell")]
-    pub(in crate::runtime) right: u64,
+std::cfg_select! {
+    feature = "wide-cell" => {
+        /// One hot heap slot.
+        ///
+        /// The `wide-cell` feature is an opt-in correctness escape hatch: it
+        /// keeps the same cold-node policy but widens each slot to 16 bytes so
+        /// App/Indir/Free ids are stored directly as u32 payloads and the arena
+        /// cap rises to u32::MAX.
+        #[repr(C, align(8))]
+        #[derive(Clone, Copy, Debug)]
+        pub(in crate::runtime) struct Cell {
+            pub(in crate::runtime) tag: u8,
+            pub(in crate::runtime) _pad: [u8; 3],
+            pub(in crate::runtime) left: u32,
+            pub(in crate::runtime) right: u64,
+        }
+    }
+    _ => {
+        /// One hot heap slot.
+        ///
+        /// The default representation stores the common graph shapes in one
+        /// packed word. Values that do not fit in the 4-bit tag plus 60-bit
+        /// payload are represented as `CellTag::Cold` and live in
+        /// `Program::cold_nodes`.
+        #[derive(Clone, Copy, Debug)]
+        pub(in crate::runtime) struct Cell {
+            pub(in crate::runtime) word: u64,
+        }
+    }
 }
 
 /// Packed-cell tags for the hot arena representation.
@@ -67,31 +74,33 @@ pub(in crate::runtime) enum CellTag {
     Cold,
 }
 
-#[cfg(not(feature = "wide-cell"))]
-pub(in crate::runtime) const CELL_TAG_BITS: u64 = 0x0f;
-#[cfg(feature = "wide-cell")]
-pub(in crate::runtime) const CELL_TAG_BITS: u64 = 0xff;
-#[cfg(not(feature = "wide-cell"))]
-pub(in crate::runtime) const CELL_PAYLOAD_SHIFT: u64 = 4;
-#[cfg(not(feature = "wide-cell"))]
-pub(in crate::runtime) const CELL_NONE_ID: u64 = (1_u64 << PACKED_ID_BITS) - 1;
-#[cfg(feature = "wide-cell")]
-pub(in crate::runtime) const CELL_NONE_ID: u64 = u32::MAX as u64;
-#[cfg(not(feature = "wide-cell"))]
-pub(in crate::runtime) const PACKED_ID_BITS: u64 = 30;
-#[cfg(not(feature = "wide-cell"))]
-pub(in crate::runtime) const PACKED_ID_MASK: u64 = (1_u64 << PACKED_ID_BITS) - 1;
-#[cfg(not(feature = "wide-cell"))]
-pub(in crate::runtime) const PACKED_PAYLOAD1_SHIFT: u64 = CELL_PAYLOAD_SHIFT + PACKED_ID_BITS;
-#[cfg(not(feature = "wide-cell"))]
-pub(in crate::runtime) const PACKED_SCALAR_PAYLOAD_MASK: u64 = (1_u64 << 60) - 1;
+std::cfg_select! {
+    feature = "wide-cell" => {
+        pub(in crate::runtime) const CELL_TAG_BITS: u64 = 0xff;
+        pub(in crate::runtime) const CELL_NONE_ID: u64 = u32::MAX as u64;
+    }
+    _ => {
+        pub(in crate::runtime) const CELL_TAG_BITS: u64 = 0x0f;
+        pub(in crate::runtime) const CELL_PAYLOAD_SHIFT: u64 = 4;
+        pub(in crate::runtime) const CELL_NONE_ID: u64 = (1_u64 << PACKED_ID_BITS) - 1;
+        pub(in crate::runtime) const PACKED_ID_BITS: u64 = 30;
+        pub(in crate::runtime) const PACKED_ID_MASK: u64 = (1_u64 << PACKED_ID_BITS) - 1;
+        pub(in crate::runtime) const PACKED_PAYLOAD1_SHIFT: u64 =
+            CELL_PAYLOAD_SHIFT + PACKED_ID_BITS;
+        pub(in crate::runtime) const PACKED_SCALAR_PAYLOAD_MASK: u64 = (1_u64 << 60) - 1;
+    }
+}
 pub(in crate::runtime) const PACKED_INT_MIN: i64 = -(1_i64 << 59);
 pub(in crate::runtime) const PACKED_INT_MAX: i64 = (1_i64 << 59) - 1;
 
-#[cfg(not(feature = "wide-cell"))]
-const _: [(); 8] = [(); std::mem::size_of::<Cell>()];
-#[cfg(feature = "wide-cell")]
-const _: [(); 16] = [(); std::mem::size_of::<Cell>()];
+std::cfg_select! {
+    feature = "wide-cell" => {
+        const _: [(); 16] = [(); std::mem::size_of::<Cell>()];
+    }
+    _ => {
+        const _: [(); 8] = [(); std::mem::size_of::<Cell>()];
+    }
+}
 
 impl CellTag {
     pub(in crate::runtime) fn from_bits(bits: u64) -> Self {
@@ -127,13 +136,13 @@ impl CellTag {
 impl Cell {
     #[inline]
     pub(in crate::runtime) fn tag_bits(self) -> u64 {
-        #[cfg(not(feature = "wide-cell"))]
-        {
-            self.word & CELL_TAG_BITS
-        }
-        #[cfg(feature = "wide-cell")]
-        {
-            u64::from(self.tag)
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                u64::from(self.tag)
+            }
+            _ => {
+                self.word & CELL_TAG_BITS
+            }
         }
     }
 
@@ -206,21 +215,21 @@ impl Cell {
     pub(in crate::runtime) fn app_trusted(fun: NodeId, arg: NodeId) -> Self {
         debug_assert!(u64::from(fun.0) < CELL_NONE_ID);
         debug_assert!(u64::from(arg.0) < CELL_NONE_ID);
-        #[cfg(not(feature = "wide-cell"))]
-        {
-            Self {
-                word: (u64::from(arg.0) << PACKED_PAYLOAD1_SHIFT)
-                    | (u64::from(fun.0) << CELL_PAYLOAD_SHIFT)
-                    | CellTag::App.bits(),
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                Self {
+                    tag: CellTag::App.bits() as u8,
+                    _pad: [0; 3],
+                    left: fun.0,
+                    right: u64::from(arg.0),
+                }
             }
-        }
-        #[cfg(feature = "wide-cell")]
-        {
-            Self {
-                tag: CellTag::App.bits() as u8,
-                _pad: [0; 3],
-                left: fun.0,
-                right: u64::from(arg.0),
+            _ => {
+                Self {
+                    word: (u64::from(arg.0) << PACKED_PAYLOAD1_SHIFT)
+                        | (u64::from(fun.0) << CELL_PAYLOAD_SHIFT)
+                        | CellTag::App.bits(),
+                }
             }
         }
     }
@@ -234,19 +243,19 @@ impl Cell {
     #[inline(always)]
     pub(in crate::runtime) fn indir_trusted(target: NodeId) -> Self {
         debug_assert!(u64::from(target.0) < CELL_NONE_ID);
-        #[cfg(not(feature = "wide-cell"))]
-        {
-            Self {
-                word: (u64::from(target.0) << CELL_PAYLOAD_SHIFT) | CellTag::Indir.bits(),
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                Self {
+                    tag: CellTag::Indir.bits() as u8,
+                    _pad: [0; 3],
+                    left: 0,
+                    right: u64::from(target.0),
+                }
             }
-        }
-        #[cfg(feature = "wide-cell")]
-        {
-            Self {
-                tag: CellTag::Indir.bits() as u8,
-                _pad: [0; 3],
-                left: 0,
-                right: u64::from(target.0),
+            _ => {
+                Self {
+                    word: (u64::from(target.0) << CELL_PAYLOAD_SHIFT) | CellTag::Indir.bits(),
+                }
             }
         }
     }
@@ -264,20 +273,20 @@ impl Cell {
     /// unconditionally sound; it exists only to inline the fast construction.
     #[inline(always)]
     pub(in crate::runtime) fn known_prim_trusted(known: KnownPrim) -> Self {
-        #[cfg(not(feature = "wide-cell"))]
-        {
-            Self {
-                word: (u64::from(encode_known_prim(known)) << CELL_PAYLOAD_SHIFT)
-                    | CellTag::KnownPrim.bits(),
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                Self {
+                    tag: CellTag::KnownPrim.bits() as u8,
+                    _pad: [0; 3],
+                    left: 0,
+                    right: u64::from(encode_known_prim(known)),
+                }
             }
-        }
-        #[cfg(feature = "wide-cell")]
-        {
-            Self {
-                tag: CellTag::KnownPrim.bits() as u8,
-                _pad: [0; 3],
-                left: 0,
-                right: u64::from(encode_known_prim(known)),
+            _ => {
+                Self {
+                    word: (u64::from(encode_known_prim(known)) << CELL_PAYLOAD_SHIFT)
+                        | CellTag::KnownPrim.bits(),
+                }
             }
         }
     }
@@ -297,19 +306,19 @@ impl Cell {
     #[inline(always)]
     pub(in crate::runtime) fn int_trusted(value: i64) -> Self {
         debug_assert!(can_inline_int(value));
-        #[cfg(not(feature = "wide-cell"))]
-        {
-            Self {
-                word: ((value as u64) << CELL_PAYLOAD_SHIFT) | CellTag::Int.bits(),
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                Self {
+                    tag: CellTag::Int.bits() as u8,
+                    _pad: [0; 3],
+                    left: 0,
+                    right: value as u64,
+                }
             }
-        }
-        #[cfg(feature = "wide-cell")]
-        {
-            Self {
-                tag: CellTag::Int.bits() as u8,
-                _pad: [0; 3],
-                left: 0,
-                right: value as u64,
+            _ => {
+                Self {
+                    word: ((value as u64) << CELL_PAYLOAD_SHIFT) | CellTag::Int.bits(),
+                }
             }
         }
     }
@@ -330,26 +339,26 @@ impl Cell {
     }
 
     pub(in crate::runtime) fn id_payload(self) -> NodeId {
-        #[cfg(not(feature = "wide-cell"))]
-        {
-            NodeId(self.payload0() as u32)
-        }
-        #[cfg(feature = "wide-cell")]
-        {
-            debug_assert_eq!(self.tag_bits(), CellTag::App.bits());
-            NodeId(self.left)
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                debug_assert_eq!(self.tag_bits(), CellTag::App.bits());
+                NodeId(self.left)
+            }
+            _ => {
+                NodeId(self.payload0() as u32)
+            }
         }
     }
 
     pub(in crate::runtime) fn id_word1(self) -> NodeId {
-        #[cfg(not(feature = "wide-cell"))]
-        {
-            NodeId(self.payload1() as u32)
-        }
-        #[cfg(feature = "wide-cell")]
-        {
-            debug_assert_eq!(self.tag_bits(), CellTag::App.bits());
-            NodeId(self.right as u32)
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                debug_assert_eq!(self.tag_bits(), CellTag::App.bits());
+                NodeId(self.right as u32)
+            }
+            _ => {
+                NodeId(self.payload1() as u32)
+            }
         }
     }
 
@@ -411,69 +420,69 @@ impl Cell {
 
     #[inline]
     pub(in crate::runtime) fn payload0(self) -> u64 {
-        #[cfg(not(feature = "wide-cell"))]
-        {
-            (self.word >> CELL_PAYLOAD_SHIFT) & PACKED_ID_MASK
-        }
-        #[cfg(feature = "wide-cell")]
-        {
-            self.right
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                self.right
+            }
+            _ => {
+                (self.word >> CELL_PAYLOAD_SHIFT) & PACKED_ID_MASK
+            }
         }
     }
 
     #[inline]
     #[cfg_attr(feature = "wide-cell", allow(dead_code))]
     pub(in crate::runtime) fn payload1(self) -> u64 {
-        #[cfg(not(feature = "wide-cell"))]
-        {
-            (self.word >> PACKED_PAYLOAD1_SHIFT) & PACKED_ID_MASK
-        }
-        #[cfg(feature = "wide-cell")]
-        {
-            self.right
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                self.right
+            }
+            _ => {
+                (self.word >> PACKED_PAYLOAD1_SHIFT) & PACKED_ID_MASK
+            }
         }
     }
 
     #[inline]
     pub(in crate::runtime) fn signed_payload_value(self) -> i64 {
-        #[cfg(not(feature = "wide-cell"))]
-        {
-            (self.word as i64) >> CELL_PAYLOAD_SHIFT
-        }
-        #[cfg(feature = "wide-cell")]
-        {
-            self.right as i64
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                self.right as i64
+            }
+            _ => {
+                (self.word as i64) >> CELL_PAYLOAD_SHIFT
+            }
         }
     }
 
     #[inline]
     pub(in crate::runtime) fn unsigned_payload_value(self) -> u64 {
-        #[cfg(not(feature = "wide-cell"))]
-        {
-            (self.word >> CELL_PAYLOAD_SHIFT) & PACKED_SCALAR_PAYLOAD_MASK
-        }
-        #[cfg(feature = "wide-cell")]
-        {
-            self.right
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                self.right
+            }
+            _ => {
+                (self.word >> CELL_PAYLOAD_SHIFT) & PACKED_SCALAR_PAYLOAD_MASK
+            }
         }
     }
 
     #[inline]
     pub(in crate::runtime) fn with_payload0(tag: CellTag, payload: u64) -> Self {
-        #[cfg(not(feature = "wide-cell"))]
-        {
-            assert!(payload <= PACKED_ID_MASK, "packed cell payload overflow");
-            Self {
-                word: (payload << CELL_PAYLOAD_SHIFT) | tag.bits(),
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                Self {
+                    tag: tag.bits() as u8,
+                    _pad: [0; 3],
+                    left: 0,
+                    right: payload,
+                }
             }
-        }
-        #[cfg(feature = "wide-cell")]
-        {
-            Self {
-                tag: tag.bits() as u8,
-                _pad: [0; 3],
-                left: 0,
-                right: payload,
+            _ => {
+                assert!(payload <= PACKED_ID_MASK, "packed cell payload overflow");
+                Self {
+                    word: (payload << CELL_PAYLOAD_SHIFT) | tag.bits(),
+                }
             }
         }
     }
@@ -481,23 +490,25 @@ impl Cell {
     #[inline]
     pub(in crate::runtime) fn two_id_payloads(tag: CellTag, left: NodeId, right: NodeId) -> Self {
         debug_assert_eq!(tag, CellTag::App);
-        #[cfg(not(feature = "wide-cell"))]
-        {
-            let left = pack_id_payload(left);
-            let right = pack_id_payload(right);
-            Self {
-                word: (right << PACKED_PAYLOAD1_SHIFT) | (left << CELL_PAYLOAD_SHIFT) | tag.bits(),
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                let left = pack_id_payload(left);
+                let right = pack_id_payload(right);
+                Self {
+                    tag: tag.bits() as u8,
+                    _pad: [0; 3],
+                    left: left as u32,
+                    right,
+                }
             }
-        }
-        #[cfg(feature = "wide-cell")]
-        {
-            let left = pack_id_payload(left);
-            let right = pack_id_payload(right);
-            Self {
-                tag: tag.bits() as u8,
-                _pad: [0; 3],
-                left: left as u32,
-                right,
+            _ => {
+                let left = pack_id_payload(left);
+                let right = pack_id_payload(right);
+                Self {
+                    word: (right << PACKED_PAYLOAD1_SHIFT)
+                        | (left << CELL_PAYLOAD_SHIFT)
+                        | tag.bits(),
+                }
             }
         }
     }
@@ -505,42 +516,42 @@ impl Cell {
     #[inline]
     pub(in crate::runtime) fn signed_payload(tag: CellTag, value: i64) -> Self {
         assert!(can_inline_int(value), "packed signed cell payload overflow");
-        #[cfg(not(feature = "wide-cell"))]
-        {
-            Self {
-                word: ((value as u64) << CELL_PAYLOAD_SHIFT) | tag.bits(),
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                Self {
+                    tag: tag.bits() as u8,
+                    _pad: [0; 3],
+                    left: 0,
+                    right: value as u64,
+                }
             }
-        }
-        #[cfg(feature = "wide-cell")]
-        {
-            Self {
-                tag: tag.bits() as u8,
-                _pad: [0; 3],
-                left: 0,
-                right: value as u64,
+            _ => {
+                Self {
+                    word: ((value as u64) << CELL_PAYLOAD_SHIFT) | tag.bits(),
+                }
             }
         }
     }
 
     #[inline]
     pub(in crate::runtime) fn unsigned_payload(tag: CellTag, value: u64) -> Self {
-        #[cfg(not(feature = "wide-cell"))]
-        {
-            assert!(
-                value <= PACKED_SCALAR_PAYLOAD_MASK,
-                "packed unsigned cell payload overflow"
-            );
-            Self {
-                word: (value << CELL_PAYLOAD_SHIFT) | tag.bits(),
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                Self {
+                    tag: tag.bits() as u8,
+                    _pad: [0; 3],
+                    left: 0,
+                    right: value,
+                }
             }
-        }
-        #[cfg(feature = "wide-cell")]
-        {
-            Self {
-                tag: tag.bits() as u8,
-                _pad: [0; 3],
-                left: 0,
-                right: value,
+            _ => {
+                assert!(
+                    value <= PACKED_SCALAR_PAYLOAD_MASK,
+                    "packed unsigned cell payload overflow"
+                );
+                Self {
+                    word: (value << CELL_PAYLOAD_SHIFT) | tag.bits(),
+                }
             }
         }
     }
