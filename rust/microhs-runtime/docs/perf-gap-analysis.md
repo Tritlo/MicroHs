@@ -411,3 +411,20 @@ binary size and is an unstable, LLVM-version-specific flag, so it is **not shipp
 (available as an opt-in if the 0.5% is ever wanted). The residual instruction-count
 component is not flag-recoverable on stable; revisit only if a future rustc/LLVM
 changes the tail-merge or lowering behavior.
+
+**Manual `stack_eval_step`→`reduce_whnf_from_stack` fusion — tried, rejected (do not re-run).**
+This was "source-addressable residue #1" above: hand-fuse the ~710-line dispatch
+function into its sole caller's loop, deleting the `StackStep` enum + call boundary
+(each of the 13 return sites became an inline continuation macro), to reproduce
+PGO's biggest structural change in source. Byte-identical (SHA `29b8c5a5`); clean
+core-pinned interleaved wall A/B (min≈median) measured **+2.0% wall — a regression.**
+A bounded 80M-step GC-off callgrind slice explains exactly why: the fusion *did*
+capture PGO's frontend half — **I1mr −8.0%** (25.25M→23.24M) from removing the
+boundary — but the ~880-line monolith blew up the backend: **Dw +33.3%**
+(1.53B→2.04B data writes, i.e. register spills to stack) with reads flat, and
+**Ir +5.6%**. The spill/instruction cost swamped the I-cache win. This falsifies the
+last named source-addressable lever: manual fusion gets PGO's *layout* half for free
+but cannot get its *register-allocation* half (profile-guided regalloc on the fused
+body) — confirming the residual ~6% is PGO-only in practice. A "shared continuation"
+variant would just re-introduce the state-machine boundary the fusion removed, so it
+is not worth another probe. The non-PGO reducer is at its empirical floor.
