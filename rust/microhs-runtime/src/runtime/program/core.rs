@@ -94,10 +94,16 @@ impl Program {
             profile: None,
             reduce_depth: 0,
             threads: Vec::new(),
+            thread_states: Vec::new(),
+            thread_ids: Vec::new(),
             run_queue: std::collections::VecDeque::new(),
+            mvar_waiters: HashMap::new(),
+            delay_wakeups: HashMap::new(),
+            scheduler_epoch: Instant::now(),
             current_thread: 0,
             next_thread_id: 1,
             reschedule_now: false,
+            preserve_thread_root_once: false,
         }
     }
 

@@ -9,7 +9,7 @@ use std::mem::{MaybeUninit, size_of};
 use std::time::Instant;
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Instant;
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]

@@ -212,7 +212,14 @@ impl Program {
             }
         }
 
-        if known == Some(IoThen) && args_len >= 3 && budget >= 2 {
+        let multi_threaded = self
+            .threads
+            .iter()
+            .filter(|thread| thread.is_some())
+            .count()
+            > 1;
+
+        if known == Some(IoThen) && args_len >= 3 && budget >= 2 && !multi_threaded {
             if let Some(reductions) = self.ignored_io_action_reductions(arg!(0), budget - 1)? {
                 self.profile_shortcut("io_then_ignored_action", 1);
                 let world = self
@@ -341,10 +348,17 @@ impl Program {
                 Some((1, self.pair(arg_array, arg!(0))))
             }
             Some(IoThid) if args_len >= 1 => {
-                let thread = self.push_node(Node::ThreadId(1));
+                let id = self
+                    .threads
+                    .get(self.current_thread)
+                    .and_then(Option::as_ref)
+                    .map(|thread| thread.id)
+                    .unwrap_or(1);
+                let thread = self.push_node(Node::ThreadId(id));
                 Some((1, self.pair(thread, arg!(0))))
             }
             Some(IoYield) if args_len >= 1 => {
+                self.check_pending_async_exception(false)?;
                 self.run_pending_weak_finalizers()?;
                 let unit = self.prim("I");
                 Some((1, self.pair(unit, arg!(0))))
@@ -362,7 +376,13 @@ impl Program {
                 self.threads.push(Some(ThreadControl {
                     id,
                     root: child_root,
+                    delivered_value: None,
+                    pending_exception: None,
+                    delay_ready: false,
+                    masking_state: self.masking_state,
                 }));
+                self.thread_ids.push(id);
+                self.thread_states.push(ThreadState::Runnable);
                 self.run_queue.push_back(slot);
                 // Leave the (previously single-thread, unbounded) slice so the scheduler
                 // switches to preemptive slicing now that a second thread exists.
@@ -376,6 +396,10 @@ impl Program {
             }
             Some(IoSetMaskingState) if args_len >= 2 => {
                 self.masking_state = self.eval_int(arg!(0))?;
+                let masking_state = self.masking_state;
+                if let Some(thread) = self.current_thread_mut() {
+                    thread.masking_state = masking_state;
+                }
                 let unit = self.prim("I");
                 Some((2, self.pair(unit, arg!(1))))
             }
@@ -384,33 +408,66 @@ impl Program {
                 Some((1, self.push_node(Node::ffi(name))))
             }
             Some(IoThreadStatus) if args_len >= 2 => {
-                self.eval_thread_id(arg!(0))?;
-                let status = self.int(0);
+                let thread = self.eval_thread_id(arg!(0))?;
+                let status = self
+                    .thread_slot_for_id(thread)
+                    .and_then(|slot| self.thread_states.get(slot))
+                    .copied()
+                    .unwrap_or(ThreadState::Finished);
+                let status = self.int(match status {
+                    ThreadState::Runnable => 0,
+                    ThreadState::BlockedMVar => 1,
+                    ThreadState::BlockedOther => 2,
+                    ThreadState::Finished => 3,
+                });
                 Some((2, self.pair(status, arg!(1))))
             }
             Some(IoNewMVar) if args_len >= 1 => {
                 let mvar = self.push_node(Node::MVar(None));
+                self.register_mvar(mvar);
                 Some((1, self.pair(mvar, arg!(0))))
             }
             Some(IoTakeMVar) if args_len >= 2 => {
+                self.check_pending_async_exception(true)?;
                 let mvar = self.eval_mvar_id(arg!(0))?;
-                let value = self.take_mvar(mvar)?.ok_or(EvalError::InvalidMVar)?;
+                let value = match self.take_mvar(mvar, true) {
+                    Ok(Some(value)) => value,
+                    Ok(None) => return Err(EvalError::InvalidMVar),
+                    Err(EvalError::Blocked(reason)) => {
+                        return Err(self.block_current_thread_at(reason, root));
+                    }
+                    Err(err) => return Err(err),
+                };
                 Some((2, self.pair(value, arg!(1))))
             }
             Some(IoReadMVar) if args_len >= 2 => {
+                self.check_pending_async_exception(true)?;
                 let mvar = self.eval_mvar_id(arg!(0))?;
-                let value = self.read_mvar(mvar)?.ok_or(EvalError::InvalidMVar)?;
+                let value = match self.read_mvar(mvar, true) {
+                    Ok(Some(value)) => value,
+                    Ok(None) => return Err(EvalError::InvalidMVar),
+                    Err(EvalError::Blocked(reason)) => {
+                        return Err(self.block_current_thread_at(reason, root));
+                    }
+                    Err(err) => return Err(err),
+                };
                 Some((2, self.pair(value, arg!(1))))
             }
             Some(IoPutMVar) if args_len >= 3 => {
+                self.check_pending_async_exception(true)?;
                 let mvar = self.eval_mvar_id(arg!(0))?;
-                self.put_mvar(mvar, arg!(1))?;
+                if let Err(err) = self.put_mvar(mvar, arg!(1), true) {
+                    return Err(match err {
+                        EvalError::Blocked(reason) => self.block_current_thread_at(reason, root),
+                        err => err,
+                    });
+                }
                 let unit = self.prim("I");
                 Some((3, self.pair(unit, arg!(2))))
             }
             Some(IoTryTakeMVar) if args_len >= 2 => {
                 let mvar = self.eval_mvar_id(arg!(0))?;
-                let value = match self.take_mvar(mvar)? {
+                let value = match self.take_mvar(mvar, false)? {
                     Some(value) => self.just(value),
                     None => self.nothing(),
                 };
@@ -418,7 +475,7 @@ impl Program {
             }
             Some(IoTryReadMVar) if args_len >= 2 => {
                 let mvar = self.eval_mvar_id(arg!(0))?;
-                let value = match self.read_mvar(mvar)? {
+                let value = match self.read_mvar(mvar, false)? {
                     Some(value) => self.just(value),
                     None => self.nothing(),
                 };
@@ -426,12 +483,35 @@ impl Program {
             }
             Some(IoTryPutMVar) if args_len >= 3 => {
                 let mvar = self.eval_mvar_id(arg!(0))?;
-                let value = if self.try_put_mvar(mvar, arg!(1))? {
+                let value = if self.put_mvar(mvar, arg!(1), false)? {
                     self.prim("A")
                 } else {
                     self.prim("K")
                 };
                 Some((3, self.pair(value, arg!(2))))
+            }
+            Some(IoThreadDelay) if args_len >= 2 => {
+                self.check_pending_async_exception(true)?;
+                let delay_ready = self
+                    .current_thread_mut()
+                    .map(|thread| std::mem::take(&mut thread.delay_ready))
+                    .unwrap_or(false);
+                if delay_ready {
+                    let unit = self.prim("I");
+                    Some((2, self.pair(unit, arg!(1))))
+                } else {
+                    let usecs = self.eval_int(arg!(0))?;
+                    let usecs = u128::try_from(usecs).map_err(|_| EvalError::Overflow)?;
+                    let wake = self.scheduler_now_micros().saturating_add(usecs);
+                    return Err(self.block_current_thread_at(BlockReason::Delay(wake), root));
+                }
+            }
+            Some(IoThrowTo) if args_len >= 3 => {
+                self.check_pending_async_exception(true)?;
+                let thread = self.eval_thread_id(arg!(0))?;
+                self.throw_to_thread(thread, arg!(1))?;
+                let unit = self.prim("I");
+                Some((3, self.pair(unit, arg!(2))))
             }
             Some(Catch) if args_len >= 3 => {
                 let action = self.app(arg!(0), arg!(2));
