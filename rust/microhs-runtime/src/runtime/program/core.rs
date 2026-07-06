@@ -247,8 +247,8 @@ impl Program {
     /// arena grows, and the only place `NodeId`s are minted, which makes it the
     /// enforcement point for two invariants the hot-path `unsafe` relies on:
     ///
-    /// 1. Packed-id fit: the `assert!` keeps `nodes.len() < CELL_NONE_ID`, so
-    ///    every id ever produced fits the packed cell field. This is what makes
+    /// 1. Cell-id fit: the `assert!` keeps `nodes.len() < CELL_NONE_ID`, so
+    ///    every id ever produced fits the active cell id field. This is what makes
     ///    the `Cell::*_trusted` constructors sound.
     /// 2. Permanent index validity: the arena never shrinks (freed slots stay
     ///    in `nodes` tagged `Free`), so any `NodeId` handed out is a valid
@@ -256,11 +256,12 @@ impl Program {
     ///    index `nodes` with `get_unchecked` given only a `NodeId`.
     ///
     /// The `assert!` is a real (non-debug) check so the invariant holds in
-    /// release; it can only fire on a program needing >~1e9 live cells.
+    /// release; the cap is ~1e9 cells for the default packed representation and
+    /// ~4.3e9 cells with the `wide-cell` feature.
     pub(in crate::runtime) fn push_cell(&mut self, cell: Cell) -> NodeId {
         assert!(
             (self.nodes.len() as u64) < CELL_NONE_ID,
-            "node arena exceeded packed ids"
+            "node arena exceeded cell ids"
         );
         let id = NodeId::from_index(self.nodes.len());
         self.nodes.push(cell);

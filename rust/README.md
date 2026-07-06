@@ -17,7 +17,12 @@ tag plus two 30-bit arena indices for an `App`, or a compact scalar; wide scalar
 two machine words holding native `NODEPTR` pointers or inline 64-bit values. So at
 equal *cell count* Rust uses ~60% of C's memory — meaning the older "128 M cells
 each" comparison silently handed C **2.09 GB against Rust's 1.26 GB**. The fair
-comparison holds *memory* constant, not cell count.
+comparison holds *memory* constant, not cell count. (The flip side of 8-byte
+density: the packed cell's 30-bit indices cap the arena at ~1.07 B cells; a
+program needing more aborts. `cargo build --features wide-cell` swaps in a 16-byte
+cell that lifts the cap to ~4.29 B — a correctness escape hatch, not a perf option:
+at equal memory (~787 MB) it holds half the cells and runs **+38%** slower. See
+`microhs-runtime/docs/cell-redesign-plan.md`.)
 
 **Equal memory — C's default heap (~790 MB), median of 3 interleaved runs, RSS
 matched within ~1% (Rust 796 MB vs C 787 MB), every Rust output byte-identical:**
