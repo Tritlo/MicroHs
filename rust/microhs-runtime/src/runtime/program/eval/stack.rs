@@ -190,94 +190,110 @@ impl Program {
                 }};
             }
 
-            let head_dispatch = match self.cell_trusted(head).prim() {
-                Some(Prim::Known(known)) => EvalHead::Known(known),
-                Some(Prim::Runtime(runtime)) => {
-                    let action = runtime.strict_action(args_len);
-                    EvalHead::Other {
-                        action,
-                        fallback_name: matches!(action, StrictPrimitiveAction::None)
-                            .then_some(runtime.name()),
+            let head_cell = self.cell_trusted(head);
+            let known = if head_cell.tag_bits() == CellTag::KnownPrim.bits() {
+                decode_known_prim(head_cell.payload0() as u16)
+            } else {
+                let head_dispatch = match head_cell.prim() {
+                    Some(Prim::Runtime(runtime)) => {
+                        let action = runtime.strict_action(args_len);
+                        EvalHead::Other {
+                            action,
+                            fallback_name: matches!(action, StrictPrimitiveAction::None)
+                                .then_some(runtime.name()),
+                        }
                     }
-                }
-                None if args_len > 0 => match self.cold_node(head) {
-                    Some(Node::Ffi(name)) => EvalHead::Ffi(name.to_string()),
-                    Some(Node::JsCall(call)) => EvalHead::JsCall {
-                        tags: call.tags.clone(),
-                        body: call.body.clone(),
-                    },
-                    Some(Node::JsWrap { tags }) => EvalHead::JsWrap {
-                        tags: tags.to_string(),
+                    _ if args_len > 0 => match self.cold_node(head) {
+                        Some(Node::Ffi(name)) => EvalHead::Ffi(name.to_string()),
+                        Some(Node::JsCall(call)) => EvalHead::JsCall {
+                            tags: call.tags.clone(),
+                            body: call.body.clone(),
+                        },
+                        Some(Node::JsWrap { tags }) => EvalHead::JsWrap {
+                            tags: tags.to_string(),
+                        },
+                        _ => EvalHead::Whnf,
                     },
                     _ => EvalHead::Whnf,
-                },
-                None => EvalHead::Whnf,
-            };
+                };
 
-            let known = match head_dispatch {
-                EvalHead::Ffi(name) => {
-                    if self.profiling_enabled() {
-                        self.profile_arg_materialization(args_len);
+                match head_dispatch {
+                    EvalHead::Ffi(name) => {
+                        if self.profiling_enabled() {
+                            self.profile_arg_materialization(args_len);
+                        }
+                        stack.write_args_head_order(&self.nodes, scratch_args)?;
+                        let Some((used, node)) = self.ffi_call(&name, scratch_args.as_slice())?
+                        else {
+                            return Ok(StackStep::Whnf {
+                                node: stack.outer_root(head),
+                                head,
+                                reductions: carried_reductions,
+                            });
+                        };
+                        rewrite_step!(used, node, 1);
                     }
-                    stack.write_args_head_order(&self.nodes, scratch_args)?;
-                    let Some((used, node)) = self.ffi_call(&name, scratch_args.as_slice())? else {
-                        return Ok(StackStep::Whnf {
-                            node: stack.outer_root(head),
-                            head,
-                            reductions: carried_reductions,
-                        });
-                    };
-                    rewrite_step!(used, node, 1);
-                }
-                EvalHead::JsCall { tags, body } => {
-                    if self.profiling_enabled() {
-                        self.profile_arg_materialization(args_len);
+                    EvalHead::JsCall { tags, body } => {
+                        if self.profiling_enabled() {
+                            self.profile_arg_materialization(args_len);
+                        }
+                        stack.write_args_head_order(&self.nodes, scratch_args)?;
+                        let Some((used, node)) =
+                            self.js_call(&tags, &body, scratch_args.as_slice())?
+                        else {
+                            return Ok(StackStep::Whnf {
+                                node: stack.outer_root(head),
+                                head,
+                                reductions: carried_reductions,
+                            });
+                        };
+                        rewrite_step!(used, node, 1);
                     }
-                    stack.write_args_head_order(&self.nodes, scratch_args)?;
-                    let Some((used, node)) = self.js_call(&tags, &body, scratch_args.as_slice())?
-                    else {
-                        return Ok(StackStep::Whnf {
-                            node: stack.outer_root(head),
-                            head,
-                            reductions: carried_reductions,
-                        });
-                    };
-                    rewrite_step!(used, node, 1);
-                }
-                EvalHead::JsWrap { tags } => {
-                    if self.profiling_enabled() {
-                        self.profile_arg_materialization(args_len);
+                    EvalHead::JsWrap { tags } => {
+                        if self.profiling_enabled() {
+                            self.profile_arg_materialization(args_len);
+                        }
+                        stack.write_args_head_order(&self.nodes, scratch_args)?;
+                        let Some((used, node)) = self.js_wrap(&tags, scratch_args.as_slice())?
+                        else {
+                            return Ok(StackStep::Whnf {
+                                node: stack.outer_root(head),
+                                head,
+                                reductions: carried_reductions,
+                            });
+                        };
+                        rewrite_step!(used, node, 1);
                     }
-                    stack.write_args_head_order(&self.nodes, scratch_args)?;
-                    let Some((used, node)) = self.js_wrap(&tags, scratch_args.as_slice())? else {
-                        return Ok(StackStep::Whnf {
-                            node: stack.outer_root(head),
-                            head,
-                            reductions: carried_reductions,
-                        });
-                    };
-                    rewrite_step!(used, node, 1);
-                }
-                EvalHead::Known(known) => known,
-                EvalHead::Other {
-                    action,
-                    fallback_name,
-                } => {
-                    match action {
-                        StrictPrimitiveAction::IntBin(op) => {
-                            let (redex, x, y) = take_args!(2, take_args2);
-                            let y_immediate = self.cell_int_value(y);
-                            if let Some(y_value) = y_immediate {
-                                if let Some(x_value) = self.cell_int_value(x) {
-                                    let result = op
-                                        .apply(x_value, y_value)
-                                        .map_err(|err| self.arithmetic_eval_error(err))?;
-                                    let node = self.apply_stack_redex_value(
+                    EvalHead::Other {
+                        action,
+                        fallback_name,
+                    } => {
+                        match action {
+                            StrictPrimitiveAction::IntBin(op) => {
+                                let (redex, x, y) = take_args!(2, take_args2);
+                                let y_immediate = self.cell_int_value(y);
+                                if let Some(y_value) = y_immediate {
+                                    if let Some(x_value) = self.cell_int_value(x) {
+                                        let result = op
+                                            .apply(x_value, y_value)
+                                            .map_err(|err| self.arithmetic_eval_error(err))?;
+                                        let node = self.apply_stack_redex_value(
+                                            redex,
+                                            2,
+                                            Self::int_result_value_node(result),
+                                        );
+                                        finish_reduction!(node, 1);
+                                    }
+                                    if profiling {
+                                        self.profile_strict_force();
+                                        self.profile_eval_frame_push("Int");
+                                    }
+                                    stack.push_int_frame(
                                         redex,
-                                        2,
-                                        Self::int_result_value_node(result),
+                                        profile_head,
+                                        IntFrameKind::BinFirst { op, y: y_value },
                                     );
-                                    finish_reduction!(node, 1);
+                                    continue_with!(x);
                                 }
                                 if profiling {
                                     self.profile_strict_force();
@@ -286,143 +302,134 @@ impl Program {
                                 stack.push_int_frame(
                                     redex,
                                     profile_head,
-                                    IntFrameKind::BinFirst { op, y: y_value },
+                                    IntFrameKind::BinSecond { op, x },
                                 );
-                                continue_with!(x);
+                                continue_with!(y);
                             }
-                            if profiling {
-                                self.profile_strict_force();
-                                self.profile_eval_frame_push("Int");
-                            }
-                            stack.push_int_frame(
-                                redex,
-                                profile_head,
-                                IntFrameKind::BinSecond { op, x },
-                            );
-                            continue_with!(y);
-                        }
-                        StrictPrimitiveAction::IntUn(op) => {
-                            let (redex, x) = take_args!(1, take_args1);
-                            if profiling {
-                                self.profile_strict_force();
-                                self.profile_eval_frame_push("Int");
-                            }
-                            stack.push_int_frame(redex, profile_head, IntFrameKind::Un { op });
-                            continue_with!(x);
-                        }
-                        StrictPrimitiveAction::Int64Bin(op) => {
-                            if op.rhs_is_shift() {
-                                let app_end = stack.apps.len();
-                                let x = arg!(0);
-                                let next = arg!(1);
+                            StrictPrimitiveAction::IntUn(op) => {
+                                let (redex, x) = take_args!(1, take_args1);
                                 if profiling {
                                     self.profile_strict_force();
-                                    self.profile_eval_frame_push("Int64Shift");
+                                    self.profile_eval_frame_push("Int");
                                 }
-                                stack.push_int64_shift_frame(app_end, 2, profile_head, op, x);
-                                continue_with!(next);
-                            } else if op.driver_marker_safe() {
+                                stack.push_int_frame(redex, profile_head, IntFrameKind::Un { op });
+                                continue_with!(x);
+                            }
+                            StrictPrimitiveAction::Int64Bin(op) => {
+                                if op.rhs_is_shift() {
+                                    let app_end = stack.apps.len();
+                                    let x = arg!(0);
+                                    let next = arg!(1);
+                                    if profiling {
+                                        self.profile_strict_force();
+                                        self.profile_eval_frame_push("Int64Shift");
+                                    }
+                                    stack.push_int64_shift_frame(app_end, 2, profile_head, op, x);
+                                    continue_with!(next);
+                                } else if op.driver_marker_safe() {
+                                    force_step!(
+                                        2,
+                                        push_int64_frame,
+                                        Int64FrameKind::BinSecond { op, x: arg!(0) },
+                                        arg!(1),
+                                        "Int64"
+                                    );
+                                }
+                            }
+                            StrictPrimitiveAction::Int64Un(op) => {
                                 force_step!(
-                                    2,
+                                    1,
                                     push_int64_frame,
-                                    Int64FrameKind::BinSecond { op, x: arg!(0) },
-                                    arg!(1),
+                                    Int64FrameKind::Un { op },
+                                    arg!(0),
                                     "Int64"
                                 );
                             }
+                            StrictPrimitiveAction::Float64Bin(op) => {
+                                force_step!(
+                                    2,
+                                    push_float64_frame,
+                                    Float64FrameKind::BinSecond { op, x: arg!(0) },
+                                    arg!(1),
+                                    "Float64"
+                                );
+                            }
+                            StrictPrimitiveAction::Float64Un(op) => {
+                                force_step!(
+                                    1,
+                                    push_float64_frame,
+                                    Float64FrameKind::Un { op },
+                                    arg!(0),
+                                    "Float64"
+                                );
+                            }
+                            StrictPrimitiveAction::Float32Bin(op) => {
+                                force_step!(
+                                    2,
+                                    push_float32_frame,
+                                    Float32FrameKind::BinSecond { op, x: arg!(0) },
+                                    arg!(1),
+                                    "Float32"
+                                );
+                            }
+                            StrictPrimitiveAction::Float32Un(op) => {
+                                force_step!(
+                                    1,
+                                    push_float32_frame,
+                                    Float32FrameKind::Un { op },
+                                    arg!(0),
+                                    "Float32"
+                                );
+                            }
+                            StrictPrimitiveAction::BytesBin(op) => {
+                                force_step!(
+                                    2,
+                                    push_bytes_frame,
+                                    BytesFrameKind::BinSecond { op, x: arg!(0) },
+                                    arg!(1),
+                                    "Bytes"
+                                );
+                            }
+                            StrictPrimitiveAction::Conversion(kind) => {
+                                force_step!(1, push_conversion_frame, kind, arg!(0), "Conversion");
+                            }
+                            StrictPrimitiveAction::None => {}
                         }
-                        StrictPrimitiveAction::Int64Un(op) => {
-                            force_step!(
-                                1,
-                                push_int64_frame,
-                                Int64FrameKind::Un { op },
-                                arg!(0),
-                                "Int64"
-                            );
+                        if let Some(name) = fallback_name {
+                            let materialized_args = args_len.min(FALLBACK_PRIM_ARG_PREFIX);
+                            if self.profiling_enabled() {
+                                self.profile_arg_materialization(materialized_args);
+                            }
+                            stack.write_args_head_order_prefix(
+                                &self.nodes,
+                                scratch_args,
+                                FALLBACK_PRIM_ARG_PREFIX,
+                            )?;
+                            if let Some((used, node)) = self.fallback_runtime_prim_rewrite(
+                                name,
+                                scratch_args.as_slice(),
+                                args_len,
+                            )? {
+                                rewrite_step!(used, node, 1);
+                            }
+                            if args_len != 0 && !is_supported_runtime_prim_name(name) {
+                                return Err(EvalError::UnknownPrim(name.to_owned()));
+                            }
                         }
-                        StrictPrimitiveAction::Float64Bin(op) => {
-                            force_step!(
-                                2,
-                                push_float64_frame,
-                                Float64FrameKind::BinSecond { op, x: arg!(0) },
-                                arg!(1),
-                                "Float64"
-                            );
-                        }
-                        StrictPrimitiveAction::Float64Un(op) => {
-                            force_step!(
-                                1,
-                                push_float64_frame,
-                                Float64FrameKind::Un { op },
-                                arg!(0),
-                                "Float64"
-                            );
-                        }
-                        StrictPrimitiveAction::Float32Bin(op) => {
-                            force_step!(
-                                2,
-                                push_float32_frame,
-                                Float32FrameKind::BinSecond { op, x: arg!(0) },
-                                arg!(1),
-                                "Float32"
-                            );
-                        }
-                        StrictPrimitiveAction::Float32Un(op) => {
-                            force_step!(
-                                1,
-                                push_float32_frame,
-                                Float32FrameKind::Un { op },
-                                arg!(0),
-                                "Float32"
-                            );
-                        }
-                        StrictPrimitiveAction::BytesBin(op) => {
-                            force_step!(
-                                2,
-                                push_bytes_frame,
-                                BytesFrameKind::BinSecond { op, x: arg!(0) },
-                                arg!(1),
-                                "Bytes"
-                            );
-                        }
-                        StrictPrimitiveAction::Conversion(kind) => {
-                            force_step!(1, push_conversion_frame, kind, arg!(0), "Conversion");
-                        }
-                        StrictPrimitiveAction::None => {}
+                        return Ok(StackStep::Whnf {
+                            node: stack.outer_root(head),
+                            head,
+                            reductions: carried_reductions,
+                        });
                     }
-                    if let Some(name) = fallback_name {
-                        let materialized_args = args_len.min(FALLBACK_PRIM_ARG_PREFIX);
-                        if self.profiling_enabled() {
-                            self.profile_arg_materialization(materialized_args);
-                        }
-                        stack.write_args_head_order_prefix(
-                            &self.nodes,
-                            scratch_args,
-                            FALLBACK_PRIM_ARG_PREFIX,
-                        )?;
-                        if let Some((used, node)) = self.fallback_runtime_prim_rewrite(
-                            name,
-                            scratch_args.as_slice(),
-                            args_len,
-                        )? {
-                            rewrite_step!(used, node, 1);
-                        }
-                        if args_len != 0 && !is_supported_runtime_prim_name(name) {
-                            return Err(EvalError::UnknownPrim(name.to_owned()));
-                        }
+                    EvalHead::Known(known) => known,
+                    EvalHead::Whnf => {
+                        return Ok(StackStep::Whnf {
+                            node: stack.outer_root(head),
+                            head,
+                            reductions: carried_reductions,
+                        });
                     }
-                    return Ok(StackStep::Whnf {
-                        node: stack.outer_root(head),
-                        head,
-                        reductions: carried_reductions,
-                    });
-                }
-                EvalHead::Whnf => {
-                    return Ok(StackStep::Whnf {
-                        node: stack.outer_root(head),
-                        head,
-                        reductions: carried_reductions,
-                    });
                 }
             };
             use KnownPrim::*;
@@ -467,7 +474,7 @@ impl Program {
                 IoPerformIo if args_len >= 1 => {
                     let (redex, io) = take_args!(1, take_args1);
                     let world = self.world();
-                    let k = self.prim("K");
+                    let k = self.prim_k();
                     let action = app_site!("IO.performIO.action", io, world);
                     app_taken!(redex, 1, action, k);
                 }
@@ -478,16 +485,16 @@ impl Program {
                 }
                 IoThen if args_len >= 3 && budget >= 2 => {
                     let (redex, io, y, world) = take_args!(3, take_args3);
-                    let k = self.prim("K");
+                    let k = self.prim_k();
                     let then = app_site!("IO.then.k", k, y);
                     let action = app_site!("IO.then.action", io, world);
                     app_taken_reductions!(redex, 3, action, then, 2);
                 }
                 IoThen if args_len >= 2 => {
                     let (redex, io, y) = take_args!(2, take_args2);
-                    let bind = self.prim("IO.>>=");
+                    let bind = self.prim_io_bind();
                     let bind_action = app_site!("IO.then.bind_action", bind, io);
-                    let k = self.prim("K");
+                    let k = self.prim_k();
                     let then = app_site!("IO.then.k", k, y);
                     app_taken!(redex, 2, bind_action, then);
                 }
@@ -559,7 +566,7 @@ impl Program {
                 BPrime if args_len >= 2 => {
                     let (redex, x, y) = take_args!(2, take_args2);
                     let xy = app_site!("B'.xy_under", x, y);
-                    let b = self.prim("B");
+                    let b = self.prim_b();
                     app_taken!(redex, 2, b, xy);
                 }
                 Z if args_len >= 3 => {
@@ -569,7 +576,7 @@ impl Program {
                 Z if args_len >= 2 => {
                     let (redex, x, y) = take_args!(2, take_args2);
                     let xy = app_site!("Z.xy_under", x, y);
-                    let k = self.prim("K");
+                    let k = self.prim_k();
                     app_taken!(redex, 2, k, xy);
                 }
                 J if args_len >= 3 => {
@@ -611,7 +618,7 @@ impl Program {
                 }
                 R if args_len >= 2 => {
                     let (redex, x, y) = take_args!(2, take_args2);
-                    let c = self.prim("C");
+                    let c = self.prim_c();
                     let cy = app_site!("R.cy_under", c, y);
                     app_taken!(redex, 2, cy, x);
                 }
@@ -626,7 +633,7 @@ impl Program {
                 }
                 K2 if args_len >= 2 => {
                     let (redex, x, _) = take_args!(2, take_args2);
-                    let k = self.prim("K");
+                    let k = self.prim_k();
                     app_taken!(redex, 2, k, x);
                 }
                 K3 if args_len >= 4 => {
@@ -635,7 +642,7 @@ impl Program {
                 }
                 K3 if args_len >= 2 => {
                     let (redex, x, _) = take_args!(2, take_args2);
-                    let k2 = self.prim("K2");
+                    let k2 = self.prim_k2();
                     app_taken!(redex, 2, k2, x);
                 }
                 K4 if args_len >= 5 => {
@@ -644,7 +651,7 @@ impl Program {
                 }
                 K4 if args_len >= 2 => {
                     let (redex, x, _) = take_args!(2, take_args2);
-                    let k3 = self.prim("K3");
+                    let k3 = self.prim_k3();
                     app_taken!(redex, 2, k3, x);
                 }
                 CPrimeB if args_len >= 4 => {
@@ -656,7 +663,7 @@ impl Program {
                 CPrimeB if args_len >= 3 => {
                     let (redex, x, y, z) = take_args!(3, take_args3);
                     let xz = app_site!("C'B.xz_under", x, z);
-                    let b = self.prim("B");
+                    let b = self.prim_b();
                     let bxz = app_site!("C'B.bxz_under", b, xz);
                     app_taken!(redex, 3, bxz, y);
                 }
