@@ -13,7 +13,10 @@ fi
 
 mkdir -p "$em_cache"
 
-cargo build \
+# The browser cdylib's host bridge (mhs_host_*, mhs_js_*) are wasm imports
+# resolved by host.mjs at instantiation; --allow-undefined tells wasm-ld to emit
+# them as imports instead of erroring (required since the Rust 1.96 / wasm-ld bump).
+RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=--allow-undefined" cargo build \
   --release \
   --manifest-path "$repo/rust/microhs-runtime/Cargo.toml" \
   --target wasm32-unknown-unknown \
