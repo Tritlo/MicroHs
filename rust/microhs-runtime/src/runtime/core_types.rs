@@ -708,10 +708,13 @@ pub(in crate::runtime) const SMALL_INT_COUNT: usize = (SMALL_INT_MAX - SMALL_INT
 pub(in crate::runtime) const IGNORED_IO_SHORTCUT_RECURSION_LIMIT: usize = 256;
 pub(in crate::runtime) const UTF8_ASCII_REFILL: usize = 1024;
 pub(in crate::runtime) const READ_ONLY_MEMORY_VIEW_MIN_LEN: usize = 8;
-#[cfg(not(target_os = "wasi"))]
-pub(in crate::runtime) const GC_NODE_INTERVAL: usize = 75 * 1024 * 1024;
-#[cfg(target_os = "wasi")]
-pub(in crate::runtime) const WASI_GC_NODE_INTERVAL: usize = 500_000;
+// Default cells between GCs when MHS_GC_NODE_INTERVAL is unset: a lean 16M on
+// wasm32-wasi (memory-constrained hosts; ~180MB peak on the heavy self-host) vs
+// 75M native (~C's default footprint). Both packed-cell counts, overridable.
+pub(in crate::runtime) const GC_NODE_INTERVAL: usize = std::cfg_select! {
+    target_os = "wasi" => { 16 * 1024 * 1024 }
+    _ => { 75 * 1024 * 1024 }
+};
 
 #[derive(Clone, Debug)]
 pub(in crate::runtime) struct BFile {
