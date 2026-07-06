@@ -1,8 +1,11 @@
-# Decision record: keep the packed 8-byte cell
+# Decision record: keep the packed 8-byte cell (with a gated wide fallback)
 
-**Status:** decided (2026-07-06). The packed 8-byte `Cell` is retained. A 16-byte
-"wide" cell was prototyped, measured, and **rejected**. Do not retry without a
-materially different idea.
+**Status:** decided (2026-07-06). The packed 8-byte `Cell` is the **default** and
+was retained as such after a 16-byte "wide" cell was measured **slower** (below).
+The wide cell is **not** the default, but it now also exists as an **opt-in
+`wide-cell` cargo feature** — not for speed, but as a **correctness escape hatch**
+that raises the arena index cap (see "Wide cell as a cap escape hatch" below). Do
+not make the wide cell the default without a materially different idea.
 
 ## Context
 
@@ -55,3 +58,30 @@ beyond the Ir delta. Branch mispredicts barely moved (−0.3%).
 - Structure-of-arrays (tags in a parallel array) and App-only side tables were
   analysed and not prototyped: both add a second hot load to remove cheap shifts,
   a poor trade on an instruction-bound-but-not-cache-bound loop.
+
+## Wide cell as a cap escape hatch (`wide-cell` feature)
+
+The packed 8-byte cell encodes `App`/`Indir` references as **30-bit** indices, so
+the node arena is capped at `CELL_NONE_ID = 2^30 - 1 ≈ 1.07 B` cells; `push_cell`
+asserts this and a program needing more **aborts** ("node arena exceeded packed
+ids"). C's native pointers have no such ceiling. The self-host peaks at ~1-4 M
+live cells (~250x under the cap), so this is not a practical limit today — but it
+is a hard one.
+
+For heaps that would otherwise abort, build with `--features wide-cell`:
+
+- `Cell` becomes **16 bytes** with direct `u32` `left`/`right` App fields (no
+  shift/mask), scalars still via `cold_nodes` (so the self-host stays
+  byte-identical: SHA `29b8c5a5` under both features).
+- `CELL_NONE_ID` rises to `u32::MAX`, so the cap becomes **~2^32 ≈ 4.29 B** cells
+  (~4x today, ~68 GB of arena). A `#[cfg]` unit test round-trips a `NodeId` above
+  `2^30` and asserts `size_of::<Cell>()` is 8 (default) / 16 (feature).
+- **Cost, measured** (median-of-5 interleaved, Rust 1.96). The wide cell is 16
+  bytes (2x the arena), so at the **standard equal-RSS ~787 MB budget** it holds
+  only ~half the cells (~36 M vs ~75 M) and GCs ~twice as often: **+38% wall**
+  (u8 47.2 s vs u16 65.2 s at ~796 MB matched). At equal *cell count* (128 M,
+  which is not equal memory) it is +23% wall / 1.84x RSS. Either way it is a
+  correctness fallback, **not** a performance option — enable it only when you
+  would actually hit the packed cap. (If 4.29 B is ever insufficient, a 32-byte /
+  u64-index tier is possible at ~4x memory; deliberately not built — 4.29 B is
+  ~1000x the self-host's live-cell peak.)

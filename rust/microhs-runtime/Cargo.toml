@@ -9,6 +9,7 @@ license = "BSD-3-Clause"
 default = []
 profile = []
 gc-phase-profile = []
+wide-cell = []
 
 [dependencies]
 libc = "0.2.186"
