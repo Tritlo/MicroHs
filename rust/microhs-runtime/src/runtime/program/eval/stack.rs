@@ -471,37 +471,77 @@ impl Program {
             }
 
             match known {
-                IoPerformIo if args_len >= 1 => {
-                    let (redex, io) = take_args!(1, take_args1);
-                    let world = self.world();
+                B if args_len >= 3 => {
+                    let (redex, x, y, z) = take_args!(3, take_args3);
+                    let yz = app_site!("B.yz", y, z);
+                    app_taken!(redex, 3, x, yz);
+                }
+                C if args_len >= 3 => {
+                    let (redex, x, y, z) = take_args!(3, take_args3);
+                    let xz = app_site!("C.xz", x, z);
+                    app_taken!(redex, 3, xz, y);
+                }
+                SPrime if args_len >= 4 => {
+                    let (redex, x, y, z, w) = take_args!(4, take_args4);
+                    let yw = app_site!("S'.yw", y, w);
+                    let zw = app_site!("S'.zw", z, w);
+                    let left = app_site!("S'.left", x, yw);
+                    app_taken!(redex, 4, left, zw);
+                }
+                CPrime if args_len >= 4 => {
+                    let (redex, x, y, z, w) = take_args!(4, take_args4);
+                    let yw = app_site!("C'.yw", y, w);
+                    let xyw = app_site!("C'.xyw", x, yw);
+                    app_taken!(redex, 4, xyw, z);
+                }
+                P if args_len >= 3 => {
+                    let (redex, x, y, z) = take_args!(3, take_args3);
+                    let zx = app_site!("P.zx", z, x);
+                    app_taken!(redex, 3, zx, y);
+                }
+                CPrimeB if args_len >= 4 => {
+                    let (redex, x, y, z, w) = take_args!(4, take_args4);
+                    let yw = app_site!("C'B.yw", y, w);
+                    let xz = app_site!("C'B.xz", x, z);
+                    app_taken!(redex, 4, xz, yw);
+                }
+                CPrimeB if args_len >= 3 => {
+                    let (redex, x, y, z) = take_args!(3, take_args3);
+                    let xz = app_site!("C'B.xz_under", x, z);
+                    let b = self.prim_b();
+                    let bxz = app_site!("C'B.bxz_under", b, xz);
+                    app_taken!(redex, 3, bxz, y);
+                }
+                S if args_len >= 3 => {
+                    let (redex, x, y, z) = take_args!(3, take_args3);
+                    if carried_reductions + 1 < budget
+                        && z != redex
+                        && matches!(self.cell_trusted(x).prim(), Some(Prim::Known(I)))
+                    {
+                        let right = app_site!("S.right", y, z);
+                        app_taken_reductions!(redex, 3, z, right, 2);
+                    }
+                    let left = app_site!("S.left", x, z);
+                    let right = app_site!("S.right", y, z);
+                    app_taken!(redex, 3, left, right);
+                }
+                K if args_len >= 2 => {
+                    let (redex, x, _) = take_args!(2, take_args2);
+                    goind_taken!(redex, 2, x, 1);
+                }
+                Z if args_len >= 3 => {
+                    let (redex, x, y, _) = take_args!(3, take_args3);
+                    app_taken!(redex, 3, x, y);
+                }
+                Z if args_len >= 2 => {
+                    let (redex, x, y) = take_args!(2, take_args2);
+                    let xy = app_site!("Z.xy_under", x, y);
                     let k = self.prim_k();
-                    let action = app_site!("IO.performIO.action", io, world);
-                    app_taken!(redex, 1, action, k);
+                    app_taken!(redex, 2, k, xy);
                 }
-                IoBind if args_len >= 3 => {
-                    let (redex, io, k, world) = take_args!(3, take_args3);
-                    let action = app_site!("IO.bind.action", io, world);
-                    app_taken!(redex, 3, action, k);
-                }
-                IoThen if args_len >= 3 && budget >= 2 => {
-                    let (redex, io, y, world) = take_args!(3, take_args3);
-                    let k = self.prim_k();
-                    let then = app_site!("IO.then.k", k, y);
-                    let action = app_site!("IO.then.action", io, world);
-                    app_taken_reductions!(redex, 3, action, then, 2);
-                }
-                IoThen if args_len >= 2 => {
-                    let (redex, io, y) = take_args!(2, take_args2);
-                    let bind = self.prim_io_bind();
-                    let bind_action = app_site!("IO.then.bind_action", bind, io);
-                    let k = self.prim_k();
-                    let then = app_site!("IO.then.k", k, y);
-                    app_taken!(redex, 2, bind_action, then);
-                }
-                IoReturn if args_len >= 3 => {
-                    let (redex, x, world, k) = take_args!(3, take_args3);
-                    let kx = app_site!("IO.return.kx", k, x);
-                    app_taken!(redex, 3, kx, world);
+                U if args_len >= 2 => {
+                    let (redex, x, y) = take_args!(2, take_args2);
+                    app_taken!(redex, 2, y, x);
                 }
                 I | Ord | Chr if args_len >= 1 => {
                     let mut used = 1;
@@ -520,42 +560,18 @@ impl Program {
                     self.profile_shortcut("identity_alias_chain", alias_shortcuts);
                     rewrite_continue_reductions!(used, node, reductions);
                 }
-                K if args_len >= 2 => {
-                    let (redex, x, _) = take_args!(2, take_args2);
-                    goind_taken!(redex, 2, x, 1);
-                }
                 A if args_len >= 2 => {
                     let (redex, _, y) = take_args!(2, take_args2);
                     goind_taken!(redex, 2, y, 1);
                 }
-                U if args_len >= 2 => {
-                    let (redex, x, y) = take_args!(2, take_args2);
-                    app_taken!(redex, 2, y, x);
+                O if args_len >= 4 => {
+                    let (redex, x, y, _, w) = take_args!(4, take_args4);
+                    let wx = app_site!("O.wx", w, x);
+                    app_taken!(redex, 4, wx, y);
                 }
-                S if args_len >= 3 => {
-                    let (redex, x, y, z) = take_args!(3, take_args3);
-                    if carried_reductions + 1 < budget
-                        && z != redex
-                        && matches!(self.cell_trusted(x).prim(), Some(Prim::Known(I)))
-                    {
-                        let right = app_site!("S.right", y, z);
-                        app_taken_reductions!(redex, 3, z, right, 2);
-                    }
-                    let left = app_site!("S.left", x, z);
-                    let right = app_site!("S.right", y, z);
-                    app_taken!(redex, 3, left, right);
-                }
-                SPrime if args_len >= 4 => {
-                    let (redex, x, y, z, w) = take_args!(4, take_args4);
-                    let yw = app_site!("S'.yw", y, w);
-                    let zw = app_site!("S'.zw", z, w);
-                    let left = app_site!("S'.left", x, yw);
-                    app_taken!(redex, 4, left, zw);
-                }
-                B if args_len >= 3 => {
-                    let (redex, x, y, z) = take_args!(3, take_args3);
-                    let yz = app_site!("B.yz", y, z);
-                    app_taken!(redex, 3, x, yz);
+                J if args_len >= 3 => {
+                    let (redex, x, _, z) = take_args!(3, take_args3);
+                    app_taken!(redex, 3, z, x);
                 }
                 BPrime if args_len >= 4 => {
                     let (redex, x, y, z, w) = take_args!(4, take_args4);
@@ -569,19 +585,16 @@ impl Program {
                     let b = self.prim_b();
                     app_taken!(redex, 2, b, xy);
                 }
-                Z if args_len >= 3 => {
-                    let (redex, x, y, _) = take_args!(3, take_args3);
-                    app_taken!(redex, 3, x, y);
+                R if args_len >= 3 => {
+                    let (redex, x, y, z) = take_args!(3, take_args3);
+                    let yz = app_site!("R.yz", y, z);
+                    app_taken!(redex, 3, yz, x);
                 }
-                Z if args_len >= 2 => {
+                R if args_len >= 2 => {
                     let (redex, x, y) = take_args!(2, take_args2);
-                    let xy = app_site!("Z.xy_under", x, y);
-                    let k = self.prim_k();
-                    app_taken!(redex, 2, k, xy);
-                }
-                J if args_len >= 3 => {
-                    let (redex, x, _, z) = take_args!(3, take_args3);
-                    app_taken!(redex, 3, z, x);
+                    let c = self.prim_c();
+                    let cy = app_site!("R.cy_under", c, y);
+                    app_taken!(redex, 2, cy, x);
                 }
                 L if args_len >= 3 => {
                     let (redex, x, y, _) = take_args!(3, take_args3);
@@ -594,38 +607,6 @@ impl Program {
                 KA if args_len >= 3 => {
                     let (redex, _, _, z) = take_args!(3, take_args3);
                     goind_taken!(redex, 3, z, 1);
-                }
-                C if args_len >= 3 => {
-                    let (redex, x, y, z) = take_args!(3, take_args3);
-                    let xz = app_site!("C.xz", x, z);
-                    app_taken!(redex, 3, xz, y);
-                }
-                CPrime if args_len >= 4 => {
-                    let (redex, x, y, z, w) = take_args!(4, take_args4);
-                    let yw = app_site!("C'.yw", y, w);
-                    let xyw = app_site!("C'.xyw", x, yw);
-                    app_taken!(redex, 4, xyw, z);
-                }
-                P if args_len >= 3 => {
-                    let (redex, x, y, z) = take_args!(3, take_args3);
-                    let zx = app_site!("P.zx", z, x);
-                    app_taken!(redex, 3, zx, y);
-                }
-                R if args_len >= 3 => {
-                    let (redex, x, y, z) = take_args!(3, take_args3);
-                    let yz = app_site!("R.yz", y, z);
-                    app_taken!(redex, 3, yz, x);
-                }
-                R if args_len >= 2 => {
-                    let (redex, x, y) = take_args!(2, take_args2);
-                    let c = self.prim_c();
-                    let cy = app_site!("R.cy_under", c, y);
-                    app_taken!(redex, 2, cy, x);
-                }
-                O if args_len >= 4 => {
-                    let (redex, x, y, _, w) = take_args!(4, take_args4);
-                    let wx = app_site!("O.wx", w, x);
-                    app_taken!(redex, 4, wx, y);
                 }
                 K2 if args_len >= 3 => {
                     let (redex, x, _, _) = take_args!(3, take_args3);
@@ -654,19 +635,6 @@ impl Program {
                     let k3 = self.prim_k3();
                     app_taken!(redex, 2, k3, x);
                 }
-                CPrimeB if args_len >= 4 => {
-                    let (redex, x, y, z, w) = take_args!(4, take_args4);
-                    let yw = app_site!("C'B.yw", y, w);
-                    let xz = app_site!("C'B.xz", x, z);
-                    app_taken!(redex, 4, xz, yw);
-                }
-                CPrimeB if args_len >= 3 => {
-                    let (redex, x, y, z) = take_args!(3, take_args3);
-                    let xz = app_site!("C'B.xz_under", x, z);
-                    let b = self.prim_b();
-                    let bxz = app_site!("C'B.bxz_under", b, xz);
-                    app_taken!(redex, 3, bxz, y);
-                }
                 Y if args_len >= 1 => {
                     let (redex, x) = take_args!(1, take_args1);
                     app_taken!(redex, 1, x, redex);
@@ -686,6 +654,38 @@ impl Program {
                     }
                     let last = arg!(fields - 1);
                     app_step!(fields + 1, n, last);
+                }
+                IoBind if args_len >= 3 => {
+                    let (redex, io, k, world) = take_args!(3, take_args3);
+                    let action = app_site!("IO.bind.action", io, world);
+                    app_taken!(redex, 3, action, k);
+                }
+                IoReturn if args_len >= 3 => {
+                    let (redex, x, world, k) = take_args!(3, take_args3);
+                    let kx = app_site!("IO.return.kx", k, x);
+                    app_taken!(redex, 3, kx, world);
+                }
+                IoThen if args_len >= 3 && budget >= 2 => {
+                    let (redex, io, y, world) = take_args!(3, take_args3);
+                    let k = self.prim_k();
+                    let then = app_site!("IO.then.k", k, y);
+                    let action = app_site!("IO.then.action", io, world);
+                    app_taken_reductions!(redex, 3, action, then, 2);
+                }
+                IoThen if args_len >= 2 => {
+                    let (redex, io, y) = take_args!(2, take_args2);
+                    let bind = self.prim_io_bind();
+                    let bind_action = app_site!("IO.then.bind_action", bind, io);
+                    let k = self.prim_k();
+                    let then = app_site!("IO.then.k", k, y);
+                    app_taken!(redex, 2, bind_action, then);
+                }
+                IoPerformIo if args_len >= 1 => {
+                    let (redex, io) = take_args!(1, take_args1);
+                    let world = self.world();
+                    let k = self.prim_k();
+                    let action = app_site!("IO.performIO.action", io, world);
+                    app_taken!(redex, 1, action, k);
                 }
                 I | Ord | Chr | K | A | U | S | SPrime | B | BPrime | Z | J | L | KK | KA | C
                 | CPrime | P | R | O | K2 | K3 | K4 | CPrimeB | Y | Tag(_) | Tuple(_)

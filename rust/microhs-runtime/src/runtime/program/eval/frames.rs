@@ -232,52 +232,24 @@ impl Program {
         stack: &mut EvalStack,
         current: NodeId,
     ) -> Result<Option<(NodeId, usize)>, EvalError> {
-        if !stack.top_is_frame() {
+        if stack.apps.len() != stack.app_base {
             return Ok(None);
         }
 
-        enum ReadyFrame {
-            Int(i64),
-            Int64Shift(i64),
-            Int64(i64),
-            Float64(f64),
-            Float32(f32),
-            Bytes,
-            Conversion(ConversionValue),
-        }
-
-        let ready = match stack.peek_frame() {
-            Some(StackFrame::Int(_)) => self.cell_int_value(current).map(ReadyFrame::Int),
-            Some(StackFrame::Int64Shift(_)) => {
-                self.cell_int_value(current).map(ReadyFrame::Int64Shift)
-            }
-            Some(StackFrame::Int64(_)) => self.cell_int64_value(current).map(ReadyFrame::Int64),
-            Some(StackFrame::Float64(_)) => {
-                self.cell_float64_value(current).map(ReadyFrame::Float64)
-            }
-            Some(StackFrame::Float32(_)) => {
-                self.cell_float32_value(current).map(ReadyFrame::Float32)
-            }
-            Some(StackFrame::Bytes(_))
-                if matches!(
-                    self.cold_node(current),
-                    Some(Node::Bytes(_) | Node::MutableBytes(_))
-                ) =>
-            {
-                Some(ReadyFrame::Bytes)
-            }
-            Some(StackFrame::Conversion(frame)) => self
-                .ready_conversion_value(frame.kind, current)
-                .map(ReadyFrame::Conversion),
-            _ => None,
-        };
-        let Some(ready) = ready else {
+        let Some(frame) = stack.frames.last() else {
             return Ok(None);
         };
 
-        let frame = stack.pop_frame().expect("ready stack frame must exist");
-        let result = match (frame, ready) {
-            (StackFrame::Int(frame), ReadyFrame::Int(value)) => {
+        let result = match frame {
+            StackFrame::Int(_) => {
+                let Some(value) = self.cell_int_value(current) else {
+                    return Ok(None);
+                };
+                let StackFrame::Int(frame) = stack.frames.pop().expect("ready frame must exist")
+                else {
+                    unreachable!("ready stack frame kind changed before pop")
+                };
+                stack.app_base = frame.prev_app_base;
                 let used = match &frame.kind {
                     IntFrameKind::Un { .. } => 1,
                     IntFrameKind::BinSecond { .. } | IntFrameKind::BinFirst { .. } => 2,
@@ -312,7 +284,15 @@ impl Program {
                 );
                 (node, 1)
             }
-            (StackFrame::Int64(frame), ReadyFrame::Int64(value)) => {
+            StackFrame::Int64(_) => {
+                let Some(value) = self.cell_int64_value(current) else {
+                    return Ok(None);
+                };
+                let StackFrame::Int64(frame) = stack.frames.pop().expect("ready frame must exist")
+                else {
+                    unreachable!("ready stack frame kind changed before pop")
+                };
+                stack.app_base = frame.prev_app_base;
                 let result = match frame.kind {
                     Int64FrameKind::BinSecond { op, x } => {
                         stack.push_int64_frame(
@@ -360,7 +340,16 @@ impl Program {
                 );
                 (node, 1)
             }
-            (StackFrame::Int64Shift(frame), ReadyFrame::Int64Shift(value)) => {
+            StackFrame::Int64Shift(_) => {
+                let Some(value) = self.cell_int_value(current) else {
+                    return Ok(None);
+                };
+                let StackFrame::Int64Shift(frame) =
+                    stack.frames.pop().expect("ready frame must exist")
+                else {
+                    unreachable!("ready stack frame kind changed before pop")
+                };
+                stack.app_base = frame.prev_app_base;
                 stack.push_int64_frame(
                     frame.app_end,
                     frame.used,
@@ -375,7 +364,16 @@ impl Program {
                 }
                 (frame.x, 0)
             }
-            (StackFrame::Float64(frame), ReadyFrame::Float64(value)) => {
+            StackFrame::Float64(_) => {
+                let Some(value) = self.cell_float64_value(current) else {
+                    return Ok(None);
+                };
+                let StackFrame::Float64(frame) =
+                    stack.frames.pop().expect("ready frame must exist")
+                else {
+                    unreachable!("ready stack frame kind changed before pop")
+                };
+                stack.app_base = frame.prev_app_base;
                 let result = match frame.kind {
                     Float64FrameKind::BinSecond { op, x } => {
                         stack.push_float64_frame(
@@ -400,7 +398,16 @@ impl Program {
                 let node = self.apply_stack_frame_value(stack, frame.app_end, frame.used, value);
                 (node, 1)
             }
-            (StackFrame::Float32(frame), ReadyFrame::Float32(value)) => {
+            StackFrame::Float32(_) => {
+                let Some(value) = self.cell_float32_value(current) else {
+                    return Ok(None);
+                };
+                let StackFrame::Float32(frame) =
+                    stack.frames.pop().expect("ready frame must exist")
+                else {
+                    unreachable!("ready stack frame kind changed before pop")
+                };
+                stack.app_base = frame.prev_app_base;
                 let result = match frame.kind {
                     Float32FrameKind::BinSecond { op, x } => {
                         stack.push_float32_frame(
@@ -425,7 +432,18 @@ impl Program {
                 let node = self.apply_stack_frame_value(stack, frame.app_end, frame.used, value);
                 (node, 1)
             }
-            (StackFrame::Bytes(frame), ReadyFrame::Bytes) => {
+            StackFrame::Bytes(_) => {
+                if !matches!(
+                    self.cold_node(current),
+                    Some(Node::Bytes(_) | Node::MutableBytes(_))
+                ) {
+                    return Ok(None);
+                }
+                let StackFrame::Bytes(frame) = stack.frames.pop().expect("ready frame must exist")
+                else {
+                    unreachable!("ready stack frame kind changed before pop")
+                };
+                stack.app_base = frame.prev_app_base;
                 let node = match frame.kind {
                     BytesFrameKind::BinSecond { op, x } => {
                         stack.push_bytes_frame(
@@ -447,7 +465,16 @@ impl Program {
                 let node = self.apply_stack_frame_rewrite(stack, frame.app_end, frame.used, node);
                 (node, 1)
             }
-            (StackFrame::Conversion(frame), ReadyFrame::Conversion(value)) => {
+            StackFrame::Conversion(frame) => {
+                let Some(value) = self.ready_conversion_value(frame.kind, current) else {
+                    return Ok(None);
+                };
+                let StackFrame::Conversion(frame) =
+                    stack.frames.pop().expect("ready frame must exist")
+                else {
+                    unreachable!("ready stack frame kind changed before pop")
+                };
+                stack.app_base = frame.prev_app_base;
                 self.profile_reduction(frame.profile_head, 1);
                 let node = self.apply_stack_frame_value(
                     stack,
@@ -457,7 +484,7 @@ impl Program {
                 );
                 (node, 1)
             }
-            _ => unreachable!("ready stack frame kind changed before pop"),
+            StackFrame::Whnf(_) => return Ok(None),
         };
         Ok(Some(result))
     }
