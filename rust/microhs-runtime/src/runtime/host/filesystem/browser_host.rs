@@ -47,6 +47,11 @@ unsafe extern "C" {
     -> isize;
     pub(in crate::runtime) fn mhs_host_file_flush(handle: i64) -> i64;
     pub(in crate::runtime) fn mhs_host_file_close(handle: i64) -> i64;
+    pub(in crate::runtime) fn mhs_host_stdio_write(
+        handle: i32,
+        src: *const u8,
+        len: usize,
+    ) -> isize;
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]

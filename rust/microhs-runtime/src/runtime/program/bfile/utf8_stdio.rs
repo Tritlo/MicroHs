@@ -197,7 +197,15 @@ impl Program {
         }
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
         {
-            let _ = bytes;
+            let handle = match handle {
+                StdHandle::Stdout => 1,
+                StdHandle::Stderr => 2,
+                StdHandle::Stdin => unreachable!("checked above"),
+            };
+            let written = unsafe { mhs_host_stdio_write(handle, bytes.as_ptr(), bytes.len()) };
+            if written < 0 || usize::try_from(written).ok() != Some(bytes.len()) {
+                return Err(EvalError::InvalidHandle);
+            }
         }
         Ok(())
     }

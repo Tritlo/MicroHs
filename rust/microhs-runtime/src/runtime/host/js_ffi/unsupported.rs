@@ -61,7 +61,7 @@ pub(in crate::runtime) fn host_js_call_ptr(
     body: &[u8],
     arity: usize,
     args: &[JsArg],
-) -> Result<u32, EvalError> {
+) -> Result<i64, EvalError> {
     let _ = (body, arity, args);
     Err(EvalError::UnsupportedJsFfi)
 }
@@ -100,4 +100,9 @@ pub(in crate::runtime) fn host_js_make_wrapper(
 ) -> Result<u32, EvalError> {
     let _ = (program_handle, stable_ptr, wrapper_index);
     Err(EvalError::UnsupportedJsFfi)
+}
+
+pub(in crate::runtime) fn host_js_obj_free(handle: u32) -> Result<(), EvalError> {
+    let _ = handle;
+    Ok(())
 }

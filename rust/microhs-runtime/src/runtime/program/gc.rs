@@ -458,6 +458,12 @@ impl Program {
         match finalizer {
             ForeignFinalizer::Free => self.free_memory(arg),
             ForeignFinalizer::CloseB => self.close_bfile(arg),
+            ForeignFinalizer::JsObjFree => {
+                if let Ok(handle) = u32::try_from(arg) {
+                    host_js_obj_free(handle)?;
+                }
+                Ok(())
+            }
             ForeignFinalizer::RawZero => Ok(()),
         }
     }

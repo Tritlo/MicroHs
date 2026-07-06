@@ -37,6 +37,8 @@ pub(in crate::runtime) enum JsArg {
     Int(i32),
     UInt(u32),
     Double(f64),
+    Bool(bool),
+    Pointer(i64),
     Object(u32),
     String(Vec<u8>),
 }
@@ -50,7 +52,7 @@ pub(crate) enum JsValue {
     Double(f64),
     Float(f32),
     Bool(bool),
-    Pointer(u32),
+    Pointer(i64),
     Object(u32),
     Bytes(Vec<u8>),
 }

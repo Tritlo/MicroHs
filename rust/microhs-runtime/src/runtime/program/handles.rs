@@ -57,10 +57,15 @@ impl Program {
     }
 
     pub(in crate::runtime) fn new_foreign_finalizer(&mut self, arg: i64) -> usize {
-        let state = ForeignFinalizerState {
-            arg,
-            finalizer: None,
-        };
+        self.new_foreign_finalizer_with(arg, None)
+    }
+
+    pub(in crate::runtime) fn new_foreign_finalizer_with(
+        &mut self,
+        arg: i64,
+        finalizer: Option<ForeignFinalizer>,
+    ) -> usize {
+        let state = ForeignFinalizerState { arg, finalizer };
         if let Some(index) = self.foreign_finalizer_free.pop() {
             self.foreign_finalizers[index] = Some(state);
             index
@@ -156,7 +161,15 @@ impl Program {
     }
 
     pub(in crate::runtime) fn js_object_node(&mut self, handle: u32) -> Node {
-        self.foreign_ptr_node(None, 0, i64::from(handle))
+        let ptr = i64::from(handle);
+        let finalizer =
+            Some(self.new_foreign_finalizer_with(ptr, Some(ForeignFinalizer::JsObjFree)));
+        Node::ForeignPtr(Box::new(ForeignPtrNode {
+            bytes: None,
+            offset: 0,
+            ptr,
+            finalizer,
+        }))
     }
 
     pub(in crate::runtime) fn set_foreign_ptr_finalizer(
