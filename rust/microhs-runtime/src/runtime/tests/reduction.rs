@@ -64,9 +64,9 @@ fn rejects_unknown_primitives() {
         Err(ParseError::UnknownPrim(name)) if name == "not-a-prim"
     ));
 
-    let mut unsupported = parse_program(b"v8.4\n0\nIO.fork #1 @ }").unwrap();
+    let mut unsupported = parse_program(b"v8.4\n0\nIO.waitrdfd #1 @ }").unwrap();
     assert!(matches!(
         unsupported.reduce_whnf(10),
-        Err(EvalError::UnknownPrim(name)) if name == "IO.fork"
+        Err(EvalError::UnknownPrim(name)) if name == "IO.waitrdfd"
     ));
 }
