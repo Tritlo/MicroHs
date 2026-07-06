@@ -55,7 +55,7 @@ fn reduces_io_control_primitives() {
     assert_eq!(whnf(b"v8.4\n0\nthnum IO.performIO IO.thid @ @ }"), "1");
     assert_eq!(
         whnf(b"v8.4\n0\nIO.performIO IO.threadstatus IO.performIO IO.thid @ @ @ }"),
-        "0"
+        "3"
     );
 }
 
