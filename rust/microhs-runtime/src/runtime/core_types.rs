@@ -776,6 +776,10 @@ pub struct Program {
     pub(in crate::runtime) reduce_depth: usize,
     /// Green threads, indexed by slot; `None` is a reaped thread. Slot 0 is `main`.
     pub(in crate::runtime) threads: Vec<Option<ThreadControl>>,
+    /// Number of live, non-reaped green threads.
+    pub(in crate::runtime) live_thread_count: usize,
+    /// Number of live threads with a pending async exception.
+    pub(in crate::runtime) pending_async_count: usize,
     /// C-visible scheduler state per thread slot (`threadStatus` reports this).
     pub(in crate::runtime) thread_states: Vec<ThreadState>,
     /// Stable thread ids per slot, retained after a thread has been reaped.

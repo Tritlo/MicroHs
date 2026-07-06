@@ -212,12 +212,7 @@ impl Program {
             }
         }
 
-        let multi_threaded = self
-            .threads
-            .iter()
-            .filter(|thread| thread.is_some())
-            .count()
-            > 1;
+        let multi_threaded = self.live_thread_count > 1;
 
         if known == Some(IoThen) && args_len >= 3 && budget >= 2 && !multi_threaded {
             if let Some(reductions) = self.ignored_io_action_reductions(arg!(0), budget - 1)? {
@@ -383,6 +378,7 @@ impl Program {
                 }));
                 self.thread_ids.push(id);
                 self.thread_states.push(ThreadState::Runnable);
+                self.live_thread_count += 1;
                 self.run_queue.push_back(slot);
                 // Leave the (previously single-thread, unbounded) slice so the scheduler
                 // switches to preemptive slicing now that a second thread exists.

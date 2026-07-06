@@ -94,6 +94,8 @@ impl Program {
             profile: None,
             reduce_depth: 0,
             threads: Vec::new(),
+            live_thread_count: 0,
+            pending_async_count: 0,
             thread_states: Vec::new(),
             thread_ids: Vec::new(),
             run_queue: std::collections::VecDeque::new(),
