@@ -121,13 +121,12 @@ quirks belong in host glue or comparison harnesses.
 
 ## Measurement Contract
 
-`MATRIX.md` is the live ledger for performance and correctness gates. The main
-end-to-end gate is self-hosting: Rust runs the MicroHs compiler `.comb` to compile
-MicroHs itself, and the output must compare byte-identically with the C runtime.
-Small refactors can use `cargo check`, `cargo test --lib`, and profile smokes;
-changes that touch evaluation, allocation, GC roots, dispatch shape, or large
-runtime layout should use the self-host neutrality harness and full self-host
-runs recorded in `MATRIX.md`.
+The main end-to-end gate is self-hosting: Rust runs the MicroHs compiler `.comb`
+to compile MicroHs itself, and the output must compare byte-identically with the
+C runtime. Small refactors can use `cargo check`, `cargo test --lib`, and profile
+smokes; changes that touch evaluation, allocation, GC roots, dispatch shape, or
+large runtime layout should use the self-host neutrality harness
+(`tools/native/bench-selfhost-neutrality.sh`) and a full self-host run.
 
 For source-organization-only changes, the expected proof is:
 
@@ -135,6 +134,26 @@ For source-organization-only changes, the expected proof is:
 - wasm and WASI target checks when the touched modules are shared with those
   targets;
 - bounded self-host sanity and a 3-run full self-host median when the change
-  touches large runtime code shape or hot evaluator/allocator/GC modules;
-- a clear note in `MATRIX.md` that the result is a neutrality/organization gate,
-  not a performance claim.
+  touches large runtime code shape or hot evaluator/allocator/GC modules.
+
+### Reading performance changes
+
+The self-host is instruction-bound, not memory-bound: callgrind's cache model
+puts the last-level miss rate near 0.2%, and ~88% of all instructions run inside
+`stack_eval_step`. Two consequences for how changes are judged:
+
+- A deterministic bounded callgrind instruction count (e.g. an 80 M-step
+  self-host prefix, `--tool=callgrind --cache-sim=yes --branch-sim=yes`) is the
+  low-noise per-change arbiter, and predicts wall well for changes that remove
+  work — bounds checks, indirection, redundant dispatch.
+- It stops predicting wall at the layout-sensitive margin: inlining and
+  branch-structure changes can cut instructions yet regress wall by shifting
+  i-cache or branch-prediction behaviour. Confirm a whole optimization round with
+  a load-controlled interleaved A/B (candidate vs base binary, alternating in one
+  session); absolute cross-session wall drifts with machine load and is not a
+  reliable signal on its own.
+
+The current standing and gap analysis (Rust ~1.06x non-PGO C at a 128 M-cell heap;
+the residual gap is representational — `NodeId`-indexed arena and cold side-table
+versus C's raw `NODEPTR`/`FUN`/`ARG` access — not GC and not memory locality) live
+in `rust/README.md`.
