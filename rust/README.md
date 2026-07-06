@@ -7,56 +7,65 @@ and executes compiler-produced `.comb` files.
 ## Status & performance
 
 The Rust runtime **self-hosts byte-identically**: running the compiler's own
-`.comb` (`MicroHs.Main` compiling MicroHs) through the Rust evaluator produces the
-same output `.comb` - identical SHA - as the C runtime (`src/runtime/eval.c`).
+`.comb` (`MicroHs.Main` compiling MicroHs, ~3.66 B reductions) through the Rust
+evaluator produces the same output `.comb` - identical SHA - as the C runtime
+(`src/runtime/eval.c`).
 
-Self-host compile, one machine, 3.66 B reductions, C `eval.c` (`-O3`) at its
-normal heap as the baseline. Every Rust output is byte-identical to C.
+Self-host compile, one quiet machine, both runtimes given a 128 M-cell heap
+(`-H134217728` / `MHS_GC_NODE_INTERVAL=134217728`), median of 3 interleaved runs,
+every Rust output byte-identical to C:
 
-| runtime | wall (median) | vs C | cell memory | GC pause |
-|---|---|---|---|---|
-| **C `eval.c` (`-O3`)** | **46.4 s** | 1.00x | 50M cells / 800 MB | 11.4 s / 89 GCs |
-| Rust - default (128M GC interval) | **53.6 s** | **1.16x** | ~1.1 GB | 8.66 s / 31 GCs |
-| Rust - C-matched memory (80Mi interval) | **55.9 s** | **1.21x** | ~705 MB | 11.1 s / 49 GCs |
+| runtime (128 M cells) | wall (median) | vs C non-PGO |
+|---|---|---|
+| **C `eval.c` (`-O3`)** | 44.3 s | **1.00x** |
+| C `eval.c` (`-O3`, PGO) | 41.8 s | 0.94x |
+| **Rust (shipped, `cargo build --release`)** | 46.8 s | **1.06x** |
+| Rust (PGO) | 44.3 s | 1.00x |
 
-Where the time goes (at C-matched memory):
+Absolute wall drifts a few percent with machine load between sessions, so the
+**ratio** (Rust/C, measured interleaved in one session) is the stable metric, not
+the raw seconds. A run of representational reducer tuning moved the non-PGO gap
+from **1.16x to 1.06x** C. (C's own default heap is 50 M cells; both sides get
+128 M here. Rust's 8-byte packed cell uses ~1.1 GB at that budget against C's
+~2 GB, so equal cells is if anything generous to C on time and to Rust on memory.)
 
-- **GC is at parity with C** - ~11.1 s vs C's ~11.4 s. An 8-byte packed cell (a
-  4-bit tag plus two 30-bit node ids; wide scalars demoted to a cold side-table)
-  and a sweep fast-path closed what was a ~12 s collector gap.
-- The residual gap is the **mutator** (~44.8 s vs C's ~35.0 s). The leading
-  hypothesis is heap locality: the free-list hands back scattered slots, so the
-  following spine descent misses cache, where C's bitmap allocator returns the
-  lowest free slot and self-densifies. **But this is unproven** — both direct tests
-  of that idea in Rust (a C-style bitmap allocator and an address-ordered free-list)
-  came back mutator-neutral-to-worse, and there is no hardware-counter evidence yet
-  separating allocator-load stalls from descent misses. Cause still open.
+### Where the gap is
 
-**Codegen floor - the fair PGO/heap matrix (measurement-only, not shipped).** A
-profile-guided (PGO) build of the same Rust source - no algorithmic change - runs
-the self-host at 49.4 s (matched ~80M memory) / 45.5 s (128M heap). But that is a
-Rust codegen floor, not a win over C: give C the same compiler and heap and it
-stays ahead. Self-host wall (median), all cells byte-identical:
+The self-host is **instruction-bound, not memory-bound**. Callgrind's cache
+simulation puts the last-level miss rate at ~0.2%, and ~88% of all instructions
+execute inside the single reduction-dispatch function (`stack_eval_step`). Cutting
+the reducer's instruction count tracked wall closely: the tuning rounds took the
+bounded 80 M-step prefix from ~17.3 B to ~13.9 B I-refs (~19%) and the wall ratio
+fell in step. This **revises the earlier heap-locality hypothesis** — the
+bottleneck is instruction count and branch prediction in the mutator, not cache
+misses in spine descent (two direct allocator-locality experiments, a C-style
+bitmap allocator and an address-ordered free-list, had already failed to confirm
+the locality idea).
 
-| self-host, by heap | C `-O3` | C PGO | Rust default | Rust PGO |
-|---|---|---|---|---|
-| C default (50M cells) | 46.4 s | 45.6 s | - | - |
-| **matched memory (~80M)** | 43.3 s | **41.2 s** | 55.9 s | **49.4 s** |
-| 128M heap | 40.3 s | 38.6 s | 53.6 s | 45.5 s |
+The residual ~6% is **representational**. The reducer indexes a `Vec<Cell>` arena
+by `NodeId`; even with unchecked, invariant-guarded hot-path access (`push_cell`
+asserts the arena can never reach the packed-id limit, so every `NodeId` is a
+valid index and the trusted writes are sound) that is index arithmetic plus a cold
+side-table hop for wide scalars, where C dereferences raw `NODEPTR` pointers
+straight into `FUN`/`ARG` struct fields. Closing it further means matching C's
+representation more closely: the instruction-count wins from bounds-check removal
+are largely spent, and the newest reducer changes now cut I-refs without moving
+wall — per-instruction throughput (i-cache, branch prediction) has become the
+limit, not instruction count.
 
-The honest peers, at **matched memory (~80M)**: Rust is **1.29x** C without PGO
-(the shipped config) and **1.20x** C once both are PGO-optimized; at 128M the PGO
-peer is 1.18x. So PGO buys Rust a large speedup, but C keeps a ~1.2x edge once
-equally optimized, and a bigger heap helps both sides (mostly by cutting GC
-frequency). PGO is deliberately not shipped (a build flag that complicates the
-reproducible-build story); it only marks the floor. Build it with
+GC is a minor share at this heap: a reused mark bitmap plus direct-tag mark
+traversal keep the non-moving mark-sweep collector close to C's.
+
+PGO buys each side ~5-6% (Rust+PGO ~= C non-PGO), so the gap is **structural, not
+a codegen artifact PGO closes** — which is why the shipped build is plain
+`cargo build --release`. PGO is deliberately not shipped (it complicates the
+reproducible-build story); it only marks the codegen floor. Build it with
 `tools/native/build-selfhost-pgo.sh`.
 
 Size: the Rust runtime is ~22k LOC (including tests, the wasm/JS-FFI boundary, and
 the bench harness) against ~8k for the C runtime.
 
-_Self-host compile, measured 2026-07-05. The full experiment ledger and structural
-analysis live in `MATRIX.md` and `NOTES.md` at the repository root._
+_Self-host compile, measured 2026-07-06._
 
 ## Layout
 
