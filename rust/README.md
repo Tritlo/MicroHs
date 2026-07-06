@@ -11,27 +11,46 @@ The Rust runtime **self-hosts byte-identically**: running the compiler's own
 evaluator produces the same output `.comb` - identical SHA - as the C runtime
 (`src/runtime/eval.c`).
 
-Self-host compile, one quiet machine, both runtimes given a 128 M-cell heap
-(`-H134217728` / `MHS_GC_NODE_INTERVAL=134217728`), median of 3 interleaved runs,
-every Rust output byte-identical to C:
+**Memory is the axis that matters.** A Rust cell is a packed **8 bytes** (a 4-bit
+tag plus two 30-bit arena indices for an `App`, or a compact scalar; wide scalars
+— int64/float64/bytes/foreign — spill to a side table). A C node is **16 bytes**:
+two machine words holding native `NODEPTR` pointers or inline 64-bit values. So at
+equal *cell count* Rust uses ~60% of C's memory — meaning the older "128 M cells
+each" comparison silently handed C **2.09 GB against Rust's 1.26 GB**. The fair
+comparison holds *memory* constant, not cell count.
 
-| runtime (128 M cells) | wall (median) | vs C non-PGO |
-|---|---|---|
-| **C `eval.c` (`-O3`)** | 44.3 s | **1.00x** |
-| C `eval.c` (`-O3`, PGO) | 41.8 s | 0.94x |
-| **Rust (shipped, `cargo build --release`)** | 46.8 s | **1.06x** |
-| Rust (PGO) | 44.3 s | 1.00x |
+**Equal memory — C's default heap (~790 MB), median of 3 interleaved runs, RSS
+matched within ~1% (Rust 796 MB vs C 787 MB), every Rust output byte-identical:**
 
-Absolute wall drifts a few percent with machine load between sessions, so the
-**ratio** (Rust/C, measured interleaved in one session) is the stable metric, not
-the raw seconds. A run of representational reducer tuning moved the non-PGO gap
-from **1.16x to 1.06x** C. (C's own default heap is 50 M cells; both sides get
-128 M here. Rust's 8-byte packed cell uses ~1.1 GB at that budget against C's
-~2 GB, so equal cells is if anything generous to C on time and to Rust on memory.)
+| runtime (~790 MB RSS) | wall (median) | Rust ÷ C |
+|---|---:|---:|
+| C `eval.c` (`-O3`) | 48.2 s | — |
+| **Rust (shipped, `cargo build --release`)** | 48.0 s | **0.995x — 0.5% faster** |
+| C `eval.c` (`-O3`, PGO) | 46.5 s | — |
+| **Rust (PGO)** | 43.0 s | **0.924x — 7.6% faster** |
 
-### Where the gap is
+At C's out-of-the-box memory budget, **Rust ties C without PGO and is 7.6% faster
+with PGO.** A tight budget is GC-bound, and Rust's 2× cell density means far fewer
+collections — its packed representation, a liability on raw reduction speed,
+becomes the advantage. Absolute wall drifts a few percent between sessions, so the
+interleaved **ratio** is the stable metric.
 
-The self-host is **instruction-bound, not memory-bound**. Callgrind's cache
+**Loose memory (128 M cells each) inverts it**, and exposes the per-reduction gap
+underneath:
+
+| runtime (128 M cells) | RSS | wall |
+|---|---:|---:|
+| C `eval.c` (`-O3`) | 2.09 GB | ~41.8 s |
+| Rust (shipped) | 1.26 GB | ~44.8 s |
+
+Given equal *cells* — and thus 66% more RAM — C's direct-pointer node is ~6%
+faster per reduction (see below). Reproduce either budget with
+`tools/native/matrix.sh` (defaults to the equal-memory point; override `CHEAP` /
+`RINT` for others).
+
+### The per-reduction gap (why C leads at loose memory)
+
+Given ample memory the self-host is **instruction-bound, not memory-bound**. Callgrind's cache
 simulation puts the last-level miss rate at ~0.2%, and ~88% of all instructions
 execute inside the single reduction-dispatch function (`stack_eval_step`). Cutting
 the reducer's instruction count tracked wall closely: the tuning rounds took the
@@ -53,14 +72,22 @@ are largely spent, and the newest reducer changes now cut I-refs without moving
 wall — per-instruction throughput (i-cache, branch prediction) has become the
 limit, not instruction count.
 
-GC is a minor share at this heap: a reused mark bitmap plus direct-tag mark
-traversal keep the non-moving mark-sweep collector close to C's.
+GC is a minor share at a 128 M-cell heap (a reused mark bitmap plus direct-tag
+mark traversal keep the non-moving mark-sweep collector close to C's) — but at a
+tight budget GC becomes the dominant cost, and that is exactly where Rust's 8-byte
+cell fits ~2× the live nodes per MB and collects far less often. So the per-op
+representational gap and the memory efficiency pull in opposite directions; which
+one dominates is set by the memory budget.
 
-PGO buys each side ~5-6% (Rust+PGO ~= C non-PGO), so the gap is **structural, not
-a codegen artifact PGO closes** — which is why the shipped build is plain
-`cargo build --release`. PGO is deliberately not shipped (it complicates the
-reproducible-build story); it only marks the codegen floor. Build it with
-`tools/native/build-selfhost-pgo.sh`.
+PGO buys C ~5-6% and Rust more (it recovers the packed reducer's per-op overhead),
+so at equal memory **Rust+PGO overtakes C+PGO** (0.924x). The shipped build is
+plain `cargo build --release`; PGO is deliberately not shipped (it complicates the
+reproducible-build story) and only marks the codegen floor — build it with
+`tools/native/build-selfhost-pgo.sh`. The default build also carries in-place
+`cold_path` hints that recover part of PGO's hot/cold block placement (−1.6% wall).
+Note the reducer is mildly sensitive to the Rust toolchain: LLVM 22 (Rust ≥1.95)
+regressed the hot dispatch ~+2.9% vs LLVM 21, not recoverable by any stable build
+flag; see `microhs-runtime/docs/perf-gap-analysis.md` for the full analysis.
 
 Size: the Rust runtime is ~22k LOC (including tests, the wasm/JS-FFI boundary, and
 the bench harness) against ~8k for the C runtime.
