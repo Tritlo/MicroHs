@@ -104,7 +104,7 @@ impl Program {
                     let node = $node;
                     let wrote_indirection = node != redex;
                     if wrote_indirection {
-                        self.set_app_cell_at(redex.index(), Cell::indir(Some(node)));
+                        self.set_app_cell_at(redex.index(), Cell::indir_trusted(node));
                     }
                     if profiling {
                         self.profile_stack_rewrite($used, wrote_indirection);
@@ -149,7 +149,7 @@ impl Program {
                     if profiling {
                         self.profile_stack_app_update($used);
                     }
-                    self.set_app_cell_at(redex.index(), Cell::app(fun, arg));
+                    self.set_app_cell_at(redex.index(), Cell::app_trusted(fun, arg));
                     self.profile_reduction(profile_head, $reductions);
                     carried_reductions += $reductions;
                     if carried_reductions >= budget {

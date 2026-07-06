@@ -203,46 +203,95 @@ impl Program {
 
     pub(in crate::runtime) fn set_cell_at(&mut self, index: usize, cell: Cell) {
         self.drop_cold_payload(index);
-        self.nodes[index] = cell;
+        debug_assert!(index < self.nodes.len());
+        // SAFETY: callers rewrite existing heap slots selected by NodeId/index.
+        unsafe {
+            *self.nodes.get_unchecked_mut(index) = cell;
+        }
     }
 
     #[inline(always)]
     pub(in crate::runtime) fn set_app_cell_at(&mut self, index: usize, cell: Cell) {
+        debug_assert!(index < self.nodes.len());
         debug_assert_eq!(self.nodes[index].tag(), CellTag::App);
-        self.nodes[index] = cell;
+        // SAFETY: callers only pass redex/stack-app indices produced by the
+        // reducer, and the debug assertions document both bounds and App-ness.
+        unsafe {
+            *self.nodes.get_unchecked_mut(index) = cell;
+        }
     }
 
+    #[inline(always)]
     pub(in crate::runtime) fn set_app_node_at(&mut self, index: usize, node: Node) {
+        debug_assert!(index < self.nodes.len());
         debug_assert_eq!(self.nodes[index].tag(), CellTag::App);
-        self.nodes[index] = Cell::from_node(node, &mut self.cold_nodes);
+        let cell = Cell::from_node(node, &mut self.cold_nodes);
+        // SAFETY: callers only rewrite existing application redexes. App cells
+        // have no cold payload to drop; the debug assertions check the invariant.
+        unsafe {
+            *self.nodes.get_unchecked_mut(index) = cell;
+        }
     }
 
     pub(in crate::runtime) fn set_node_at(&mut self, index: usize, node: Node) {
         self.drop_cold_payload(index);
-        self.nodes[index] = Cell::from_node(node, &mut self.cold_nodes);
+        debug_assert!(index < self.nodes.len());
+        let cell = Cell::from_node(node, &mut self.cold_nodes);
+        // SAFETY: callers rewrite existing heap slots selected by NodeId/index.
+        unsafe {
+            *self.nodes.get_unchecked_mut(index) = cell;
+        }
     }
 
+    /// Append a cell and return its `NodeId`. This is the ONLY place the node
+    /// arena grows, and the only place `NodeId`s are minted, which makes it the
+    /// enforcement point for two invariants the hot-path `unsafe` relies on:
+    ///
+    /// 1. Packed-id fit: the `assert!` keeps `nodes.len() < CELL_NONE_ID`, so
+    ///    every id ever produced fits the packed cell field. This is what makes
+    ///    the `Cell::*_trusted` constructors sound.
+    /// 2. Permanent index validity: the arena never shrinks (freed slots stay
+    ///    in `nodes` tagged `Free`), so any `NodeId` handed out is a valid
+    ///    `nodes` index for the rest of the run. That is what lets the reducer
+    ///    index `nodes` with `get_unchecked` given only a `NodeId`.
+    ///
+    /// The `assert!` is a real (non-debug) check so the invariant holds in
+    /// release; it can only fire on a program needing >~1e9 live cells.
     pub(in crate::runtime) fn push_cell(&mut self, cell: Cell) -> NodeId {
+        assert!(
+            (self.nodes.len() as u64) < CELL_NONE_ID,
+            "node arena exceeded packed ids"
+        );
         let id = NodeId::from_index(self.nodes.len());
         self.nodes.push(cell);
-        self.gc_high_water_nodes = self.gc_high_water_nodes.max(self.nodes.len());
+        self.gc_high_water_nodes = self.nodes.len();
         id
     }
 
     pub(in crate::runtime) fn cold_node(&self, id: NodeId) -> Option<&Node> {
-        let cold = self.cell(id).cold_index()?;
-        self.cold_nodes.get(cold)?.as_ref()
+        let cold = self.cell_trusted(id).cold_index()?;
+        debug_assert!(cold < self.cold_nodes.len());
+        // SAFETY: Cold cells are constructed with an index into cold_nodes and
+        // NodeIds passed around the reducer refer to heap slots in self.nodes.
+        unsafe { self.cold_nodes.get_unchecked(cold).as_ref() }
     }
 
     pub(in crate::runtime) fn cold_node_mut(&mut self, id: NodeId) -> Option<&mut Node> {
-        let cold = self.cell(id).cold_index()?;
-        self.cold_nodes.get_mut(cold)?.as_mut()
+        let cold = self.cell_trusted(id).cold_index()?;
+        debug_assert!(cold < self.cold_nodes.len());
+        // SAFETY: same invariant as cold_node; the mutable borrow is unique via &mut self.
+        unsafe { self.cold_nodes.get_unchecked_mut(cold).as_mut() }
     }
 
     pub(in crate::runtime) fn drop_cold_payload(&mut self, index: usize) {
-        if let Some(cold) = self.nodes[index].cold_index() {
-            if let Some(slot) = self.cold_nodes.get_mut(cold) {
-                *slot = None;
+        debug_assert!(index < self.nodes.len());
+        // SAFETY: callers pass existing heap slot indices.
+        let cell = unsafe { *self.nodes.get_unchecked(index) };
+        if let Some(cold) = cell.cold_index() {
+            debug_assert!(cold < self.cold_nodes.len());
+            // SAFETY: Cold cell payloads are indices into cold_nodes.
+            unsafe {
+                *self.cold_nodes.get_unchecked_mut(cold) = None;
             }
         }
     }
@@ -271,19 +320,24 @@ impl Program {
         self.js_program_handle = Some(handle);
     }
 
-    #[inline]
-    pub(in crate::runtime) fn pop_free_node(&mut self) -> Option<usize> {
-        if self.free_nodes == 0 {
-            return None;
-        }
+    #[inline(always)]
+    pub(in crate::runtime) fn pop_free_node_nonempty(&mut self) -> usize {
+        debug_assert!(self.free_nodes > 0);
         let head = match self.free_head {
             Some(head) => head,
+            // SAFETY: `free_head` and `free_nodes` are maintained together
+            // (see push_free_node / pop_free_node): `free_nodes > 0` iff the
+            // free list is non-empty iff `free_head.is_some()`. This function's
+            // contract is that the caller already checked `free_nodes > 0`
+            // (debug_assert above), so `None` here is unreachable.
             None => unsafe {
                 std::hint::unreachable_unchecked();
             },
         };
         let index = head.index();
-        let cell = self.nodes[index];
+        debug_assert!(index < self.nodes.len());
+        // SAFETY: free_head is maintained exclusively from indices in nodes.
+        let cell = unsafe { *self.nodes.get_unchecked(index) };
         debug_assert_eq!(
             cell.tag(),
             CellTag::Free,
@@ -291,41 +345,52 @@ impl Program {
         );
         self.free_head = cell.option_id_word1();
         self.free_nodes -= 1;
-        Some(index)
+        index
     }
 
     pub(in crate::runtime) fn push_free_node(&mut self, index: usize) {
-        if self.nodes[index].has_tag(CellTag::Cold) {
-            self.drop_cold_payload(index);
+        debug_assert!(index < self.nodes.len());
+        // SAFETY: sweep passes indices from 0..nodes.len(), and other callers
+        // free existing heap slots.
+        let old = unsafe { *self.nodes.get_unchecked(index) };
+        if let Some(cold) = old.cold_index() {
+            debug_assert!(cold < self.cold_nodes.len());
+            // SAFETY: Cold cell payloads are indices into cold_nodes.
+            unsafe {
+                *self.cold_nodes.get_unchecked_mut(cold) = None;
+            }
         }
-        self.nodes[index] = Cell::free(self.free_head);
+        // SAFETY: same bounds invariant as above.
+        unsafe {
+            *self.nodes.get_unchecked_mut(index) = Cell::free(self.free_head);
+        }
         self.free_head = Some(NodeId::from_index(index));
         self.free_nodes += 1;
     }
 
     pub(in crate::runtime) fn push_node(&mut self, node: Node) -> NodeId {
-        self.gc_allocations_since_collect = self.gc_allocations_since_collect.saturating_add(1);
-        let free_index = self.pop_free_node();
-        if let Some(index) = free_index {
+        self.gc_allocations_since_collect += 1;
+        if self.free_nodes == 0 {
+            let cell = Cell::from_node(node, &mut self.cold_nodes);
+            self.push_cell(cell)
+        } else {
+            let index = self.pop_free_node_nonempty();
             debug_assert_eq!(self.nodes[index].tag(), CellTag::Free);
             self.nodes[index] = Cell::from_node(node, &mut self.cold_nodes);
             NodeId::from_index(index)
-        } else {
-            let cell = Cell::from_node(node, &mut self.cold_nodes);
-            self.push_cell(cell)
         }
     }
 
     #[inline(always)]
     pub(in crate::runtime) fn push_app_node(&mut self, fun: NodeId, arg: NodeId) -> NodeId {
-        self.gc_allocations_since_collect = self.gc_allocations_since_collect.saturating_add(1);
-        let free_index = self.pop_free_node();
-        if let Some(index) = free_index {
-            debug_assert_eq!(self.nodes[index].tag(), CellTag::Free);
-            self.nodes[index] = Cell::app(fun, arg);
-            NodeId::from_index(index)
+        self.gc_allocations_since_collect += 1;
+        if self.free_nodes == 0 {
+            self.push_cell(Cell::app_trusted(fun, arg))
         } else {
-            self.push_cell(Cell::app(fun, arg))
+            let index = self.pop_free_node_nonempty();
+            debug_assert_eq!(self.nodes[index].tag(), CellTag::Free);
+            self.nodes[index] = Cell::app_trusted(fun, arg);
+            NodeId::from_index(index)
         }
     }
 }
