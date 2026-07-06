@@ -259,13 +259,17 @@ impl Program {
     /// release; the cap is ~1e9 cells for the default packed representation and
     /// ~4.3e9 cells with the `wide-cell` feature.
     pub(in crate::runtime) fn push_cell(&mut self, cell: Cell) -> NodeId {
-        #[cfg(not(feature = "wide-cell"))]
-        const CAP_MSG: &str = "node arena exceeded the packed 8-byte cell cap \
-            (~1.07B cells; 2^30 index limit) — rebuild with `--features wide-cell` \
-            for a 16-byte cell and a ~4.29B-cell arena";
-        #[cfg(feature = "wide-cell")]
-        const CAP_MSG: &str = "node arena exceeded the wide 16-byte cell cap \
-            (~4.29B cells; u32 index limit)";
+        std::cfg_select! {
+            feature = "wide-cell" => {
+                const CAP_MSG: &str = "node arena exceeded the wide 16-byte cell cap \
+                    (~4.29B cells; u32 index limit)";
+            }
+            _ => {
+                const CAP_MSG: &str = "node arena exceeded the packed 8-byte cell cap \
+                    (~1.07B cells; 2^30 index limit) — rebuild with `--features wide-cell` \
+                    for a 16-byte cell and a ~4.29B-cell arena";
+            }
+        }
         assert!((self.nodes.len() as u64) < CELL_NONE_ID, "{CAP_MSG}");
         let id = NodeId::from_index(self.nodes.len());
         self.nodes.push(cell);
