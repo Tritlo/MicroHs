@@ -778,12 +778,14 @@ pub(in crate::runtime) const UTF8_ASCII_REFILL: usize = 1024;
 /// Bytes read before committing to a full `UTF8_ASCII_REFILL` block.
 pub(in crate::runtime) const UTF8_ASCII_PROBE: usize = 16;
 pub(in crate::runtime) const READ_ONLY_MEMORY_VIEW_MIN_LEN: usize = 8;
-#[cfg(not(target_os = "wasi"))]
 /// `Program::current_thread` value while no thread is running.
 pub(in crate::runtime) const NO_THREAD: usize = usize::MAX;
-pub(in crate::runtime) const GC_NODE_INTERVAL: usize = 75 * 1024 * 1024;
-#[cfg(target_os = "wasi")]
-pub(in crate::runtime) const WASI_GC_NODE_INTERVAL: usize = 500_000;
+// Default allocation interval between collections, in packed cells.
+// MHS_GC_NODE_INTERVAL overrides this value.
+pub(in crate::runtime) const GC_NODE_INTERVAL: usize = std::cfg_select! {
+    target_os = "wasi" => { 16 * 1024 * 1024 }
+    _ => { 75 * 1024 * 1024 }
+};
 
 #[derive(Clone, Debug)]
 pub(in crate::runtime) struct BFile {
