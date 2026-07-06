@@ -649,6 +649,7 @@ impl Program {
             ForeignFinalizer::Free => self.free_memory(arg),
             ForeignFinalizer::CloseB => self.close_bfile(arg),
             ForeignFinalizer::JsObjFree => {
+                std::hint::cold_path();
                 if let Ok(handle) = u32::try_from(arg) {
                     host_js_obj_free(handle)?;
                 }

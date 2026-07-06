@@ -2,6 +2,7 @@
 use super::*;
 
 impl Program {
+    #[cold]
     pub(in crate::runtime) fn js_call(
         &mut self,
         tags: &str,
@@ -52,6 +53,7 @@ impl Program {
         Ok(Some((arity + 1, self.pair(result, args[arity]))))
     }
 
+    #[cold]
     pub(in crate::runtime) fn js_wrap(
         &mut self,
         tags: &str,
