@@ -247,11 +247,14 @@ impl Program {
     }
 
     pub(in crate::runtime) fn canonical_gc_target(&mut self, id: NodeId) -> Option<NodeId> {
-        let target = if matches!(
-            self.nodes.get(id.index()).map(|cell| cell.tag()),
-            Some(CellTag::Indir)
-        ) {
+        let Some(cell) = self.nodes.get(id.index()).copied() else {
+            return None;
+        };
+        let tag = cell.tag_bits();
+        let target = if tag == CellTag::Indir.bits() {
             self.compress_marked_indirection(id)?
+        } else if tag == CellTag::Free.bits() {
+            return None;
         } else {
             id
         };
@@ -286,19 +289,19 @@ impl Program {
         foreign_finalizer_marked: &mut [bool],
     ) {
         while let Some(id) = work.pop() {
-            if matches!(
-                self.nodes.get(id.index()).map(|cell| cell.tag()),
-                Some(CellTag::Indir)
-            ) {
+            let Some(cell) = self.nodes.get(id.index()).copied() else {
+                continue;
+            };
+            let tag = cell.tag_bits();
+            if tag == CellTag::Indir.bits() {
                 if let Some(target) = self.compress_marked_indirection(id) {
                     Self::mark_node_id(marked, work, target);
                 }
                 continue;
             }
-            let Some(cell) = self.nodes.get(id.index()).copied() else {
-                continue;
-            };
-            if let Some((fun, arg)) = cell.app_fields() {
+            if tag == CellTag::App.bits() {
+                let fun = cell.id_payload();
+                let arg = cell.id_word1();
                 let fun = self.mark_canonical_child(marked, work, fun);
                 let arg = self.mark_canonical_child(marked, work, arg);
                 if fun != cell.id_payload() || arg != cell.id_word1() {
@@ -306,8 +309,9 @@ impl Program {
                 }
                 continue;
             }
-            match cell.tag() {
-                CellTag::Cold => match self.cold_node(id) {
+            if tag == CellTag::Cold.bits() {
+                let cold = cell.payload0() as usize;
+                match self.cold_nodes.get(cold).and_then(Option::as_ref) {
                     Some(Node::Ptr(ptr) | Node::RawFunPtr(ptr)) => {
                         self.mark_pointer_target(marked, work, *ptr);
                     }
@@ -328,15 +332,7 @@ impl Program {
                         }
                     }
                     _ => {}
-                },
-                CellTag::App
-                | CellTag::Indir
-                | CellTag::Free
-                | CellTag::KnownPrim
-                | CellTag::RuntimePrim
-                | CellTag::Int
-                | CellTag::Float32
-                | CellTag::ThreadId => {}
+                }
             }
         }
     }

@@ -277,11 +277,8 @@ impl Program {
                                         let result = op
                                             .apply(x_value, y_value)
                                             .map_err(|err| self.arithmetic_eval_error(err))?;
-                                        let node = self.apply_stack_redex_value(
-                                            redex,
-                                            2,
-                                            Self::int_result_value_node(result),
-                                        );
+                                        let node =
+                                            self.apply_stack_redex_int_result(redex, 2, result);
                                         finish_reduction!(node, 1);
                                     }
                                     if profiling {

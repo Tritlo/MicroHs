@@ -34,14 +34,6 @@ impl Program {
         }
     }
 
-    pub(in crate::runtime) fn int64_result_value_node(result: Int64Result) -> Node {
-        match result {
-            Int64Result::Int64(n) => Node::Int64(n),
-            Int64Result::Bool(b) => Self::bool_value_node(b),
-            Int64Result::Ordering(ord) => Self::ordering_value_node(ord),
-        }
-    }
-
     pub(in crate::runtime) fn stack_entry_app(
         &self,
         stack: &EvalStack,
@@ -104,6 +96,89 @@ impl Program {
         let redex_index = app_end - used;
         let redex = stack.app_unchecked(redex_index);
         self.set_app_node_at(redex.index(), value);
+        if self.profiling_enabled() {
+            self.profile_stack_rewrite(used, false);
+        }
+        stack.apps.truncate(redex_index);
+        redex
+    }
+
+    #[inline(always)]
+    pub(in crate::runtime) fn set_app_int_result_at(&mut self, index: usize, result: IntResult) {
+        match result {
+            IntResult::Int(n) if can_inline_int(n) => {
+                self.set_app_cell_at(index, Cell::int(n));
+            }
+            IntResult::Bool(value) => {
+                self.set_app_cell_at(
+                    index,
+                    Cell::known_prim(if value { KnownPrim::A } else { KnownPrim::K }),
+                );
+            }
+            IntResult::Ordering(ord) => {
+                let known = match ord {
+                    Ordering::Less => KnownPrim::K2,
+                    Ordering::Equal => KnownPrim::KK,
+                    Ordering::Greater => KnownPrim::KA,
+                };
+                self.set_app_cell_at(index, Cell::known_prim(known));
+            }
+            IntResult::Int(n) => self.set_app_node_at(index, Node::Int(n)),
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::runtime) fn apply_stack_redex_int_result(
+        &mut self,
+        redex: NodeId,
+        used: usize,
+        result: IntResult,
+    ) -> NodeId {
+        self.set_app_int_result_at(redex.index(), result);
+        if self.profiling_enabled() {
+            self.profile_stack_rewrite(used, false);
+        }
+        redex
+    }
+
+    #[inline(always)]
+    pub(in crate::runtime) fn set_app_int64_result_at(
+        &mut self,
+        index: usize,
+        result: Int64Result,
+    ) {
+        match result {
+            Int64Result::Bool(value) => {
+                self.set_app_cell_at(
+                    index,
+                    Cell::known_prim(if value { KnownPrim::A } else { KnownPrim::K }),
+                );
+            }
+            Int64Result::Ordering(ord) => {
+                let known = match ord {
+                    Ordering::Less => KnownPrim::K2,
+                    Ordering::Equal => KnownPrim::KK,
+                    Ordering::Greater => KnownPrim::KA,
+                };
+                self.set_app_cell_at(index, Cell::known_prim(known));
+            }
+            Int64Result::Int64(n) => self.set_app_node_at(index, Node::Int64(n)),
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::runtime) fn apply_stack_frame_int64_result(
+        &mut self,
+        stack: &mut EvalStack,
+        app_end: usize,
+        used: usize,
+        result: Int64Result,
+    ) -> NodeId {
+        debug_assert!(used > 0);
+        debug_assert!(used <= app_end);
+        let redex_index = app_end - used;
+        let redex = stack.app_unchecked(redex_index);
+        self.set_app_int64_result_at(redex.index(), result);
         if self.profiling_enabled() {
             self.profile_stack_rewrite(used, false);
         }
@@ -277,11 +352,7 @@ impl Program {
                     }
                 };
                 self.profile_reduction(frame.profile_head, 1);
-                let node = self.apply_stack_redex_value(
-                    frame.redex,
-                    used,
-                    Self::int_result_value_node(result),
-                );
+                let node = self.apply_stack_redex_int_result(frame.redex, used, result);
                 (node, 1)
             }
             StackFrame::Int64(_) => {
@@ -332,12 +403,8 @@ impl Program {
                     }
                 };
                 self.profile_reduction(frame.profile_head, 1);
-                let node = self.apply_stack_frame_value(
-                    stack,
-                    frame.app_end,
-                    frame.used,
-                    Self::int64_result_value_node(result),
-                );
+                let node =
+                    self.apply_stack_frame_int64_result(stack, frame.app_end, frame.used, result);
                 (node, 1)
             }
             StackFrame::Int64Shift(_) => {

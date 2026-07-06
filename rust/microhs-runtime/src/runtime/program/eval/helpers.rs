@@ -608,21 +608,4 @@ impl Program {
     pub(in crate::runtime) fn bool_value_node(value: bool) -> Node {
         Node::Prim(Prim::Known(if value { KnownPrim::A } else { KnownPrim::K }))
     }
-
-    pub(in crate::runtime) fn ordering_value_node(ord: Ordering) -> Node {
-        let known = match ord {
-            Ordering::Less => KnownPrim::K2,
-            Ordering::Equal => KnownPrim::KK,
-            Ordering::Greater => KnownPrim::KA,
-        };
-        Node::Prim(Prim::Known(known))
-    }
-
-    pub(in crate::runtime) fn int_result_value_node(result: IntResult) -> Node {
-        match result {
-            IntResult::Int(n) => Node::Int(n),
-            IntResult::Bool(b) => Self::bool_value_node(b),
-            IntResult::Ordering(ord) => Self::ordering_value_node(ord),
-        }
-    }
 }
