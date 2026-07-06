@@ -185,14 +185,6 @@ impl EvalStack {
         !self.frames.is_empty() && self.apps.len() == self.app_base
     }
 
-    pub(in crate::runtime) fn peek_frame(&self) -> Option<&StackFrame> {
-        if self.top_is_frame() {
-            self.frames.last()
-        } else {
-            None
-        }
-    }
-
     pub(in crate::runtime) fn push_whnf_frame(
         &mut self,
         redex: NodeId,

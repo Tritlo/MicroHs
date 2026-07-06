@@ -500,8 +500,9 @@ impl Program {
         let started = Instant::now();
         let allocations_since_collect = self.gc_allocations_since_collect;
         let mut marked = std::mem::take(&mut self.gc_marked);
-        marked.clear();
-        marked.resize(self.nodes.len(), false);
+        if marked.len() < self.nodes.len() {
+            marked.resize(self.nodes.len(), false);
+        }
         let mut work = std::mem::take(&mut self.gc_mark_work);
         work.clear();
         let mut foreign_finalizer_marked = std::mem::take(&mut self.gc_foreign_finalizer_marked);
@@ -536,6 +537,7 @@ impl Program {
         let mut live = 0;
         for index in 0..marked.len() {
             if marked[index] {
+                marked[index] = false;
                 live += 1;
                 continue;
             }
