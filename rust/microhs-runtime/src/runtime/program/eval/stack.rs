@@ -219,6 +219,7 @@ impl Program {
 
                 match head_dispatch {
                     EvalHead::Ffi(name) => {
+                        std::hint::cold_path();
                         if self.profiling_enabled() {
                             self.profile_arg_materialization(args_len);
                         }
@@ -234,6 +235,7 @@ impl Program {
                         rewrite_step!(used, node, 1);
                     }
                     EvalHead::JsCall { tags, body } => {
+                        std::hint::cold_path();
                         if self.profiling_enabled() {
                             self.profile_arg_materialization(args_len);
                         }
@@ -250,6 +252,7 @@ impl Program {
                         rewrite_step!(used, node, 1);
                     }
                     EvalHead::JsWrap { tags } => {
+                        std::hint::cold_path();
                         if self.profiling_enabled() {
                             self.profile_arg_materialization(args_len);
                         }
@@ -343,6 +346,7 @@ impl Program {
                                 );
                             }
                             StrictPrimitiveAction::Float64Bin(op) => {
+                                std::hint::cold_path();
                                 force_step!(
                                     2,
                                     push_float64_frame,
@@ -352,6 +356,7 @@ impl Program {
                                 );
                             }
                             StrictPrimitiveAction::Float64Un(op) => {
+                                std::hint::cold_path();
                                 force_step!(
                                     1,
                                     push_float64_frame,
@@ -361,6 +366,7 @@ impl Program {
                                 );
                             }
                             StrictPrimitiveAction::Float32Bin(op) => {
+                                std::hint::cold_path();
                                 force_step!(
                                     2,
                                     push_float32_frame,
@@ -370,6 +376,7 @@ impl Program {
                                 );
                             }
                             StrictPrimitiveAction::Float32Un(op) => {
+                                std::hint::cold_path();
                                 force_step!(
                                     1,
                                     push_float32_frame,
@@ -379,6 +386,7 @@ impl Program {
                                 );
                             }
                             StrictPrimitiveAction::BytesBin(op) => {
+                                std::hint::cold_path();
                                 force_step!(
                                     2,
                                     push_bytes_frame,
@@ -388,11 +396,13 @@ impl Program {
                                 );
                             }
                             StrictPrimitiveAction::Conversion(kind) => {
+                                std::hint::cold_path();
                                 force_step!(1, push_conversion_frame, kind, arg!(0), "Conversion");
                             }
                             StrictPrimitiveAction::None => {}
                         }
                         if let Some(name) = fallback_name {
+                            std::hint::cold_path();
                             let materialized_args = args_len.min(FALLBACK_PRIM_ARG_PREFIX);
                             if self.profiling_enabled() {
                                 self.profile_arg_materialization(materialized_args);
