@@ -378,6 +378,60 @@ impl Program {
         id
     }
 
+    #[inline(always)]
+    pub(in crate::runtime) fn prim_b(&mut self) -> NodeId {
+        if let Some(id) = self.prim_cache.b {
+            id
+        } else {
+            self.prim("B")
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::runtime) fn prim_c(&mut self) -> NodeId {
+        if let Some(id) = self.prim_cache.c {
+            id
+        } else {
+            self.prim("C")
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::runtime) fn prim_k(&mut self) -> NodeId {
+        if let Some(id) = self.prim_cache.k {
+            id
+        } else {
+            self.prim("K")
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::runtime) fn prim_k2(&mut self) -> NodeId {
+        if let Some(id) = self.prim_cache.k2 {
+            id
+        } else {
+            self.prim("K2")
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::runtime) fn prim_k3(&mut self) -> NodeId {
+        if let Some(id) = self.prim_cache.k3 {
+            id
+        } else {
+            self.prim("K3")
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::runtime) fn prim_io_bind(&mut self) -> NodeId {
+        if let Some(id) = self.prim_cache.io_bind {
+            id
+        } else {
+            self.prim("IO.>>=")
+        }
+    }
+
     pub(in crate::runtime) fn int(&mut self, value: i64) -> NodeId {
         let Some(index) = small_int_index(value) else {
             return self.push_node(Node::Int(value));
