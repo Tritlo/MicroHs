@@ -567,11 +567,7 @@ pub(crate) fn is_runtime_prim_name(name: &str) -> bool {
 }
 
 pub(in crate::runtime) fn is_supported_runtime_prim_name(name: &str) -> bool {
-    is_runtime_prim_name(name)
-        && !matches!(
-            name,
-            "IO.throwto" | "IO.threaddelay" | "IO.waitrdfd" | "IO.waitwrfd"
-        )
+    is_runtime_prim_name(name) && !matches!(name, "IO.waitrdfd" | "IO.waitwrfd")
 }
 
 pub(in crate::runtime) fn int_to_usize(n: i64) -> Result<usize, EvalError> {

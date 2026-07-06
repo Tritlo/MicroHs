@@ -147,6 +147,25 @@ impl Program {
         // would be collected out from under it.
         for thread in self.threads.iter().flatten() {
             Self::mark_node_id(marked, work, thread.root);
+            if let Some(value) = thread.delivered_value {
+                Self::mark_node_id(marked, work, value);
+            }
+            if let Some(exn) = thread.pending_exception {
+                Self::mark_node_id(marked, work, exn);
+            }
+        }
+        for queues in self.mvar_waiters.values() {
+            for slot in queues.takeput.iter().chain(&queues.read) {
+                if let Some(thread) = self.threads.get(*slot).and_then(Option::as_ref) {
+                    Self::mark_node_id(marked, work, thread.root);
+                    if let Some(value) = thread.delivered_value {
+                        Self::mark_node_id(marked, work, value);
+                    }
+                    if let Some(exn) = thread.pending_exception {
+                        Self::mark_node_id(marked, work, exn);
+                    }
+                }
+            }
         }
         for id in self.stable_ptrs.iter().flatten() {
             Self::mark_node_id(marked, work, *id);

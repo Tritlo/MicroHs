@@ -141,10 +141,15 @@ impl Program {
             }
             Some(Prim::Known(IoSetMaskingState)) if args.len() == 1 => {
                 self.masking_state = self.eval_int(args[0])?;
+                let masking_state = self.masking_state;
+                if let Some(thread) = self.current_thread_mut() {
+                    thread.masking_state = masking_state;
+                }
                 let result = self.prim("I");
                 Ok(Some((result, world)))
             }
             Some(Prim::Known(IoYield)) if args.is_empty() => {
+                self.check_pending_async_exception(false)?;
                 self.run_pending_weak_finalizers()?;
                 let result = self.prim("I");
                 Ok(Some((result, world)))
@@ -467,7 +472,7 @@ impl Program {
         world: NodeId,
     ) -> Result<NodeId, EvalError> {
         let old_mask = self.masking_state;
-        match self.reduce_node_whnf(action, FORCE_REDUCTION_LIMIT) {
+        match self.reduce_node_whnf(action, REDUCTION_SLICE) {
             Ok(result) => Ok(result),
             Err(EvalError::Raised(exn)) => {
                 self.masking_state = MASK_INTERRUPTIBLE;
@@ -486,8 +491,37 @@ impl Program {
                 let caught = self.app(handled_bind, continuation);
                 Ok(self.app(caught, world))
             }
+            Err(EvalError::Blocked(reason)) => {
+                let restart = self
+                    .threads
+                    .get(self.current_thread)
+                    .and_then(Option::as_ref)
+                    .map(|thread| thread.root)
+                    .unwrap_or(action);
+                let caught = self.catch_restart_root(restart, handler, world);
+                self.save_current_thread_state(self.current_thread, caught);
+                Err(EvalError::Blocked(reason))
+            }
+            Err(EvalError::StepLimit { limit }) => {
+                let caught = self.catch_restart_root(action, handler, world);
+                self.save_current_thread_state(self.current_thread, caught);
+                self.preserve_thread_root_once = true;
+                Err(EvalError::StepLimit { limit })
+            }
             Err(err) => Err(err),
         }
+    }
+
+    pub(in crate::runtime) fn catch_restart_root(
+        &mut self,
+        restart: NodeId,
+        handler: NodeId,
+        world: NodeId,
+    ) -> NodeId {
+        let catchr = self.prim("catchr");
+        let caught = self.app(catchr, restart);
+        let caught = self.app(caught, handler);
+        self.app(caught, world)
     }
 
     pub(in crate::runtime) fn rts_exception(&mut self, code: i64) -> EvalError {

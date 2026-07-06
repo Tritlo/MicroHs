@@ -445,9 +445,12 @@ pub(in crate::runtime) const ALLOCATION_PTR_STRIDE: i64 = 1_i64 << 32;
 pub(in crate::runtime) const NODE_PTR_STRIDE: i64 = 1_i64 << 32;
 pub(in crate::runtime) const BFILE_PTR_BASE: i64 = i64::MIN + (1_i64 << 32);
 pub(in crate::runtime) const FORCE_REDUCTION_LIMIT: usize = usize::MAX;
+pub(in crate::runtime) const REDUCTION_SLICE: usize = 100_000;
 pub(in crate::runtime) const RTS_EXN_DIVIDE_BY_ZERO: i64 = 4;
 pub(in crate::runtime) const RTS_EXN_OVERFLOW: i64 = 7;
+pub(in crate::runtime) const MASK_UNMASKED: i64 = 0;
 pub(in crate::runtime) const MASK_INTERRUPTIBLE: i64 = 1;
+pub(in crate::runtime) const MASK_UNINTERRUPTIBLE: i64 = 2;
 pub(in crate::runtime) const BFILE_PTR_STRIDE: i64 = 1_i64 << 32;
 pub(in crate::runtime) const DIR_PTR_BASE: i64 = i64::MIN + (1_i64 << 61);
 pub(in crate::runtime) const DIR_PTR_STRIDE: i64 = 1_i64 << 32;
@@ -617,6 +620,7 @@ pub enum EvalError {
     InvalidByteString,
     InvalidArray,
     Raised(NodeId),
+    Blocked(BlockReason),
     InvalidStablePtr,
     InvalidMVar,
     InvalidHandle,
@@ -626,6 +630,14 @@ pub enum EvalError {
     UnsupportedJsFfi,
     UnsupportedSerialization(NodeId),
     Deadlock,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum BlockReason {
+    TakeMVar(NodeId),
+    PutMVar(NodeId),
+    ReadMVar(NodeId),
+    Delay(u128),
 }
 
 impl fmt::Display for EvalError {
@@ -650,6 +662,7 @@ impl fmt::Display for EvalError {
             Self::InvalidByteString => write!(f, "invalid ByteString operation"),
             Self::InvalidArray => write!(f, "invalid Array operation"),
             Self::Raised(id) => write!(f, "uncaught exception at node {id:?}"),
+            Self::Blocked(_) => write!(f, "thread blocked"),
             Self::InvalidStablePtr => write!(f, "invalid StablePtr operation"),
             Self::InvalidMVar => write!(f, "invalid MVar operation"),
             Self::InvalidHandle => write!(f, "invalid IO handle operation"),
@@ -674,6 +687,24 @@ impl fmt::Display for EvalError {
 pub(in crate::runtime) struct ThreadControl {
     pub(in crate::runtime) id: i64,
     pub(in crate::runtime) root: NodeId,
+    pub(in crate::runtime) delivered_value: Option<NodeId>,
+    pub(in crate::runtime) pending_exception: Option<NodeId>,
+    pub(in crate::runtime) delay_ready: bool,
+    pub(in crate::runtime) masking_state: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::runtime) enum ThreadState {
+    Runnable,
+    BlockedMVar,
+    BlockedOther,
+    Finished,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(in crate::runtime) struct MVarWaitQueues {
+    pub(in crate::runtime) takeput: std::collections::VecDeque<usize>,
+    pub(in crate::runtime) read: std::collections::VecDeque<usize>,
 }
 
 impl std::error::Error for EvalError {}
@@ -745,8 +776,17 @@ pub struct Program {
     pub(in crate::runtime) reduce_depth: usize,
     /// Green threads, indexed by slot; `None` is a reaped thread. Slot 0 is `main`.
     pub(in crate::runtime) threads: Vec<Option<ThreadControl>>,
+    /// C-visible scheduler state per thread slot (`threadStatus` reports this).
+    pub(in crate::runtime) thread_states: Vec<ThreadState>,
+    /// Stable thread ids per slot, retained after a thread has been reaped.
+    pub(in crate::runtime) thread_ids: Vec<i64>,
     /// Runnable thread slots in round-robin order.
     pub(in crate::runtime) run_queue: std::collections::VecDeque<usize>,
+    /// MVar wait queues live outside `Node::MVar`; the node only stores the value.
+    pub(in crate::runtime) mvar_waiters: HashMap<NodeId, MVarWaitQueues>,
+    /// Absolute scheduler times, in microseconds since `scheduler_epoch`.
+    pub(in crate::runtime) delay_wakeups: HashMap<usize, u128>,
+    pub(in crate::runtime) scheduler_epoch: Instant,
     /// Slot of the thread currently being reduced.
     pub(in crate::runtime) current_thread: usize,
     /// Monotonic thread-id counter; `main` is 1 (matching the C runtime).
@@ -755,4 +795,7 @@ pub struct Program {
     /// boundary (e.g. right after a `forkIO` that makes the program multi-threaded),
     /// so the reducer can leave an otherwise-unbounded single-thread slice.
     pub(in crate::runtime) reschedule_now: bool,
+    /// Set when a nested reducer already installed the precise restart root for a
+    /// scheduler yield (currently `catchr` preserving a handler around a sliced action).
+    pub(in crate::runtime) preserve_thread_root_once: bool,
 }

@@ -162,6 +162,8 @@ pub enum KnownPrim {
     IoTryTakeMVar,
     IoYield,
     IoFork,
+    IoThrowTo,
+    IoThreadDelay,
 }
 
 impl KnownPrim {
@@ -230,6 +232,8 @@ impl KnownPrim {
             "IO.trytakemvar" => Self::IoTryTakeMVar,
             "IO.yield" => Self::IoYield,
             "IO.fork" => Self::IoFork,
+            "IO.throwto" => Self::IoThrowTo,
+            "IO.threaddelay" => Self::IoThreadDelay,
             _ => {
                 if let Some(tag) = tag_index(name) {
                     return Some(Self::Tag(tag as u8));
@@ -316,6 +320,8 @@ impl KnownPrim {
             Self::IoTryTakeMVar => "IO.trytakemvar",
             Self::IoYield => "IO.yield",
             Self::IoFork => "IO.fork",
+            Self::IoThrowTo => "IO.throwto",
+            Self::IoThreadDelay => "IO.threaddelay",
         }
     }
 }
@@ -387,6 +393,8 @@ pub(in crate::runtime) fn encode_known_prim(known: KnownPrim) -> u16 {
         KnownPrim::IoTryTakeMVar => 59,
         KnownPrim::IoYield => 60,
         KnownPrim::IoFork => 62,
+        KnownPrim::IoThrowTo => 63,
+        KnownPrim::IoThreadDelay => 97,
     }
 }
 
@@ -456,6 +464,8 @@ pub(in crate::runtime) fn decode_known_prim(code: u16) -> KnownPrim {
         59 => KnownPrim::IoTryTakeMVar,
         60 => KnownPrim::IoYield,
         62 => KnownPrim::IoFork,
+        63 => KnownPrim::IoThrowTo,
+        97 => KnownPrim::IoThreadDelay,
         64..=96 => KnownPrim::Tag((code - 64) as u8),
         128..=144 => KnownPrim::Tuple((code - 128) as u8),
         _ => unreachable!("invalid known prim code"),
