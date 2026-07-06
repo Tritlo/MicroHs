@@ -372,3 +372,42 @@ simple shippable source analogue has either already landed, lost, or been
 validated as the wrong tradeoff. The packed 8-byte `Cell` should remain the
 default, and the non-PGO Rust reducer should be considered at its empirical floor
 for the current algorithm and representation.
+
+## Addendum: `cold_path` layout win + the Rust 1.96 / LLVM-22 regression
+
+Two later findings, both measured with the same load-controlled interleaved wall
+A/B methodology (never trust cross-session absolutes or callgrind alone here).
+
+**`cold_path` recovers part of PGO's block placement (shipped).** `std::hint::cold_path()`
+(stable in Rust 1.95) marks the rare reducer arms cold *in place* — biasing LLVM
+block placement to push them out of the hot fallthrough *without* the call
+overhead that source `#[cold]`/`#[inline(never)]` *extraction* costs. Extraction
+was tried first and lost: I1mr −23% but Ir +16% → wall +6%. `cold_path` instead
+gave I1mr −15.7% with Ir −1.3% (no penalty) and a clean **−1.63% wall (5/5)**.
+Applied to the dynamic FFI/JS, runtime-prim fallback, and non-Int strict arms of
+`stack_eval_step`. This is the one new shippable win past round 4; the empirical
+floor above was on Rust 1.91. See commit "Recover part of PGO's reducer block
+layout with in-place cold_path hints".
+
+**Rust 1.91 → 1.96 (LLVM 21 → 22, at 1.95) regressed the reducer ~+2.9% wall.**
+Same source, `cargo build --release`. Diagnosis: bounded callgrind shows Ir +0.94%
+concentrated in `stack_eval_step` (+1.69%) — an instruction-count regression from
+LLVM-22 lowering — plus a microarchitectural component callgrind under-measures:
+LLVM-22 *tail-merges* the per-handler dispatch indirect branches (objdump count in
+`stack_eval_step` 148 → 137), collapsing branch prediction. cold_path offsets over
+half, leaving the shipped 1.96 build at ~+1.7% vs the old 1.91 build — the accepted
+cost of staying on modern Rust.
+
+**Build-flag recovery is exhausted (do not re-run).** None recovered on wall:
+fat LTO (Ir +6%), `target-cpu=x86-64-v2/v3` (neutral), `target-cpu=native`
+(**+5%, worse** — wider-ISA/scheduling hurts this branchy pointer-chasing loop),
+`--inline-threshold` (I1mr +14%), `--jump-table-density` (worst on wall, a
+callgrind/wall decoupling trap), `-tail-dup-*` (inert — governs C computed-gotos,
+not Rust jump-table matches; dispatch count unchanged at 137), `--switch-peel`
+(Ir +10%), `-enable-ext-tsp-block-placement=false`, `--min-jump-table-entries`
+(no un-merge). The **only** lever that helps is `-C llvm-args=-enable-tail-merge=false`,
+which un-merges the dispatch (137 → 270) for **−0.48% wall** — but costs +7.9%
+binary size and is an unstable, LLVM-version-specific flag, so it is **not shipped**
+(available as an opt-in if the 0.5% is ever wanted). The residual instruction-count
+component is not flag-recoverable on stable; revisit only if a future rustc/LLVM
+changes the tail-merge or lowering behavior.
