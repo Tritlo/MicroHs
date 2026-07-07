@@ -107,7 +107,6 @@ impl Program {
         budget: usize,
         spine: &mut EvalSpine,
         scratch_args: &mut Vec<NodeId>,
-        _scratch_apps: &mut Vec<NodeId>,
     ) -> Result<Option<EvalLoopStep>, EvalError> {
         if self.profiling_enabled() {
             self.profile_fallback_eval_loop_step();
