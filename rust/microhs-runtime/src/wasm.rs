@@ -300,6 +300,55 @@ pub extern "C" fn mhs_rust_program_serialize(handle: u32) -> *const u8 {
     store_result_bytes(bytes)
 }
 
+#[unsafe(no_mangle)]
+#[cold]
+pub extern "C" fn mhs_rust_js_export_count(handle: u32) -> u32 {
+    std::hint::cold_path();
+    with_program_mut(handle, |program| {
+        u32::try_from(program.js_export_count()).map_err(|_| EvalError::Overflow)
+    })
+    .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+#[cold]
+pub extern "C" fn mhs_rust_js_export_name(handle: u32, export_index: u32) -> *const u8 {
+    std::hint::cold_path();
+    let Ok(name) = with_program_mut(handle, |program| {
+        Ok(program.js_export_name(export_index)?.as_bytes().to_vec())
+    }) else {
+        clear_result_bytes();
+        return std::ptr::null();
+    };
+    store_result_bytes(name)
+}
+
+#[unsafe(no_mangle)]
+#[cold]
+pub extern "C" fn mhs_rust_js_export_invoke(handle: u32, export_index: u32) -> i32 {
+    std::hint::cold_path();
+    clear_result_bytes();
+    let tags = match with_program_mut(handle, |program| {
+        program.js_export_tags(export_index).map(str::to_owned)
+    }) {
+        Ok(tags) => tags,
+        Err(()) => return 1,
+    };
+    let args = match read_wrapper_args(tags.as_bytes()) {
+        Ok(args) => args,
+        Err(()) => return 1,
+    };
+    match with_program_mut(handle, |program| {
+        program.apply_js_export_index(export_index, &args, usize::MAX)
+    }) {
+        Ok(value) => match set_wrapper_result(&value) {
+            Ok(()) => 0,
+            Err(()) => 1,
+        },
+        Err(()) => 1,
+    }
+}
+
 fn store_result_bytes(bytes: Vec<u8>) -> *const u8 {
     RESULT_BYTES
         .try_with(|result| {
