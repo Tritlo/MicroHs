@@ -128,7 +128,7 @@ fn alloc_read_bfile(program: &mut Program, bytes: Vec<u8>) -> i64 {
         .unwrap()
 }
 
-fn stream_parse_with_tail(input: &[u8], tail_len: usize) -> Result<(Program, Vec<u8>), EvalError> {
+fn deserialize_with_tail(input: &[u8], tail_len: usize) -> Result<(Program, Vec<u8>), EvalError> {
     let mut driver = parse_program(b"v8.4\n0\nI }\n").unwrap();
     let ptr = alloc_read_bfile(&mut driver, input.to_vec());
     let parsed = driver.parse_bfile_program_for_test(ptr)?;
@@ -138,7 +138,7 @@ fn stream_parse_with_tail(input: &[u8], tail_len: usize) -> Result<(Program, Vec
 
 fn assert_stream_matches_slice(input: &[u8]) {
     let sliced = parse_program(input).unwrap();
-    let (streamed, _) = stream_parse_with_tail(input, 0).unwrap();
+    let (streamed, _) = deserialize_with_tail(input, 0).unwrap();
     assert_eq!(
         streamed.serialize_program(streamed.root()).unwrap(),
         sliced.serialize_program(sliced.root()).unwrap(),
@@ -148,7 +148,7 @@ fn assert_stream_matches_slice(input: &[u8]) {
 }
 
 #[test]
-fn stream_parse_matches_slice_parser_cases() {
+fn deserialize_stream_matches_slice_parser_cases() {
     let mut raw = b"v8.4\n0\n$6 ".to_vec();
     raw.extend_from_slice(b"ab}\0 c");
     raw.extend_from_slice(b" }\n");
@@ -169,9 +169,9 @@ fn stream_parse_matches_slice_parser_cases() {
 }
 
 #[test]
-fn stream_parse_leaves_js_exports_trailer_readable() {
+fn deserialize_stream_leaves_js_exports_trailer_readable() {
     let input = b"v8.4\n0\n#42 }##### JS_EXPORTS\nrest";
-    let (streamed, tail) = stream_parse_with_tail(input, b"##### JS_EXPORTS\nrest".len()).unwrap();
+    let (streamed, tail) = deserialize_with_tail(input, b"##### JS_EXPORTS\nrest".len()).unwrap();
     let sliced = parse_program(input).unwrap();
     assert_eq!(
         streamed.serialize_program(streamed.root()).unwrap(),
@@ -181,7 +181,7 @@ fn stream_parse_leaves_js_exports_trailer_readable() {
 }
 
 #[test]
-fn stream_parse_reports_malformed_input_cleanly() {
+fn deserialize_stream_reports_malformed_input_cleanly() {
     for input in [
         b"v8.4\n0\n$4 ab".as_slice(),
         b"v8.4\n0\n# }tail".as_slice(),
@@ -195,7 +195,7 @@ fn stream_parse_reports_malformed_input_cleanly() {
 }
 
 #[test]
-fn stream_parse_random_valid_programs_match_slice_parser() {
+fn deserialize_stream_random_valid_programs_match_slice_parser() {
     let mut seed = 0x1234_5678_9abc_def0_u64;
     for depth in 0..80 {
         let mut input = b"v8.4\n0\n".to_vec();
