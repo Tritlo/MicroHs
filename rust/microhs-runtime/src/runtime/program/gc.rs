@@ -788,16 +788,9 @@ impl Program {
         current_root: NodeId,
         eval_spine: &EvalSpine,
         scratch_args: &[NodeId],
-        scratch_apps: &[NodeId],
         machine_stack: Option<&EvalStack>,
     ) -> Result<usize, EvalError> {
-        self.collect_garbage::<false>(
-            current_root,
-            eval_spine,
-            scratch_args,
-            scratch_apps,
-            machine_stack,
-        )
+        self.collect_garbage::<false>(current_root, eval_spine, scratch_args, machine_stack)
     }
 
     /// Match the C runtime's two post-parse, allocation-free GCRED passes.
@@ -805,7 +798,7 @@ impl Program {
         let root = self.root;
         let eval_spine = EvalSpine::default();
         for _ in 0..2 {
-            self.collect_garbage::<true>(root, &eval_spine, &[], &[], None)
+            self.collect_garbage::<true>(root, &eval_spine, &[], None)
                 .expect("a freshly parsed program has no fallible GC finalizers");
         }
     }
