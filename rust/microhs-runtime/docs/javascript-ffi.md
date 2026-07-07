@@ -15,6 +15,7 @@ Scope:
 - Haskell closures wrapped as JS callbacks.
 - JS-visible Haskell exports.
 - `--no-main` export-only libraries.
+- Separate embedder ABI used by browser/compiler hosts.
 - Not `src/runtime/eval.c`.
 
 ## Tokens And Tags
@@ -343,6 +344,228 @@ After `m.freeProgram(handle)`, the wasm program table slot is set to `None`.
 The export object still exists in JS, but calling it returns a nonzero status
 from `mhs_rust_js_export_invoke`; `host.mjs` throws
 `MicroHs JavaScript export failed`.
+
+## Embedder ABI
+
+This is a separate surface from `foreign import javascript` /
+`foreign export javascript`.  JS FFI is the language bridge inside compiled
+MicroHs programs.  The embedder ABI is the host/control surface used by
+browser workers and compiler wrappers around a wasm runtime instance.
+
+### Feature Gate
+
+All embedder-ABI additions are behind the `embedded` cargo feature:
+
+```sh
+cargo build --manifest-path rust/microhs-runtime/Cargo.toml --features embedded
+```
+
+The feature is off by default (`default = []`).  The non-embedded hot path is
+kept untouched: the only embedder hook in `Program::reduce_main` is
+`mhs_host_poll`, and it is fully `cfg`-elided when `embedded` is off.  The
+branch uses `std::cfg_select!` for the two real `cfg` pairs:
+
+- `runtime/program/public.rs`: `host_poll` is a browser-wasm import and a
+  native no-op.
+- `wasm.rs`: `mhs_rust_program_new` stores parse/setup error detail only for
+  embedded builds.
+
+The browser wasm build already enables the feature through
+`tools/wasm/browser/build-browser-bench.sh`.
+
+### Runtime ABI
+
+Host-provided import:
+
+```text
+mhs_host_poll(steps_so_far: u64) -> i32
+```
+
+`Program::reduce_main` calls this every `EMBEDDED_POLL_INTERVAL` reductions
+(`4 * 1024 * 1024`, about 4M).  A nonzero return is a cooperative cancel.  The
+runtime reports main status `4` and writes `cancelled by host poll` to the
+result buffer.  This is deliberately cheaper than making `reduce_main`
+resumable: the host gets progress and a cancel point without killing a warm
+worker.
+
+Embedded-only exports:
+
+```text
+mhs_rust_program_reduce_main_status() -> i32
+mhs_rust_program_stats(handle) -> *const u8
+mhs_rust_last_error_ptr() -> *const u8
+mhs_rust_last_error_len() -> usize
+```
+
+Main status codes:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | ok |
+| 1 | runtime error |
+| 2 | step limit |
+| 3 | exception raised |
+| 4 | cancelled |
+
+`mhs_rust_program_stats(handle)` writes six little-endian `u64` values into
+the shared result buffer and returns its pointer.  Read the byte length through
+`mhs_rust_result_len()`; for this record it must be 48.  Field order:
+
+```text
+reductions
+liveNodes
+currentNodes
+gcCollections
+lastLiveNodes
+highWaterNodes
+```
+
+`mhs_rust_last_error_ptr()` / `mhs_rust_last_error_len()` expose parse/setup
+error detail.  `mhs_rust_program_new` sets this buffer on embedded parse
+failure or handle allocation failure, and clears it after a successful program
+creation.
+
+### Compiler Dump Channel
+
+`-ddump-combinator-out=FILE` is the deterministic named-artifact channel for
+the embedder compiler flow.  `compileCacheTop` writes `showLDefs` to the named
+file.  It works the same in native and wasm builds.
+
+This is not `-o`.  `-o` writes the linked postfix wire format: names are erased
+and it requires a successful `main` link.  Combinate's source modules are
+deliberately main-less, so the browser compiler needs the named combinator
+dump file instead.  The browser runtime also discards stdout as a dump channel,
+so a file artifact is required.
+
+### Browser Host Glue
+
+`tools/wasm/browser/host.mjs` provides the import:
+
+```javascript
+mhs_host_poll(stepsSoFar)
+```
+
+It calls `options.onPoll(stepsSoFar)` when present.  The hook is non-throwing:
+exceptions from `onPoll` are caught and treated as "do not cancel".
+
+The same host wrapper exposes these runtime helpers:
+
+```javascript
+runtime.reduceMainStatus()
+runtime.lastError()
+runtime.stats(handle)
+```
+
+They are guarded for non-embedded builds.  If the wasm export is absent,
+`reduceMainStatus()` returns `-1`, `lastError()` returns `""`, and
+`stats(handle)` returns `null`.
+
+### Stable Compiler API
+
+`tools/wasm/browser/compiler.mjs` is the stable embedder compile boundary:
+
+```javascript
+const compiler = await createCompiler({ wasm, comb, files });
+const out = compiler.compile(source, { module, flags });
+compiler.close();
+```
+
+`createCompiler({ wasm, comb, files })` warms one runtime instance, preloads
+caller-owned absolute VFS files, and reuses the instance across compiles.
+`compile(source, { module, flags })` writes `/work/<Module>.hs`, runs `mhs`,
+and returns:
+
+```javascript
+{ status, dump, stderr, error, stats }
+```
+
+`/work` is scratch.  The wrapper removes files from previous compiles before
+each run and again on `close()`.
+
+The argv order is intentional:
+
+```text
+mhs -i -i/work -imhs -isrc -ilib ...flags -ddump-combinator-out=/work/<Module>.dump <Module>
+```
+
+The first `-i` clears inherited include paths.  A later bare `-i` would clear
+the paths added before it, so callers should not append one casually in
+`flags`.
+
+`compile()` reads and returns the dump even when `status != "ok"`.  That is the
+expected Combinate case: a main-less module can write its combinator dump and
+then fail on the missing `main`.  This replaces the older "ignore
+`No definition found for: Ex.main`" host hack.
+
+### Web Distribution
+
+`tools/wasm/browser/build-web-dist.sh` builds the plain deployable tree used by
+Combinate CI:
+
+```text
+microhs_runtime.wasm
+compiler.mjs
+host.mjs
+mhs.comb
+include/lib/...
+manifest.json
+prewarm.mhscache
+```
+
+The wasm is the embedded build.  `generated/mhs.comb` is copied as `mhs.comb`.
+Only `lib/` is copied into `include/lib/`; that is sufficient for user
+compiles because the compiler implementation sources are already baked into the
+comb.  `manifest.json` maps dist include files to VFS paths and records the
+prewarm cache location.
+
+The `dist/` directory is gitignored.  `prewarm.mhscache` is generated at dist
+time from the current compiler comb and library sources, then copied into the
+dist tree.  It is version-tied output, not a committed source artifact.
+
+### GHC-Free Bootstrap And Cache Checks
+
+`generated/mhs.comb` is the committed bootstrap seed for the Rust runtime path.
+`tools/native/bootstrap-ghcfree.sh` verifies that seed and self-compiles a
+fresh compiler comb through `mhs-rust-bench` using only cargo and the Rust
+runtime.  It needs neither GHC nor `cc`.
+
+When compiler source changes, regenerate the seed by rebuilding `bin/mhs` with
+`make newmhs`, then self-compiling:
+
+```sh
+./bin/mhs -i -imhs -isrc -ilib MicroHs.Main -o /tmp/mhs-selfhost.comb
+```
+
+Verify the fixed-point hash, then copy the result over `generated/mhs.comb`.
+
+`tools/native/test-mhscache.sh` checks the `.mhscache` path.  It proves that a
+cache written by the Rust runtime can be read back by the Rust runtime, and, if
+`bin/mhs` is available, that a cache written by the C runtime is readable by the
+Rust runtime.
+
+### Prewarmed Cache Status
+
+The goal is for browser workers to load `prewarm.mhscache` and use `-CR` to
+avoid cold compiler/cache work for common library modules.
+
+Open limitation: this is not a browser win yet.  Reading the prewarm cache via
+`-CR` in browser wasm is currently very slow: observed runs timed out around
+240s, slower than a cold compile around 90s, even for the warmed module.  The
+browser wasm build already uses a generous 75M-cell GC interval, so this is not
+explained by the old small-interval GC issue.  The likely follow-up is the
+cache read/validate path.
+
+### Byte Identity
+
+For this branch, the merged compiler with JS FFI and
+`-ddump-combinator-out=FILE` self-hosts to fixed point:
+
+```text
+3489b7bf0c58ca0f004be73cea1a14fcafc99e2cd8bef81847f6832676b9ddfb
+```
+
+Runtime-ABI changes do not move that hash.  Compiler-source growth does.
+Rust == C was verified for this fixed point.
 
 ## `--no-main` / Export-Only
 
