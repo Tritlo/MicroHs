@@ -52,8 +52,10 @@ objdump -d --start-address=0x366a0 --stop-address=0x471bc \
 Both full self-host outputs from the default and PGO binaries produced:
 
 ```text
-29b8c5a55e0952bd25a9a06d5723033e0367ebaf53cfd598fa00f8e65a80d98a
+8030b42d11ab0ad43118a2684fb4c51bd1787df0d0db10a5904b5f1f47fd3a27
 ```
+
+This NORTH moved with the compiler-only dump-file flag addition.
 
 The bounded 80M-step no-GC callgrind comparison, using the same binaries and
 `--cache-sim=yes --branch-sim=yes`, was:
@@ -416,7 +418,7 @@ changes the tail-merge or lowering behavior.
 This was "source-addressable residue #1" above: hand-fuse the ~710-line dispatch
 function into its sole caller's loop, deleting the `StackStep` enum + call boundary
 (each of the 13 return sites became an inline continuation macro), to reproduce
-PGO's biggest structural change in source. Byte-identical (SHA `29b8c5a5`); clean
+PGO's biggest structural change in source. Byte-identical (SHA `8030b42d`); clean
 core-pinned interleaved wall A/B (min≈median) measured **+2.0% wall — a regression.**
 A bounded 80M-step GC-off callgrind slice explains exactly why: the fusion *did*
 capture PGO's frontend half — **I1mr −8.0%** (25.25M→23.24M) from removing the

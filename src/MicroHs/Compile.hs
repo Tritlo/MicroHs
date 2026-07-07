@@ -70,8 +70,12 @@ type CM a = StateIO Cache a
 compileCacheTop :: Flags -> IdentModule -> Cache -> IO ((IdentModule, [(Ident, Exp)]), Symbols, Cache)
 compileCacheTop flags mn ch = do
   res@((_, ds), _, _) <- compile flags mn ch
+  let s = showLDefs ds
+  case dumpCombinatorOut flags of
+    Just fn -> writeFile fn s
+    Nothing -> return ()
   dumpIf flags Dcombinator $
-    putStrLn $ "combinators:\n" ++ showLDefs ds
+    putStrLn $ "combinators:\n" ++ s
   return res
 
 compileMany :: Flags -> [IdentModule] -> Cache -> IO Cache
