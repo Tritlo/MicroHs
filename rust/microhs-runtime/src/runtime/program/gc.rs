@@ -149,7 +149,6 @@ impl Program {
         current_root: NodeId,
         eval_spine: &EvalSpine,
         scratch_args: &[NodeId],
-        scratch_apps: &[NodeId],
         machine_stack: Option<&EvalStack>,
     ) {
         Self::mark_node_id(marked, work, self.root);
@@ -227,7 +226,7 @@ impl Program {
             self.mark_machine_stack(marked, work, machine_stack);
         }
         Self::mark_eval_spine(marked, work, eval_spine);
-        for id in scratch_args.iter().chain(scratch_apps) {
+        for id in scratch_args {
             Self::mark_node_id(marked, work, *id);
         }
     }
@@ -683,7 +682,6 @@ impl Program {
         current_root: NodeId,
         eval_spine: &EvalSpine,
         scratch_args: &[NodeId],
-        scratch_apps: &[NodeId],
         machine_stack: Option<&EvalStack>,
     ) -> Result<usize, EvalError> {
         let started = Instant::now();
@@ -705,7 +703,6 @@ impl Program {
             current_root,
             eval_spine,
             scratch_args,
-            scratch_apps,
             machine_stack,
         );
         self.mark_reachable::<REDUCE_APPS>(&mut marked, &mut work, &mut foreign_finalizer_marked);
@@ -827,7 +824,6 @@ impl Program {
         current_root: NodeId,
         eval_spine: &EvalSpine,
         scratch_args: &[NodeId],
-        scratch_apps: &[NodeId],
         machine_stack: Option<&EvalStack>,
     ) -> Result<(), EvalError> {
         if self.reduce_depth != 1 {
@@ -842,13 +838,7 @@ impl Program {
             }
         }
         self.force_gc = false;
-        self.collect_garbage_between_steps(
-            current_root,
-            eval_spine,
-            scratch_args,
-            scratch_apps,
-            machine_stack,
-        )?;
+        self.collect_garbage_between_steps(current_root, eval_spine, scratch_args, machine_stack)?;
         Ok(())
     }
 }

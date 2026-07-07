@@ -20,7 +20,7 @@ fn whnf(input: &[u8]) -> String {
 
 fn collect_for_test(program: &mut Program, root: NodeId) {
     program
-        .collect_garbage_between_steps(root, &EvalSpine::default(), &[], &[], None)
+        .collect_garbage_between_steps(root, &EvalSpine::default(), &[], None)
         .unwrap();
 }
 
