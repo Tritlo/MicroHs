@@ -215,6 +215,8 @@ fn deserialize_stream_matches_slice_parser_cases() {
         b"v8.4\n0\n%\"12345678901234567890\" }\n",
         b"v8.4\n0\n^ffi_name ~tag1,tag2 \"body\" `wrap ;callback !\"tick\" [5] }\n",
         b"v8.4\n0\nI \r\n}\n",
+        b"v8.4\n0\nquot\r#8 #2 @ @ }\n",
+        b"v8.4\n0\n~tag\r\"body\" `wrap\r[2] }\n",
     ];
     for case in cases {
         assert_stream_matches_slice(case);
@@ -224,14 +226,35 @@ fn deserialize_stream_matches_slice_parser_cases() {
 
 #[test]
 fn deserialize_stream_leaves_js_exports_trailer_readable() {
-    let input = b"v8.4\n0\n#42 }##### JS_EXPORTS\nrest";
-    let (streamed, tail) = deserialize_with_tail(input, b"##### JS_EXPORTS\nrest".len()).unwrap();
-    let sliced = parse_program(input).unwrap();
+    let graph = b"v8.4\n0\n#42 }";
+    let trailer = b"##### JS_EXPORTS\nrest";
+    let mut input = graph.to_vec();
+    input.extend_from_slice(trailer);
+    let (streamed, tail) = deserialize_with_tail(&input, trailer.len()).unwrap();
+    let sliced = parse_program(graph).unwrap();
     assert_eq!(
         streamed.serialize_program(streamed.root()).unwrap(),
         sliced.serialize_program(sliced.root()).unwrap()
     );
-    assert_eq!(tail, b"##### JS_EXPORTS\nrest");
+    assert_eq!(tail, trailer);
+}
+
+#[test]
+fn parse_program_registers_js_exports_trailer() {
+    let program =
+        parse_program(b"v8.4\n1\nI :0 }\n##### JS_EXPORTS 1\n\"answer\" _0 - I PURE .\n").unwrap();
+    assert_eq!(program.js_exports.len(), 1);
+    assert_eq!(program.js_exports[0].name, "answer");
+    assert!(!program.js_exports[0].is_io);
+    assert_eq!(program.js_wrapper_tags, ["I"]);
+}
+
+#[test]
+fn parse_program_rejects_invalid_js_exports_trailer() {
+    assert!(matches!(
+        parse_program(b"v8.4\n1\nI :0 }\n##### JS_EXPORTS 1\n\"answer\" _9 - I PURE .\n"),
+        Err(ParseError::InvalidJsExport)
+    ));
 }
 
 #[test]
