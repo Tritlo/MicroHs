@@ -15,7 +15,7 @@ set -u
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)
 cd "$repo_root"
 SELF="${MHS_SELFHOST_COMB:-/tmp/mhs-selfhost.comb}"
-NORTH=3489b7bf0c58ca0f004be73cea1a14fcafc99e2cd8bef81847f6832676b9ddfb
+NORTH=$(cat "$repo_root/rust/microhs-runtime/tools/native/NORTH")
 CHEAP="${CHEAP:-}"            # C RTS heap flag; empty = C default (~787MB)
 RINT="${RINT:-78643200}"     # Rust GC interval; 75M cells ~= 796MB (matches C default ~787MB)
 MLABEL="${MLABEL:-~790MB (C default heap)}"

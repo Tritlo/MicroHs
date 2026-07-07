@@ -5,12 +5,15 @@ const decoder = new TextDecoder();
 const REDUCE_LIMIT = 0xffffffff;
 
 // Stable embedder compile boundary for Combinate's worker.ts:
-// createCompiler({ wasm, comb, files }) warms one runtime, preloads caller-owned
-// include files, and returns compile(source, { module, flags }) plus close().
+// createCompiler({ wasm, comb, files, onPoll }) warms one runtime, preloads
+// caller-owned include files, and returns compile(source, { module, flags })
+// plus close(). onPoll (optional) is the cooperative-cancel hook: it is called
+// periodically with the reduction step count, and returning truthy cancels the
+// current compile (surfaced as status "cancelled").
 // compile() writes /work/<Module>.hs, runs mhs with a deterministic
 // -ddump-combinator-out=/work/<Module>.dump artifact, and returns
 // { status, dump, stderr, error, stats } without scraping stdout for the dump.
-export async function createCompiler({ wasm, comb, files }) {
+export async function createCompiler({ wasm, comb, files, onPoll }) {
   if (wasm == null) {
     throw new TypeError("createCompiler requires wasm");
   }
@@ -29,6 +32,7 @@ export async function createCompiler({ wasm, comb, files }) {
     stderr(bytes) {
       captured.push(bytes);
     },
+    onPoll,
   });
   const combBytes = toBytes(comb);
   const workFiles = new Set();
