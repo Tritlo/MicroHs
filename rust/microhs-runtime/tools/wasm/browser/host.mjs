@@ -176,6 +176,9 @@ export async function instantiateMicroHsRuntime(wasm, options = {}) {
     hostReadFile(path) {
       return state.hostFs.readFile(path);
     },
+    hostRemove(path) {
+      return state.hostFs.remove(path);
+    },
     hostMkdirp(path) {
       state.hostFs.mkdirp(path);
     },
