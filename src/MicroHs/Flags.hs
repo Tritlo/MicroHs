@@ -11,6 +11,7 @@ data Flags = Flags {
   mhsdir     :: FilePath,   -- where MHS files live
   srcPaths   :: [FilePath], -- module search path
   output     :: String,     -- output file
+  dumpCombinatorOut :: Maybe FilePath, -- file for combinator dump
   loading    :: Bool,       -- show loading message
   speed      :: Bool,       -- show lines/s
   readCache  :: Bool,       -- read and use cache
@@ -54,6 +55,7 @@ defaultFlags = Flags {
   mhsdir     = ".",
   srcPaths   = [],
   output     = "out.comb",
+  dumpCombinatorOut = Nothing,
   loading    = False,
   speed      = False,
   readCache  = False,
