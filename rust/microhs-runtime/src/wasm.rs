@@ -339,12 +339,19 @@ pub extern "C" fn mhs_rust_js_export_invoke(handle: u32, export_index: u32) -> i
         Err(()) => return 1,
     };
     match with_program_mut(handle, |program| {
-        program.apply_js_export_index(export_index, &args, usize::MAX)
+        match program.apply_js_export_index(export_index, &args, usize::MAX) {
+            Ok(value) => Ok(Ok(value)),
+            Err(err) => Ok(Err(js_invoke_error_message(program, err))),
+        }
     }) {
-        Ok(value) => match set_wrapper_result(&value) {
+        Ok(Ok(value)) => match set_wrapper_result(&value) {
             Ok(()) => 0,
             Err(()) => 1,
         },
+        Ok(Err(message)) => {
+            store_result_bytes(message);
+            1
+        }
         Err(()) => 1,
     }
 }
@@ -406,6 +413,7 @@ pub extern "C" fn mhs_rust_wrapper_invoke(
     stable_ptr: u32,
     wrapper_index: u32,
 ) -> i32 {
+    clear_result_bytes();
     let tags = match with_program_mut(program_handle, |program| {
         program.js_wrapper_tags(wrapper_index).map(str::to_owned)
     }) {
@@ -417,12 +425,20 @@ pub extern "C" fn mhs_rust_wrapper_invoke(
         Err(()) => return 1,
     };
     match with_program_mut(program_handle, |program| {
-        program.apply_js_wrapper_index(wrapper_index, stable_ptr as usize, &args, usize::MAX)
+        match program.apply_js_wrapper_index(wrapper_index, stable_ptr as usize, &args, usize::MAX)
+        {
+            Ok(value) => Ok(Ok(value)),
+            Err(err) => Ok(Err(js_invoke_error_message(program, err))),
+        }
     }) {
-        Ok(value) => match set_wrapper_result(&value) {
+        Ok(Ok(value)) => match set_wrapper_result(&value) {
             Ok(()) => 0,
             Err(()) => 1,
         },
+        Ok(Err(message)) => {
+            store_result_bytes(message);
+            1
+        }
         Err(()) => 1,
     }
 }
@@ -581,6 +597,15 @@ fn with_current_active_program_mut<R>(
         let program = unsafe { program.as_mut() }.ok_or(())?;
         f(program).map_err(|_| ())
     })
+}
+
+fn js_invoke_error_message(program: &mut Program, err: EvalError) -> Vec<u8> {
+    match err {
+        EvalError::Raised(exn) => program
+            .uncaught_exception_message_bytes(exn)
+            .unwrap_or_else(|err| err.to_string().into_bytes()),
+        err => err.to_string().into_bytes(),
+    }
 }
 
 fn read_wrapper_args(tags: &[u8]) -> Result<Vec<JsValue>, ()> {
