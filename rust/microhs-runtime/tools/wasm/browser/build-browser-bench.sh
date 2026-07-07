@@ -17,6 +17,7 @@ cargo build \
   --release \
   --manifest-path "$repo/rust/microhs-runtime/Cargo.toml" \
   --target wasm32-unknown-unknown \
+  --features embedded \
   --lib
 
 EM_CACHE="$em_cache" "$emcc" \
