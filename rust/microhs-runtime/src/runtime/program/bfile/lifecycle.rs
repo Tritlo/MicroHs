@@ -73,7 +73,11 @@ impl Program {
         if let Some(inner) = close_inner {
             self.close_bfile(inner)?;
         }
-        let slot = self.bfiles.get_mut(slot).ok_or(EvalError::InvalidHandle)?;
+        let slot_index = slot;
+        let slot = self
+            .bfiles
+            .get_mut(slot_index)
+            .ok_or(EvalError::InvalidHandle)?;
         let _bfile = slot.as_ref().ok_or(EvalError::InvalidHandle)?;
         #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
         if let BFileKind::NativeFile { file, .. } = &_bfile.kind {
@@ -95,6 +99,9 @@ impl Program {
             }
         }
         *slot = None;
+        if slot_index < self.bfile_first_free {
+            self.bfile_first_free = slot_index;
+        }
         Ok(())
     }
 
@@ -120,12 +127,18 @@ impl Program {
     }
 
     pub(in crate::runtime) fn close_dir(&mut self, ptr: i64) -> Result<(), EvalError> {
-        let slot = self.decode_dir_pointer(ptr)?;
-        let slot = self.dirs.get_mut(slot).ok_or(EvalError::InvalidHandle)?;
+        let slot_index = self.decode_dir_pointer(ptr)?;
+        let slot = self
+            .dirs
+            .get_mut(slot_index)
+            .ok_or(EvalError::InvalidHandle)?;
         if slot.is_none() {
             return Err(EvalError::InvalidHandle);
         }
         *slot = None;
+        if slot_index < self.dir_first_free {
+            self.dir_first_free = slot_index;
+        }
         Ok(())
     }
 

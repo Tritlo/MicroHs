@@ -3,13 +3,23 @@ use super::*;
 
 impl Program {
     pub(in crate::runtime) fn alloc_bfile(&mut self, bfile: BFile) -> Result<i64, EvalError> {
-        let slot = if let Some(slot) = self.bfiles.iter().position(Option::is_none) {
-            self.bfiles[slot] = Some(bfile);
-            slot
-        } else {
+        let mut slot = self.bfile_first_free;
+        while self.bfiles.get(slot).is_some_and(Option::is_some) {
+            slot += 1;
+        }
+        if slot == self.bfiles.len() {
             self.bfiles.push(Some(bfile));
-            self.bfiles.len() - 1
-        };
+        } else {
+            self.bfiles[slot] = Some(bfile);
+        }
+        self.bfile_first_free = slot + 1;
+        while self
+            .bfiles
+            .get(self.bfile_first_free)
+            .is_some_and(Option::is_some)
+        {
+            self.bfile_first_free += 1;
+        }
         self.pointer_for_bfile(slot)
     }
 
@@ -63,13 +73,23 @@ impl Program {
         entries: Vec<Vec<u8>>,
     ) -> Result<i64, EvalError> {
         let dir = DirHandle { entries, pos: 0 };
-        let slot = if let Some(slot) = self.dirs.iter().position(Option::is_none) {
-            self.dirs[slot] = Some(dir);
-            slot
-        } else {
+        let mut slot = self.dir_first_free;
+        while self.dirs.get(slot).is_some_and(Option::is_some) {
+            slot += 1;
+        }
+        if slot == self.dirs.len() {
             self.dirs.push(Some(dir));
-            self.dirs.len() - 1
-        };
+        } else {
+            self.dirs[slot] = Some(dir);
+        }
+        self.dir_first_free = slot + 1;
+        while self
+            .dirs
+            .get(self.dir_first_free)
+            .is_some_and(Option::is_some)
+        {
+            self.dir_first_free += 1;
+        }
         self.pointer_for_dir(slot)
     }
 

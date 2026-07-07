@@ -1,6 +1,8 @@
 //! Mark-sweep GC over the node arena and cold payload tables.
 use super::*;
 
+const GC_EVENTS_LIMIT: usize = 1024;
+
 impl Program {
     pub fn gc_stats(&self) -> GcStats {
         GcStats {
@@ -561,6 +563,9 @@ impl Program {
         }
         self.gc_last_allocations_since_collect = allocations_since_collect;
         self.gc_allocations_since_collect = 0;
+        if self.gc_events.len() == GC_EVENTS_LIMIT {
+            self.gc_events.remove(0);
+        }
         self.gc_events.push(GcEventStats {
             collection: self.gc_collections,
             pause_nanos,
