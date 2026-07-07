@@ -12,6 +12,39 @@ fn mpz_get_d_uses_decimal_rounding_like_c() {
 }
 
 #[test]
+fn mpz_low_bits_and_bit_len_match_bit_vector_values() {
+    let cases: &[&[u8]] = &[
+        b"0",
+        b"1",
+        b"9223372036854775807",
+        b"9223372036854775808",
+        b"18446744073709551615",
+        b"18446744073709551616",
+        b"1267650600228229401496703205376",
+        b"1267650600228229401496703217721",
+        b"10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        b"-1267650600228229401496703217721",
+    ];
+
+    for decimal in cases {
+        let value = MpzValue::parse_decimal(decimal).unwrap();
+        let bits = value.to_bits_abs();
+        let expected_low = bits
+            .iter()
+            .take(64)
+            .enumerate()
+            .fold(
+                0_u64,
+                |acc, (idx, bit)| {
+                    if *bit { acc | (1_u64 << idx) } else { acc }
+                },
+            );
+        assert_eq!(value.bit_len(), bits.len(), "{decimal:?}");
+        assert_eq!(value.to_u64_low(), expected_low, "{decimal:?}");
+    }
+}
+
+#[test]
 fn reduces_integer_arithmetic() {
     assert_eq!(whnf(b"v8.4\n0\n+ #40 @ #2 @ }"), "42");
     assert_eq!(whnf(b"v8.4\n0\nsubtract #10 @ #3 @ }"), "-7");
