@@ -6,6 +6,5 @@ mod lifecycle;
 mod pointers;
 mod read_bytes;
 mod setup;
-mod stream_parse;
 mod utf8_stdio;
 mod write_bytes;

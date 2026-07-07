@@ -1,6 +1,50 @@
 //! Block-oriented BFILE reads and writes.
 use super::*;
 
+use crate::parse::{ByteSource, ParseError, Parser};
+
+pub(in crate::runtime) struct StreamSource<'p> {
+    pub(in crate::runtime) program: &'p mut Program,
+    pub(in crate::runtime) ptr: i64,
+    pub(in crate::runtime) ungot: Option<u8>,
+}
+
+impl ByteSource for StreamSource<'_> {
+    type Error = EvalError;
+
+    fn parse_error(error: ParseError) -> Self::Error {
+        Program::deserialize_parse_error(error)
+    }
+
+    fn next_byte(&mut self) -> Result<Option<u8>, Self::Error> {
+        if let Some(byte) = self.ungot.take() {
+            return Ok(Some(byte));
+        }
+        let byte = self.program.get_bfile_byte(self.ptr)?;
+        if byte < 0 {
+            return Ok(None);
+        }
+        u8::try_from(byte)
+            .map(Some)
+            .map_err(|_| EvalError::InvalidByteString)
+    }
+
+    fn peek_byte(&mut self) -> Result<Option<u8>, Self::Error> {
+        if self.ungot.is_none() {
+            self.ungot = self.next_byte()?;
+        }
+        Ok(self.ungot)
+    }
+
+    fn unget_byte(&mut self, byte: u8) -> Result<(), Self::Error> {
+        if self.ungot.is_some() {
+            return Err(EvalError::InvalidByteString);
+        }
+        self.ungot = Some(byte);
+        Ok(())
+    }
+}
+
 impl Program {
     pub(in crate::runtime) fn read_bfile(
         &mut self,
@@ -324,8 +368,28 @@ impl Program {
     #[cold]
     #[inline(never)]
     pub(in crate::runtime) fn deserialize_bfile(&mut self, ptr: i64) -> Result<NodeId, EvalError> {
-        let parsed = self.parse_bfile_program_streaming(ptr)?;
+        let parsed = {
+            Parser::new(StreamSource {
+                program: self,
+                ptr,
+                ungot: None,
+            })
+            .parse_graph_only()?
+        };
         self.append_parsed_program(parsed)
+    }
+
+    #[cfg(test)]
+    pub(in crate::runtime) fn parse_bfile_program_for_test(
+        &mut self,
+        ptr: i64,
+    ) -> Result<Program, EvalError> {
+        Parser::new(StreamSource {
+            program: self,
+            ptr,
+            ungot: None,
+        })
+        .parse_graph_only()
     }
 
     pub(in crate::runtime) fn deserialize_parse_error(
