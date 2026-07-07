@@ -19,6 +19,7 @@ makeFFI _ forExps exclude dss =
                        eq (_, n, _, _) (_, n', _, _) = n == n'
       wrappers = [ t | (ImpWrapper, _, t, _) <- ffiImports]
       dynamics = [ t | (ImpDynamic, _, t, _) <- ffiImports]
+      jsImps   = filter isJS ffiImports
       imps     = filter (not . isJS) $ filter ((`notElem` exclude) . impModule) $ filter ((`notElem` runtimeFFI) . impName) ffiImports
       includes = nub [ inc | (ImpStatic iincs _ _, _, _, _) <- imps, inc <- iincs ]
       isJS (ImpJS _, _, _, _) = True
@@ -36,6 +37,10 @@ makeFFI _ forExps exclude dss =
          "#endif"
         ]
   in
+    -- makeFFI is only forced for C/native output (the .comb branch never
+    -- references the FFI code), so a foreign import javascript reaching here
+    -- means the JS runtime backend was not targeted.
+    if not (null jsImps) then errorMessage (getSLoc (head [ t | (_, _, t, _) <- jsImps ])) "foreign import javascript is not supported by the C/emscripten backend; compile to a combinator file (.comb) for the JavaScript runtime" else
     if not (null wrappers) || not (null dynamics) then mhsError "Unimplemented FFI feature" else
     (unlines $
       map (\ fn -> "#include \"" ++ fn ++ "\"") includes ++
@@ -192,13 +197,19 @@ cHsTypes =
   , ("System.IO.Handle",  "Ptr")
   ]
 
--- Foreign export type names; a javascript export also allows Bool.
+-- Foreign export type names.  A Bool result/argument is only meaningful for the
+-- combinator (.comb) JavaScript runtime, which encodes it in the JS_EXPORTS
+-- trailer; the C/emscripten backend has no mhs_from_Bool/mhs_to_Bool, so reject
+-- it here at compile time with a clear message instead of failing at link time.
+jsBoolExportMsg :: String
+jsBoolExportMsg = "foreign export javascript with a Bool result/argument is only supported when compiling to a combinator file (.comb) for the JavaScript runtime, not the C/emscripten backend"
+
 expTypeName :: IsJavascript -> EType -> String
-expTypeName True (EVar i) | unIdent i == "Data.Bool_Type.Bool" = "int"
+expTypeName True t@(EVar i) | unIdent i == "Data.Bool_Type.Bool" = errorMessage (getSLoc t) jsBoolExportMsg
 expTypeName _ t = cTypeName t
 
 expTypeHsName :: IsJavascript -> EType -> String
-expTypeHsName True (EVar i) | unIdent i == "Data.Bool_Type.Bool" = "Bool"
+expTypeHsName True t@(EVar i) | unIdent i == "Data.Bool_Type.Bool" = errorMessage (getSLoc t) jsBoolExportMsg
 expTypeHsName _ t = cTypeHsName t
 
 -- Use to construct 'foreign export ccall' signature.

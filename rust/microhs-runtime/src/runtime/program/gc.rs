@@ -821,12 +821,7 @@ impl Program {
         scratch_args: &[NodeId],
         machine_stack: Option<&EvalStack>,
     ) -> Result<usize, EvalError> {
-        self.collect_garbage::<false>(
-            current_root,
-            eval_spine,
-            scratch_args,
-            machine_stack,
-        )
+        self.collect_garbage::<false>(current_root, eval_spine, scratch_args, machine_stack)
     }
 
     /// Match the C runtime's two post-parse, allocation-free GCRED passes.
