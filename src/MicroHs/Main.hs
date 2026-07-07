@@ -391,12 +391,6 @@ mainCompile flags mn = do
         cCode = "#include \"mhsffi.h\"\n" ++ makeCArray flags outData ++ cFFI
 
     let outFile = output flags
-    -- Generate stub file for 'foreign export'
-    unless (null forExps) $ do
-      let stubName = takeDirectory outFile </> dropExtension (showIdent mn) ++ "_stub.h"
-      when (verbosityGT flags 0) $
-        putStrLn $ "generate stub: " ++ stubName
-      writeFile stubName hFFI
     -- Decode what to do:
     --  * file ends in .comb: write combinator file
     --  * file ends in .c: write C version of combinator
@@ -406,6 +400,7 @@ mainCompile flags mn = do
       h' <- if base64 flags then do addBase64 h else return h
       h'' <- if compress flags then do hPutChar h' 'z'; addLZ77 h' else return h'
       hPutStr h'' outData
+      hPutStr h'' $ toJsExportTrailer forExps
       when (outFile `hasTheExtension` ".combffi") $ do
         -- add FFI info
         hPutStrLn h'' "\n#####"
@@ -413,15 +408,22 @@ mainCompile flags mn = do
             putFFI _ = return ()
         mapM_ putFFI outDefs
       hClose h''
-     else if outFile `hasTheExtension` ".c" then
-      writeFile outFile cCode
      else do
-       (fn, h) <- openTmpFile "mhsc.c"
-       let ppkgs = getPathPkgs cash
-       hPutStr h cCode
-       hClose h
-       mainCompileC flags (embedPkg ++ ppkgs) fn
-       removeFile fn
+      -- Generate stub file for 'foreign export'
+      unless (null forExps) $ do
+        let stubName = takeDirectory outFile </> dropExtension (showIdent mn) ++ "_stub.h"
+        when (verbosityGT flags 0) $
+          putStrLn $ "generate stub: " ++ stubName
+        writeFile stubName hFFI
+      if outFile `hasTheExtension` ".c" then
+        writeFile outFile cCode
+      else do
+        (fn, h) <- openTmpFile "mhsc.c"
+        let ppkgs = getPathPkgs cash
+        hPutStr h cCode
+        hClose h
+        mainCompileC flags (embedPkg ++ ppkgs) fn
+        removeFile fn
 
 mainCompileC :: Flags -> [(FilePath, Package)] -> FilePath -> IO ()
 mainCompileC flags pkgs infile = do

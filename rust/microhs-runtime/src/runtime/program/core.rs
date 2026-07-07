@@ -88,6 +88,7 @@ impl Program {
             reductions: 0,
             js_program_handle: None,
             js_wrapper_tags: Vec::new(),
+            js_exports: Vec::new(),
             prim_cache: PrimCache::default(),
             compound_cache: CompoundCache::default(),
             small_ints,

@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::runtime::{Node, NodeId, Program, is_runtime_prim_name};
+use crate::runtime::{JsExportDecl, Node, NodeId, Program, is_runtime_prim_name};
 
 const COMB_VERSION: &[u8] = b"v8.4\n";
 const PARSE_SMALL_INT_MIN: i64 = -10;
 const PARSE_SMALL_INT_MAX: i64 = 255;
 const PARSE_SMALL_INT_COUNT: usize = (PARSE_SMALL_INT_MAX - PARSE_SMALL_INT_MIN + 1) as usize;
-const JS_EXPORTS_TRAILER: &[u8] = b"##### JS_EXPORTS";
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -21,6 +20,7 @@ pub enum ParseError {
     DuplicateLabel(usize),
     DanglingLabel(usize),
     UnknownPrim(String),
+    InvalidJsExport,
 }
 
 impl fmt::Display for ParseError {
@@ -43,6 +43,7 @@ impl fmt::Display for ParseError {
             Self::DuplicateLabel(label) => write!(f, "duplicate shared label {label}"),
             Self::DanglingLabel(label) => write!(f, "dangling shared label {label}"),
             Self::UnknownPrim(name) => write!(f, "unknown primitive {name}"),
+            Self::InvalidJsExport => write!(f, "invalid JavaScript export trailer"),
         }
     }
 }
@@ -283,12 +284,17 @@ impl<S: ByteSource> Parser<S> {
     }
 
     fn finish_program(self, root: NodeId) -> Result<Program, S::Error> {
+        self.check_labels()?;
+        Ok(Program::new(self.nodes, root, self.labels))
+    }
+
+    fn check_labels(&self) -> Result<(), S::Error> {
         for (label, id) in &self.labels {
             if matches!(self.nodes[id.index()], Node::Indir(None)) {
                 return Err(S::parse_error(ParseError::DanglingLabel(*label)));
             }
         }
-        Ok(Program::new(self.nodes, root, self.labels))
+        Ok(())
     }
 
     fn parse_expr(&mut self) -> Result<NodeId, S::Error> {
@@ -628,21 +634,95 @@ where
     fn parse_program_file(mut self) -> Result<Program, S::Error> {
         self.parse_header()?;
         let root = self.parse_expr()?;
-        self.probe_js_exports_trailer()?;
-        let mut program = self.finish_program(root)?;
+        self.check_labels()?;
+        let js_exports = self.parse_js_export_trailer()?;
+        let mut program = Program::new(self.nodes, root, self.labels);
+        program
+            .register_js_exports(js_exports)
+            .map_err(|_| S::parse_error(ParseError::InvalidJsExport))?;
         program.collect_garbage_after_parse();
         Ok(program)
     }
 
-    fn probe_js_exports_trailer(&mut self) -> Result<(), S::Error> {
+    #[cold]
+    fn parse_js_export_trailer(&mut self) -> Result<Vec<JsExportDecl>, S::Error> {
+        std::hint::cold_path();
         let mark = self.source.mark();
-        for expected in JS_EXPORTS_TRAILER {
-            if self.next_optional()? != Some(*expected) {
-                self.source.rewind(mark);
-                return Ok(());
+        self.skip_space()?;
+        if !self.consume_bytes(b"#####")? {
+            self.source.rewind(mark);
+            return Ok(Vec::new());
+        }
+        self.skip_space()?;
+        if !self.consume_bytes(b"JS_EXPORTS")? {
+            self.source.rewind(mark);
+            return Ok(Vec::new());
+        }
+        self.expect(b' ')?;
+        if self.parse_usize()? != 1 {
+            return Err(S::parse_error(ParseError::InvalidJsExport));
+        }
+        self.skip_space()?;
+
+        let mut exports = Vec::new();
+        loop {
+            self.skip_space()?;
+            if self.gobble(b'.')? {
+                return Ok(exports);
             }
+            self.expect(b'"')?;
+            let name = String::from_utf8(self.parse_string()?)
+                .map_err(|_| S::parse_error(ParseError::InvalidUtf8))?;
+            self.expect(b' ')?;
+            self.expect(b'_')?;
+            let label = self.parse_usize()?;
+            let closure = *self
+                .labels
+                .get(&label)
+                .ok_or_else(|| S::parse_error(ParseError::InvalidJsExport))?;
+            self.expect(b' ')?;
+            let arg_tags = self.token_after_prefix_string()?;
+            let arg_tags = if arg_tags == "-" {
+                ""
+            } else {
+                arg_tags.as_str()
+            };
+            let ret_tag = self.token_after_prefix_string()?;
+            if ret_tag.len() != 1 {
+                return Err(S::parse_error(ParseError::InvalidJsExport));
+            }
+            let mode = self.token_after_prefix_string()?;
+            let is_io = match mode.as_str() {
+                "IO" => true,
+                "PURE" => false,
+                _ => return Err(S::parse_error(ParseError::InvalidJsExport)),
+            };
+            let tags = ret_tag + arg_tags;
+            exports.push(JsExportDecl {
+                name,
+                closure,
+                tags,
+                is_io,
+            });
+        }
+    }
+
+    fn skip_space(&mut self) -> Result<(), S::Error> {
+        while matches!(self.peek()?, Some(b' ' | b'\n' | b'\r')) {
+            let _ = self.get()?;
         }
         Ok(())
+    }
+
+    fn consume_bytes(&mut self, bytes: &[u8]) -> Result<bool, S::Error> {
+        let mark = self.source.mark();
+        for expected in bytes {
+            if self.next_optional()? != Some(*expected) {
+                self.source.rewind(mark);
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 }
 

@@ -30,6 +30,7 @@ export async function instantiateMicroHsRuntime(wasm, options = {}) {
     memory: null,
     hostResult: new Uint8Array(),
     hostFs: makeHostFs(options.host),
+    jsExports: {},
   };
   state.intern = (value) => {
     const handle = state.objfree.length ? state.objfree.pop() : state.obj.length;
@@ -58,10 +59,17 @@ export async function instantiateMicroHsRuntime(wasm, options = {}) {
         if (handle === 0) {
           throw new Error("MicroHs program parse failed");
         }
+        state.jsExports = makeJsExports(state, handle);
         return handle;
       } finally {
         state.exports.mhs_rust_dealloc(ptr, bytes.length);
       }
+    },
+    get exports() {
+      return state.jsExports;
+    },
+    exportObject(handle) {
+      return makeJsExports(state, handle);
     },
     reduce(handle, limit = 100000) {
       return state.exports.mhs_rust_program_reduce(handle, limit) === 0;
@@ -487,6 +495,31 @@ function callJs(state, idx, fallback, convert) {
     state.err = String(error);
     return fallback;
   }
+}
+
+function makeJsExports(state, handle) {
+  const exports = {};
+  const count = state.exports.mhs_rust_js_export_count(handle);
+  for (let idx = 0; idx < count; idx += 1) {
+    const namePtr = state.exports.mhs_rust_js_export_name(handle, idx);
+    const nameLen = state.exports.mhs_rust_result_len();
+    if (namePtr === 0) continue;
+    const name = readUtf8(state, namePtr, nameLen);
+    exports[name] = (...args) => {
+      state.wargs.push(args);
+      try {
+        const status = state.exports.mhs_rust_js_export_invoke(handle, idx);
+        if (status !== 0) {
+          const message = state.exports.mhs_rust_result_len() ? `: ${readResultText(state)}` : "";
+          throw new Error(`MicroHs JavaScript export failed${message}`);
+        }
+        return state.wres;
+      } finally {
+        state.wargs.pop();
+      }
+    };
+  }
+  return exports;
 }
 
 function installStringHelpers(state) {
@@ -949,6 +982,12 @@ function readCString(state, ptr) {
 
 function readUtf8(state, ptr, len) {
   return decoder.decode(readBytes(state, ptr, len));
+}
+
+function readResultText(state) {
+  const ptr = state.exports.mhs_rust_result_ptr();
+  const len = state.exports.mhs_rust_result_len();
+  return ptr === 0 ? "" : readUtf8(state, ptr, len);
 }
 
 function readBytes(state, ptr, len) {

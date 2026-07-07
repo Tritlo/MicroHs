@@ -360,12 +360,13 @@ impl Program {
     }
 
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-    fn apply_js_wrapper(
+    fn apply_js_closure(
         &mut self,
         tags: &str,
         stable_ptr: usize,
         args: &[JsValue],
         limit: usize,
+        is_io: bool,
     ) -> Result<JsValue, EvalError> {
         let tags = tags.as_bytes();
         validate_js_tags(tags)?;
@@ -378,13 +379,16 @@ impl Program {
             let arg = self.js_value_node(tag, arg)?;
             root = self.app(root, arg);
         }
-        let perform_io = self.prim("IO.performIO");
-        let root = self.app(perform_io, root);
+        if is_io {
+            let perform_io = self.prim("IO.performIO");
+            root = self.app(perform_io, root);
+        }
         let root = self.reduce_node_whnf(root, limit)?;
         self.js_value_from_node(tags[0], root)
     }
 
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    #[cold]
     pub(crate) fn apply_js_wrapper_index(
         &mut self,
         wrapper_index: u32,
@@ -392,8 +396,57 @@ impl Program {
         args: &[JsValue],
         limit: usize,
     ) -> Result<JsValue, EvalError> {
+        std::hint::cold_path();
         let tags = self.js_wrapper_tags(wrapper_index)?.to_owned();
-        self.apply_js_wrapper(&tags, stable_ptr, args, limit)
+        self.apply_js_closure(&tags, stable_ptr, args, limit, true)
+    }
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    #[cold]
+    pub(crate) fn apply_js_export_index(
+        &mut self,
+        export_index: u32,
+        args: &[JsValue],
+        limit: usize,
+    ) -> Result<JsValue, EvalError> {
+        std::hint::cold_path();
+        let export = self
+            .js_exports
+            .get(usize::try_from(export_index).map_err(|_| EvalError::Overflow)?)
+            .ok_or(EvalError::InvalidArray)?;
+        let stable_ptr = export.stable_ptr;
+        let wrapper_index = export.wrapper_index;
+        let is_io = export.is_io;
+        let tags = self.js_wrapper_tags(wrapper_index)?.to_owned();
+        self.apply_js_closure(&tags, stable_ptr, args, limit, is_io)
+    }
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    #[cold]
+    pub(crate) fn js_export_name(&self, export_index: u32) -> Result<&str, EvalError> {
+        std::hint::cold_path();
+        self.js_exports
+            .get(usize::try_from(export_index).map_err(|_| EvalError::Overflow)?)
+            .map(|export| export.name.as_str())
+            .ok_or(EvalError::InvalidArray)
+    }
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    #[cold]
+    pub(crate) fn js_export_tags(&self, export_index: u32) -> Result<&str, EvalError> {
+        std::hint::cold_path();
+        let export = self
+            .js_exports
+            .get(usize::try_from(export_index).map_err(|_| EvalError::Overflow)?)
+            .ok_or(EvalError::InvalidArray)?;
+        self.js_wrapper_tags(export.wrapper_index)
+    }
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    #[cold]
+    pub(crate) fn js_export_count(&self) -> usize {
+        std::hint::cold_path();
+        self.js_exports.len()
     }
 
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]

@@ -619,6 +619,26 @@ pub struct JsCallNode {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct JsExportDecl {
+    pub(crate) name: String,
+    pub(crate) closure: NodeId,
+    pub(crate) tags: String,
+    pub(crate) is_io: bool,
+}
+
+#[derive(Clone, Debug)]
+#[cfg_attr(
+    not(all(target_arch = "wasm32", not(target_os = "wasi"))),
+    allow(dead_code)
+)]
+pub(in crate::runtime) struct JsExport {
+    pub(in crate::runtime) name: String,
+    pub(in crate::runtime) stable_ptr: usize,
+    pub(in crate::runtime) wrapper_index: u32,
+    pub(in crate::runtime) is_io: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct WeakNode {
     pub(crate) key: Option<NodeId>,
     pub(crate) value: Option<NodeId>,
@@ -1150,6 +1170,7 @@ pub struct Program {
     pub(in crate::runtime) reductions: usize,
     pub(in crate::runtime) js_program_handle: Option<u32>,
     pub(in crate::runtime) js_wrapper_tags: Vec<String>,
+    pub(in crate::runtime) js_exports: Vec<JsExport>,
     pub(in crate::runtime) prim_cache: PrimCache,
     pub(in crate::runtime) compound_cache: CompoundCache,
     pub(in crate::runtime) small_ints: [Option<NodeId>; SMALL_INT_COUNT],
