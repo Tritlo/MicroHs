@@ -164,13 +164,9 @@ impl Program {
                 unreachable!("read-only handle is not writable")
             }
             #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
-            BFileKind::NativeFile { file, .. } => {
-                use std::io::Write as _;
-
-                file.borrow_mut()
-                    .write_all(&[byte as u8])
-                    .map_err(|_| EvalError::InvalidHandle)
-            }
+            BFileKind::NativeFile { file, .. } => file
+                .write_byte(byte as u8)
+                .map_err(|_| EvalError::InvalidHandle),
             #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
             BFileKind::BrowserFile { handle, .. } => {
                 let byte = [byte as u8];

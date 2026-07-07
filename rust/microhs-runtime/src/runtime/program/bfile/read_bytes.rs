@@ -79,12 +79,9 @@ impl Program {
                 if let Some(byte) = ungot.pop() {
                     return Ok(i64::from(byte));
                 }
-                use std::io::Read as _;
-
-                let mut byte = [0];
-                match file.borrow_mut().read(&mut byte) {
-                    Ok(0) => Ok(-1),
-                    Ok(_) => Ok(i64::from(byte[0])),
+                match file.read_byte() {
+                    Ok(None) => Ok(-1),
+                    Ok(Some(byte)) => Ok(i64::from(byte)),
                     Err(_) => Err(EvalError::InvalidHandle),
                 }
             }
