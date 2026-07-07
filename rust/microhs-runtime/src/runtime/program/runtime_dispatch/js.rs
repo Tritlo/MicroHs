@@ -87,6 +87,27 @@ impl Program {
         Ok(index)
     }
 
+    #[cold]
+    pub(crate) fn register_js_exports(
+        &mut self,
+        exports: Vec<JsExportDecl>,
+    ) -> Result<(), EvalError> {
+        std::hint::cold_path();
+        for export in exports {
+            validate_js_tags(export.tags.as_bytes())?;
+            let stable_ptr = usize::try_from(self.new_stable_ptr_handle(export.closure)?)
+                .map_err(|_| EvalError::Overflow)?;
+            let wrapper_index = self.register_js_wrapper_tags(&export.tags)?;
+            self.js_exports.push(JsExport {
+                name: export.name,
+                stable_ptr,
+                wrapper_index,
+                is_io: export.is_io,
+            });
+        }
+        Ok(())
+    }
+
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     pub(in crate::runtime) fn js_value_node(
         &mut self,

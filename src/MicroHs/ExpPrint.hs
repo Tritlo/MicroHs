@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
-module MicroHs.ExpPrint(toStringCMdl, toStringP, encodeString, combVersion, removeUnused, renumberCMdl) where
+module MicroHs.ExpPrint(toStringCMdl, toStringP, toJsExportTrailer, encodeString, combVersion, removeUnused, renumberCMdl) where
 import qualified Prelude(); import MHSPrelude
 import qualified Data.ByteString.Char8 as BS
 import Data.Char(ord, chr)
@@ -94,6 +94,21 @@ toStringCMdl (ds, emain) =
 
   in combVersion ++ show (length ds) ++ "\n" ++ res " }"
 
+toJsExportTrailer :: ForExpTable -> String
+toJsExportTrailer forExps =
+  case filter (\ (_, _, _, js) -> js) forExps of
+    [] -> ""
+    jsExps ->
+      "\n#####\nJS_EXPORTS 1\n" ++ concatMap jsExport jsExps ++ ".\n"
+  where
+    jsExport (i, n, CType ty, _) =
+      let (as, r) = getArrows ty
+          (rt, io) = dropIOFlag r
+          argTags = map jsArgTag as
+      in quoteString (utf8encode (unIdent n)) ++ " " ++ showIdent i ++ " " ++
+         (if null argTags then "-" else argTags) ++ " " ++ [jsRetTag rt] ++ " " ++
+         (if io then "IO" else "PURE") ++ "\n"
+
 checkDupInstances :: [LDef] -> [LDef]
 checkDupInstances ds =
   case dupInstances ds of
@@ -174,6 +189,10 @@ quoteString s =
 dropIO :: EType -> EType
 dropIO (EApp (EVar io) t) | io == identIO = t
 dropIO t = t
+
+dropIOFlag :: EType -> (EType, Bool)
+dropIOFlag (EApp (EVar io) t) | io == identIO = (t, True)
+dropIOFlag t = (t, False)
 
 -- Single-character tags naming JS FFI marshalling types.
 -- I=Int U=Word/Char D=Double F=Float P=Ptr B=Bool J=JSVal

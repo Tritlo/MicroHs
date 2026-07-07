@@ -45,6 +45,7 @@ mod program;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use self::core_types::JsExportDecl;
 pub use self::core_types::{EvalError, JsCallNode, Node, Program};
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 pub(crate) use self::host::JsValue;

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::runtime::{Node, NodeId, Program, is_runtime_prim_name};
+use crate::runtime::{JsExportDecl, Node, NodeId, Program, is_runtime_prim_name};
 
 const COMB_VERSION: &[u8] = b"v8.4\n";
 const PARSE_SMALL_INT_MIN: i64 = -10;
@@ -20,6 +20,7 @@ pub enum ParseError {
     DuplicateLabel(usize),
     DanglingLabel(usize),
     UnknownPrim(String),
+    InvalidJsExport,
 }
 
 impl fmt::Display for ParseError {
@@ -42,6 +43,7 @@ impl fmt::Display for ParseError {
             Self::DuplicateLabel(label) => write!(f, "duplicate shared label {label}"),
             Self::DanglingLabel(label) => write!(f, "dangling shared label {label}"),
             Self::UnknownPrim(name) => write!(f, "unknown primitive {name}"),
+            Self::InvalidJsExport => write!(f, "invalid JavaScript export trailer"),
         }
     }
 }
@@ -100,7 +102,72 @@ impl<'a> Parser<'a> {
                 return Err(ParseError::DanglingLabel(*label));
             }
         }
-        Ok(Program::new(self.nodes, root, self.labels))
+        let js_exports = self.parse_js_export_trailer()?;
+        let mut program = Program::new(self.nodes, root, self.labels);
+        program
+            .register_js_exports(js_exports)
+            .map_err(|_| ParseError::InvalidJsExport)?;
+        Ok(program)
+    }
+
+    #[cold]
+    fn parse_js_export_trailer(&mut self) -> Result<Vec<JsExportDecl>, ParseError> {
+        std::hint::cold_path();
+        let save = self.pos;
+        self.skip_space();
+        if !self.consume_bytes(b"#####") {
+            self.pos = save;
+            return Ok(Vec::new());
+        }
+        self.skip_space();
+        if !self.consume_bytes(b"JS_EXPORTS") {
+            self.pos = save;
+            return Ok(Vec::new());
+        }
+        self.expect(b' ')?;
+        if self.parse_usize()? != 1 {
+            return Err(ParseError::InvalidJsExport);
+        }
+        self.skip_space();
+
+        let mut exports = Vec::new();
+        loop {
+            self.skip_space();
+            if self.gobble(b'.') {
+                return Ok(exports);
+            }
+            self.expect(b'"')?;
+            let name =
+                String::from_utf8(self.parse_string()?).map_err(|_| ParseError::InvalidUtf8)?;
+            self.expect(b' ')?;
+            self.expect(b'_')?;
+            let label = self.parse_usize()?;
+            let closure = *self.labels.get(&label).ok_or(ParseError::InvalidJsExport)?;
+            self.expect(b' ')?;
+            let arg_tags = self.token_after_prefix_string()?;
+            let arg_tags = if arg_tags == "-" {
+                ""
+            } else {
+                arg_tags.as_str()
+            };
+            let ret_tag = self.token_after_prefix_string()?;
+            if ret_tag.len() != 1 {
+                return Err(ParseError::InvalidJsExport);
+            }
+            let mode = self.token_after_prefix_string()?;
+            let is_io = match mode.as_str() {
+                "IO" => true,
+                "PURE" => false,
+                _ => return Err(ParseError::InvalidJsExport),
+            };
+            let tags = ret_tag + arg_tags;
+            exports.push(JsExportDecl {
+                name,
+                closure,
+                tags,
+                is_io,
+            });
+        }
     }
 
     fn parse_expr(&mut self) -> Result<NodeId, ParseError> {
@@ -289,7 +356,7 @@ impl<'a> Parser<'a> {
 
     fn token_slice_from(&mut self, start: usize) -> &'a [u8] {
         while let Some(c) = self.peek() {
-            if matches!(c, b' ' | b'\n') {
+            if matches!(c, b' ' | b'\n' | b'\r') {
                 let end = self.pos;
                 self.pos += 1;
                 return &self.input[start..end];
@@ -404,6 +471,25 @@ impl<'a> Parser<'a> {
     fn gobble(&mut self, expected: u8) -> bool {
         if self.peek() == Some(expected) {
             self.pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn skip_space(&mut self) {
+        while matches!(self.peek(), Some(b' ' | b'\n' | b'\r')) {
+            self.pos += 1;
+        }
+    }
+
+    fn consume_bytes(&mut self, bytes: &[u8]) -> bool {
+        if self
+            .input
+            .get(self.pos..self.pos.saturating_add(bytes.len()))
+            == Some(bytes)
+        {
+            self.pos += bytes.len();
             true
         } else {
             false
