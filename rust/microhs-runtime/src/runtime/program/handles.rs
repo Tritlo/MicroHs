@@ -6,22 +6,23 @@ impl Program {
         &mut self,
         value: NodeId,
     ) -> Result<i64, EvalError> {
-        let slot = self
+        let mut slot = self.stable_ptr_first_free.max(1);
+        while self.stable_ptrs.get(slot).is_some_and(Option::is_some) {
+            slot += 1;
+        }
+        if slot == self.stable_ptrs.len() {
+            self.stable_ptrs.push(Some(value));
+        } else {
+            self.stable_ptrs[slot] = Some(value);
+        }
+        self.stable_ptr_first_free = slot + 1;
+        while self
             .stable_ptrs
-            .iter()
-            .enumerate()
-            .skip(1)
-            .find_map(|(slot, value)| value.is_none().then_some(slot));
-        let slot = match slot {
-            Some(slot) => {
-                self.stable_ptrs[slot] = Some(value);
-                slot
-            }
-            None => {
-                self.stable_ptrs.push(Some(value));
-                self.stable_ptrs.len() - 1
-            }
-        };
+            .get(self.stable_ptr_first_free)
+            .is_some_and(Option::is_some)
+        {
+            self.stable_ptr_first_free += 1;
+        }
         i64::try_from(slot).map_err(|_| EvalError::Overflow)
     }
 
@@ -53,6 +54,9 @@ impl Program {
             return Err(EvalError::InvalidStablePtr);
         }
         *slot = None;
+        if handle != 0 && handle < self.stable_ptr_first_free {
+            self.stable_ptr_first_free = handle;
+        }
         Ok(())
     }
 
@@ -79,7 +83,7 @@ impl Program {
     ) -> Node {
         let finalizer = Some(self.new_foreign_finalizer(ptr));
         Node::ForeignPtr(Box::new(ForeignPtrNode {
-            bytes,
+            bytes: bytes.map(Rc::from),
             offset,
             ptr,
             finalizer,
@@ -117,20 +121,23 @@ impl Program {
         id: NodeId,
         len: usize,
     ) -> Result<NodeId, EvalError> {
-        let foreign_ptr = match self.cold_node(id) {
-            Some(Node::ForeignPtr(foreign_ptr)) => foreign_ptr.clone(),
+        let (ptr, offset, backing) = match self.cold_node(id) {
+            Some(Node::ForeignPtr(foreign_ptr)) => (
+                foreign_ptr.ptr,
+                foreign_ptr.offset,
+                foreign_ptr.bytes.clone(),
+            ),
             _ => return Err(EvalError::ExpectedForeignPtr(id)),
         };
-        let bytes = match self.read_pointer_bytes(foreign_ptr.ptr, len) {
+        let bytes = match self.read_pointer_bytes(ptr, len) {
             Ok(bytes) => bytes,
-            Err(_) if foreign_ptr.bytes.is_some() => {
-                let bytes = foreign_ptr.bytes.as_ref().expect("checked above");
-                let end = foreign_ptr
-                    .offset
+            Err(_) if backing.is_some() => {
+                let bytes = backing.as_ref().expect("checked above");
+                let end = offset
                     .checked_add(len)
                     .filter(|end| *end <= bytes.len())
                     .ok_or(EvalError::InvalidByteString)?;
-                bytes[foreign_ptr.offset..end].to_vec()
+                bytes[offset..end].to_vec()
             }
             Err(err) => return Err(err),
         };
@@ -252,7 +259,7 @@ impl Program {
                 "{id:?}:ForeignPtr(ptr={}, offset={}, bytes={})",
                 ptr.ptr,
                 ptr.offset,
-                ptr.bytes.as_ref().map_or(0, Vec::len)
+                ptr.bytes.as_ref().map_or(0, |bytes| bytes.len())
             ),
             Node::App(fun, arg) => format!("{id:?}:App({fun:?},{arg:?})"),
             Node::Indir(target) => format!("{id:?}:Indir({target:?})"),

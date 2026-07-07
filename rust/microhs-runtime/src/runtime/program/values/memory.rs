@@ -4,13 +4,23 @@ use super::*;
 impl Program {
     pub(in crate::runtime) fn alloc_memory(&mut self, size: usize) -> Result<i64, EvalError> {
         let bytes = vec![0; size];
-        let slot = if let Some(slot) = self.allocations.iter().position(Option::is_none) {
-            self.allocations[slot] = Some(bytes);
-            slot
-        } else {
+        let mut slot = self.allocation_first_free;
+        while self.allocations.get(slot).is_some_and(Option::is_some) {
+            slot += 1;
+        }
+        if slot == self.allocations.len() {
             self.allocations.push(Some(bytes));
-            self.allocations.len() - 1
-        };
+        } else {
+            self.allocations[slot] = Some(bytes);
+        }
+        self.allocation_first_free = slot + 1;
+        while self
+            .allocations
+            .get(self.allocation_first_free)
+            .is_some_and(Option::is_some)
+        {
+            self.allocation_first_free += 1;
+        }
         self.pointer_for_allocation(slot, 0)
     }
 
@@ -107,18 +117,21 @@ impl Program {
         if ptr == 0 {
             return Ok(());
         }
-        let (slot, offset) = self.decode_allocation_pointer(ptr)?;
+        let (slot_index, offset) = self.decode_allocation_pointer(ptr)?;
         if offset != 0 {
             return Err(EvalError::InvalidByteString);
         }
         let slot = self
             .allocations
-            .get_mut(slot)
+            .get_mut(slot_index)
             .ok_or(EvalError::InvalidByteString)?;
         if slot.is_none() {
             return Err(EvalError::InvalidByteString);
         }
         *slot = None;
+        if slot_index < self.allocation_first_free {
+            self.allocation_first_free = slot_index;
+        }
         Ok(())
     }
 }

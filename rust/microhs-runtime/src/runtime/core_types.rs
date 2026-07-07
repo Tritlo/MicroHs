@@ -585,7 +585,7 @@ pub(in crate::runtime) struct SerializationLabels {
 
 #[derive(Clone, Debug)]
 pub struct ForeignPtrNode {
-    pub(crate) bytes: Option<Vec<u8>>,
+    pub(crate) bytes: Option<Rc<[u8]>>,
     pub(crate) offset: usize,
     pub(crate) ptr: i64,
     pub(crate) finalizer: Option<usize>,
@@ -1123,13 +1123,17 @@ pub struct Program {
     pub(in crate::runtime) gc_foreign_finalizer_marked: Vec<bool>,
     pub(in crate::runtime) gc_events: Vec<GcEventStats>,
     pub(in crate::runtime) stable_ptrs: Vec<Option<NodeId>>,
+    pub(in crate::runtime) stable_ptr_first_free: usize,
     pub(in crate::runtime) weak_nodes: Vec<NodeId>,
     pub(in crate::runtime) pending_weak_finalizers: Vec<NodeId>,
     pub(in crate::runtime) foreign_finalizers: Vec<Option<ForeignFinalizerState>>,
     pub(in crate::runtime) foreign_finalizer_free: Vec<usize>,
     pub(in crate::runtime) allocations: Vec<Option<Vec<u8>>>,
+    pub(in crate::runtime) allocation_first_free: usize,
     pub(in crate::runtime) bfiles: Vec<Option<BFile>>,
+    pub(in crate::runtime) bfile_first_free: usize,
     pub(in crate::runtime) dirs: Vec<Option<DirHandle>>,
+    pub(in crate::runtime) dir_first_free: usize,
     pub(in crate::runtime) program_args: Vec<Vec<u8>>,
     pub(in crate::runtime) executable_path: Option<Vec<u8>>,
     pub(in crate::runtime) arg_ref_array: Option<NodeId>,
