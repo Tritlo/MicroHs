@@ -324,21 +324,8 @@ impl Program {
     #[cold]
     #[inline(never)]
     pub(in crate::runtime) fn deserialize_bfile(&mut self, ptr: i64) -> Result<NodeId, EvalError> {
-        let mut input = Vec::new();
-        let mut last_error = None;
-        loop {
-            let byte = self.read_bfile_bytes(ptr, 1)?;
-            if byte.is_empty() {
-                return Err(last_error
-                    .map(Self::deserialize_parse_error)
-                    .unwrap_or(EvalError::InvalidByteString));
-            }
-            input.push(byte[0]);
-            match crate::parse::parse_program(&input) {
-                Ok(parsed) => return self.append_parsed_program(parsed),
-                Err(err) => last_error = Some(err),
-            }
-        }
+        let parsed = self.parse_bfile_program_streaming(ptr)?;
+        self.append_parsed_program(parsed)
     }
 
     pub(in crate::runtime) fn deserialize_parse_error(
