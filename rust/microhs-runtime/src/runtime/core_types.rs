@@ -847,7 +847,11 @@ impl HostIntResult {
 
 #[derive(Debug)]
 pub enum EvalError {
-    StepLimit { limit: usize },
+    StepLimit {
+        limit: usize,
+    },
+    #[cfg(feature = "embedded")]
+    Cancelled,
     DanglingIndirection(NodeId),
     ExpectedInt(NodeId),
     ExpectedInt64(NodeId),
@@ -890,6 +894,8 @@ impl fmt::Display for EvalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::StepLimit { limit } => write!(f, "reduction step limit reached ({limit})"),
+            #[cfg(feature = "embedded")]
+            Self::Cancelled => write!(f, "reduction cancelled by host"),
             Self::DanglingIndirection(id) => write!(f, "dangling shared reference at node {id:?}"),
             Self::ExpectedInt(id) => write!(f, "expected Int at node {id:?}"),
             Self::ExpectedInt64(id) => write!(f, "expected Int64 at node {id:?}"),
