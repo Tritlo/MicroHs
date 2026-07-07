@@ -32,8 +32,19 @@ bench="$repo/target/release/mhs-rust-bench"
 comb="$repo/generated/mhs.comb"
 warm_modules=(Prelude Data.List Data.Maybe Data.Either Data.Tuple Data.Bool Data.Char)
 
-echo "building embedded browser wasm"
-"$here/build-browser-bench.sh"
+echo "building embedded browser wasm (Rust cdylib; no emcc)"
+# The dist ships only the Rust runtime wasm. emcc is used solely for the
+# C-vs-Rust comparison bench (build-browser-bench.sh), never for the dist, so
+# build the Rust wasm directly here rather than going through that script.
+# --allow-undefined lets wasm-ld emit the mhs_host_*/mhs_js_* host bridge as
+# imports (resolved by host.mjs at instantiation) instead of erroring.
+RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=--allow-undefined" cargo build \
+  --release \
+  --manifest-path "$repo/rust/microhs-runtime/Cargo.toml" \
+  --target wasm32-unknown-unknown \
+  --features embedded \
+  --lib \
+  --quiet
 
 echo "building native driver"
 cargo build \

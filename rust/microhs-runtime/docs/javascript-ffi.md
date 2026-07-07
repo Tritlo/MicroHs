@@ -769,9 +769,9 @@ Browser host driver shape:
 
 ```javascript
 import { readFile } from "node:fs/promises";
-import { instantiateMicroHsRuntime } from "/home/tritlo/Code/microhs-rust/rust/microhs-runtime/tools/wasm/browser/host.mjs";
+import { instantiateMicroHsRuntime } from "./rust/microhs-runtime/tools/wasm/browser/host.mjs";
 
-const wasm = "/home/tritlo/Code/microhs-rust/target/wasm32-unknown-unknown/release/microhs_runtime.wasm";
+const wasm = "./target/wasm32-unknown-unknown/release/microhs_runtime.wasm";
 const runtime = await instantiateMicroHsRuntime(wasm, {
   stdout(bytes) { process.stdout.write(Buffer.from(bytes)); },
   stderr(bytes) { process.stderr.write(Buffer.from(bytes)); },
@@ -841,9 +841,9 @@ Driver:
 
 ```javascript
 import { readFile } from "node:fs/promises";
-import { instantiateMicroHsRuntime } from "/home/tritlo/Code/microhs-rust/rust/microhs-runtime/tools/wasm/browser/host.mjs";
+import { instantiateMicroHsRuntime } from "./rust/microhs-runtime/tools/wasm/browser/host.mjs";
 
-const wasm = "/home/tritlo/Code/microhs-rust/target/wasm32-unknown-unknown/release/microhs_runtime.wasm";
+const wasm = "./target/wasm32-unknown-unknown/release/microhs_runtime.wasm";
 const stdout = [];
 const stderr = [];
 const m = await instantiateMicroHsRuntime(wasm, {

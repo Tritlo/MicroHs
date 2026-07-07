@@ -2,12 +2,13 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
-emcc="${EMCC:-/home/tritlo/emsdk/upstream/emscripten/emcc}"
+emcc="${EMCC:-emcc}"
 em_cache="${EM_CACHE:-/tmp/mhs-emcc-cache}"
 out="$repo/rust/microhs-runtime/tools/wasm/browser/browser-bench-c.mjs"
 
-if [[ ! -x "$emcc" ]]; then
-  echo "emcc not found at $emcc; set EMCC=/path/to/emcc" >&2
+if ! command -v "$emcc" >/dev/null 2>&1; then
+  echo "emcc not found ($emcc); install emscripten (activate emsdk) or set EMCC=/path/to/emcc" >&2
+  echo "note: emcc is only needed for the C-vs-Rust comparison bench, not for the browser dist" >&2
   exit 1
 fi
 
