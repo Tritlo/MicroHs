@@ -471,8 +471,12 @@ const out = compiler.compile(source, { module, flags });
 compiler.close();
 ```
 
-`createCompiler({ wasm, comb, files })` warms one runtime instance, preloads
-caller-owned absolute VFS files, and reuses the instance across compiles.
+`createCompiler({ wasm, comb, files, onPoll })` warms one runtime instance,
+preloads caller-owned absolute VFS files, and reuses the instance across
+compiles.  `onPoll` is optional and is forwarded to the runtime's
+`mhs_host_poll` hook (see above): it is called periodically with the reduction
+step count, and returning truthy cooperatively cancels the in-flight compile,
+which then reports `status: "cancelled"`.
 `compile(source, { module, flags })` writes `/work/<Module>.hs`, runs `mhs`,
 and returns:
 
