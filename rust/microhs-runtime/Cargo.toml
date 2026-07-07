@@ -7,6 +7,7 @@ license = "BSD-3-Clause"
 
 [features]
 default = []
+embedded = []
 profile = []
 gc-phase-profile = []
 wide-cell = []

@@ -1,6 +1,9 @@
 //! Public Program API for reduction, profiling, and runtime configuration.
 use super::*;
 
+#[cfg(feature = "embedded")]
+const EMBEDDED_POLL_INTERVAL: usize = 4 * 1024 * 1024;
+
 impl Program {
     pub(in crate::runtime) fn resolve(&self, mut id: NodeId) -> Result<NodeId, EvalError> {
         loop {
@@ -105,6 +108,8 @@ impl Program {
         self.preserve_thread_root_once = false;
         self.root = main_root;
         let start = self.reductions;
+        #[cfg(feature = "embedded")]
+        let mut next_poll = start.saturating_add(EMBEDDED_POLL_INTERVAL);
         // Cooperative round-robin scheduler. Each thread is a graph reduced in slices:
         // on StepLimit the eval stack is discarded but the graph keeps every completed
         // reduction (redexes rewritten to indirections) and the thread root advances to
@@ -112,6 +117,20 @@ impl Program {
         // side effects. With one thread this is exactly the transparent single-thread
         // driver (byte-identical self-host).
         loop {
+            #[cfg(feature = "embedded")]
+            if self.reductions >= next_poll {
+                std::hint::cold_path();
+                if embedded_poll_cancelled(self.reductions) {
+                    return Err(EvalError::Cancelled);
+                }
+                while self.reductions >= next_poll {
+                    let advanced = next_poll.saturating_add(EMBEDDED_POLL_INTERVAL);
+                    if advanced == next_poll {
+                        break;
+                    }
+                    next_poll = advanced;
+                }
+            }
             self.wake_due_delays();
             let Some(tid) = self.run_queue.pop_front() else {
                 self.wait_for_runnable_thread()?;
@@ -144,6 +163,8 @@ impl Program {
             } else {
                 remaining
             };
+            #[cfg(feature = "embedded")]
+            let slice = slice.min(next_poll.saturating_sub(self.reductions).max(1));
             match self.reduce_node_whnf(root, slice) {
                 Ok(final_root) => {
                     self.save_current_thread_state(tid, final_root);
@@ -432,5 +453,30 @@ impl Program {
             .get(usize::try_from(wrapper_index).map_err(|_| EvalError::Overflow)?)
             .map(String::as_str)
             .ok_or(EvalError::InvalidArray)
+    }
+}
+
+#[cfg(feature = "embedded")]
+#[inline(never)]
+fn embedded_poll_cancelled(steps_so_far: usize) -> bool {
+    std::hint::cold_path();
+    host_poll(u64::try_from(steps_so_far).unwrap_or(u64::MAX))
+}
+
+#[cfg(feature = "embedded")]
+std::cfg_select! {
+    all(target_arch = "wasm32", not(target_os = "wasi")) => {
+        fn host_poll(steps_so_far: u64) -> bool {
+            unsafe { mhs_host_poll(steps_so_far) != 0 }
+        }
+
+        unsafe extern "C" {
+            fn mhs_host_poll(steps_so_far: u64) -> i32;
+        }
+    }
+    _ => {
+        fn host_poll(_steps_so_far: u64) -> bool {
+            false
+        }
     }
 }

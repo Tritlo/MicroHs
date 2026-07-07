@@ -1,5 +1,7 @@
 use std::alloc::{Layout, alloc, dealloc};
 use std::cell::RefCell;
+#[cfg(feature = "embedded")]
+use std::mem::size_of;
 
 use crate::runtime::JsValue;
 use crate::{EvalError, Program, parse_program};
@@ -8,7 +10,22 @@ thread_local! {
     static PROGRAMS: RefCell<Vec<Option<Program>>> = const { RefCell::new(Vec::new()) };
     static ACTIVE_PROGRAMS: RefCell<Vec<(u32, *mut Program)>> = const { RefCell::new(Vec::new()) };
     static RESULT_BYTES: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    #[cfg(feature = "embedded")]
+    static LAST_ERROR_BYTES: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    #[cfg(feature = "embedded")]
+    static LAST_MAIN_STATUS: RefCell<i32> = const { RefCell::new(MAIN_STATUS_OK) };
 }
+
+#[cfg(feature = "embedded")]
+const MAIN_STATUS_OK: i32 = 0;
+#[cfg(feature = "embedded")]
+const MAIN_STATUS_RUNTIME_ERROR: i32 = 1;
+#[cfg(feature = "embedded")]
+const MAIN_STATUS_STEP_LIMIT: i32 = 2;
+#[cfg(feature = "embedded")]
+const MAIN_STATUS_EXCEPTION_RAISED: i32 = 3;
+#[cfg(feature = "embedded")]
+const MAIN_STATUS_CANCELLED: i32 = 4;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mhs_rust_alloc(len: usize) -> *mut u8 {
@@ -37,6 +54,8 @@ pub unsafe extern "C" fn mhs_rust_dealloc(ptr: *mut u8, len: usize) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mhs_rust_program_new(ptr: *const u8, len: usize) -> u32 {
     if ptr.is_null() && len != 0 {
+        #[cfg(feature = "embedded")]
+        store_last_error_bytes(b"null program pointer with nonzero length".to_vec());
         return 0;
     }
     let input = if len == 0 {
@@ -44,10 +63,30 @@ pub unsafe extern "C" fn mhs_rust_program_new(ptr: *const u8, len: usize) -> u32
     } else {
         unsafe { std::slice::from_raw_parts(ptr, len) }
     };
-    let Ok(program) = parse_program(input) else {
-        return 0;
-    };
-    insert_program(program).unwrap_or(0)
+    std::cfg_select! {
+        feature = "embedded" => {
+            let program = match parse_program(input) {
+                Ok(program) => program,
+                Err(err) => {
+                    store_last_error_bytes(err.to_string().into_bytes());
+                    return 0;
+                }
+            };
+            let handle = insert_program(program).unwrap_or(0);
+            if handle == 0 {
+                store_last_error_bytes(b"program handle allocation failed".to_vec());
+            } else {
+                clear_last_error_bytes();
+            }
+            handle
+        }
+        _ => {
+            let Ok(program) = parse_program(input) else {
+                return 0;
+            };
+            insert_program(program).unwrap_or(0)
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -160,6 +199,8 @@ pub extern "C" fn mhs_rust_program_reduce_main(handle: u32, limit: usize) -> i32
     enum MainOutcome {
         Success,
         StepLimit,
+        #[cfg(feature = "embedded")]
+        Cancelled,
         Raised(Vec<u8>),
         Error(Vec<u8>),
     }
@@ -173,23 +214,69 @@ pub extern "C" fn mhs_rust_program_reduce_main(handle: u32, limit: usize) -> i32
             Ok(MainOutcome::Raised(message))
         }
         Err(EvalError::StepLimit { .. }) => Ok(MainOutcome::StepLimit),
+        #[cfg(feature = "embedded")]
+        Err(EvalError::Cancelled) => Ok(MainOutcome::Cancelled),
         Err(err) => Ok(MainOutcome::Error(err.to_string().into_bytes())),
     });
 
     match outcome {
-        Ok(MainOutcome::Success) => 0,
-        Ok(MainOutcome::StepLimit) => 2,
-        Ok(MainOutcome::Raised(message)) if message == b"ExitSuccess" => 0,
+        Ok(MainOutcome::Success) => {
+            #[cfg(feature = "embedded")]
+            set_last_main_status(MAIN_STATUS_OK);
+            0
+        }
+        Ok(MainOutcome::StepLimit) => {
+            #[cfg(feature = "embedded")]
+            set_last_main_status(MAIN_STATUS_STEP_LIMIT);
+            2
+        }
+        #[cfg(feature = "embedded")]
+        Ok(MainOutcome::Cancelled) => {
+            set_last_main_status(MAIN_STATUS_CANCELLED);
+            store_result_bytes(b"cancelled by host poll".to_vec());
+            4
+        }
+        Ok(MainOutcome::Raised(message)) if message == b"ExitSuccess" => {
+            #[cfg(feature = "embedded")]
+            set_last_main_status(MAIN_STATUS_OK);
+            0
+        }
         Ok(MainOutcome::Raised(message)) => {
+            #[cfg(feature = "embedded")]
+            set_last_main_status(MAIN_STATUS_EXCEPTION_RAISED);
             store_result_bytes(message);
             3
         }
         Ok(MainOutcome::Error(message)) => {
+            #[cfg(feature = "embedded")]
+            set_last_main_status(MAIN_STATUS_RUNTIME_ERROR);
             store_result_bytes(message);
             1
         }
-        Err(()) => 1,
+        Err(()) => {
+            #[cfg(feature = "embedded")]
+            set_last_main_status(MAIN_STATUS_RUNTIME_ERROR);
+            1
+        }
     }
+}
+
+#[cfg(feature = "embedded")]
+#[unsafe(no_mangle)]
+pub extern "C" fn mhs_rust_program_reduce_main_status() -> i32 {
+    LAST_MAIN_STATUS
+        .try_with(|status| status.try_borrow().map(|status| *status).unwrap_or(1))
+        .unwrap_or(1)
+}
+
+#[cfg(feature = "embedded")]
+#[unsafe(no_mangle)]
+pub extern "C" fn mhs_rust_program_stats(handle: u32) -> *const u8 {
+    let Ok(bytes) = with_program_mut(handle, |program| Ok(program_stats_bytes(program))) else {
+        clear_result_bytes();
+        return std::ptr::null();
+    };
+    store_result_bytes(bytes)
 }
 
 #[unsafe(no_mangle)]
@@ -292,6 +379,27 @@ pub extern "C" fn mhs_rust_result_ptr() -> *const u8 {
         .unwrap_or(std::ptr::null())
 }
 
+#[cfg(feature = "embedded")]
+#[unsafe(no_mangle)]
+pub extern "C" fn mhs_rust_last_error_len() -> usize {
+    LAST_ERROR_BYTES
+        .try_with(|result| result.try_borrow().map(|result| result.len()).unwrap_or(0))
+        .unwrap_or(0)
+}
+
+#[cfg(feature = "embedded")]
+#[unsafe(no_mangle)]
+pub extern "C" fn mhs_rust_last_error_ptr() -> *const u8 {
+    LAST_ERROR_BYTES
+        .try_with(|result| {
+            result
+                .try_borrow()
+                .map(|result| result.as_ptr())
+                .unwrap_or(std::ptr::null())
+        })
+        .unwrap_or(std::ptr::null())
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn mhs_rust_wrapper_invoke(
     program_handle: u32,
@@ -352,6 +460,52 @@ fn clear_result_bytes() {
             result.clear();
         }
     });
+}
+
+#[cfg(feature = "embedded")]
+fn store_last_error_bytes(bytes: Vec<u8>) {
+    let _ = LAST_ERROR_BYTES.try_with(|result| {
+        if let Ok(mut result) = result.try_borrow_mut() {
+            *result = bytes;
+        }
+    });
+}
+
+#[cfg(feature = "embedded")]
+fn clear_last_error_bytes() {
+    let _ = LAST_ERROR_BYTES.try_with(|result| {
+        if let Ok(mut result) = result.try_borrow_mut() {
+            result.clear();
+        }
+    });
+}
+
+#[cfg(feature = "embedded")]
+fn set_last_main_status(status: i32) {
+    let _ = LAST_MAIN_STATUS.try_with(|last_status| {
+        if let Ok(mut last_status) = last_status.try_borrow_mut() {
+            *last_status = status;
+        }
+    });
+}
+
+#[cfg(feature = "embedded")]
+fn program_stats_bytes(program: &Program) -> Vec<u8> {
+    let gc = program.gc_stats();
+    let live_nodes = gc.current_nodes.saturating_sub(gc.current_free_nodes);
+    let mut bytes = Vec::with_capacity(6 * size_of::<u64>());
+    push_u64(&mut bytes, program.reduction_count());
+    push_u64(&mut bytes, live_nodes);
+    push_u64(&mut bytes, gc.current_nodes);
+    push_u64(&mut bytes, gc.collections);
+    push_u64(&mut bytes, gc.last_live_nodes);
+    push_u64(&mut bytes, gc.high_water_nodes);
+    bytes
+}
+
+#[cfg(feature = "embedded")]
+fn push_u64(bytes: &mut Vec<u8>, value: usize) {
+    bytes.extend_from_slice(&u64::try_from(value).unwrap_or(u64::MAX).to_le_bytes());
 }
 
 fn with_program_mut<R>(

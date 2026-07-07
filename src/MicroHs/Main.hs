@@ -99,6 +99,7 @@ longUsage = usage ++ "\nOptions:\n" ++ details
       \-Dxxx              Pass -Dxxx to cpphs\n\
       \-ddump-PASS        Debug, print AST after PASS\n\
       \                   Possible passes: preproc, parse, derive, typecheck, desugar, toplevel, combinator, linked, all\n\
+      \-ddump-combinator-out=FILE Write combinator dump to FILE\n\
       \-ECMD              Set editor for :edit command\n\
       \-eEXPR             Evaluate EXPR\n\
       \-embed-ffis PKG*   Embed packages FFI stubs in mhs binary\n\
@@ -191,7 +192,9 @@ decodeArgs f mdls (arg:args) =
     '-':'p':s   -> decodeArgs f{preload = preload f ++ [s]} mdls args
     '-':'E':s   -> decodeArgs f{editor = Just s} mdls args
     '-':'e':s   -> decodeArgs f{evalArg = Just s} mdls args
-    _ | Just r  <- stripPrefix "-ddump-" arg, Just d <- lookup r dumpFlagTable ->
+    _ | Just s  <- stripPrefix "-ddump-combinator-out=" arg ->
+                   decodeArgs f{dumpCombinatorOut = Just s} mdls args
+      | Just r  <- stripPrefix "-ddump-" arg, Just d <- lookup r dumpFlagTable ->
                    decodeArgs f{dumpFlags = d : dumpFlags f} mdls args
 
     '-':_       -> mhsError $ "Unknown flag: " ++ arg ++ "\n" ++ usage
