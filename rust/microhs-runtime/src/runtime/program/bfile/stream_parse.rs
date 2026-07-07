@@ -265,7 +265,7 @@ impl<'a> BFileParser<'a> {
                 return String::from_utf8(token)
                     .map_err(|_| Self::parse_error(ParseError::InvalidUtf8));
             };
-            if matches!(c, b' ' | b'\n') {
+            if matches!(c, b' ' | b'\n' | b'\r') {
                 let _ = self.get()?;
                 return String::from_utf8(token)
                     .map_err(|_| Self::parse_error(ParseError::InvalidUtf8));

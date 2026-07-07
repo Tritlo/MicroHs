@@ -161,6 +161,8 @@ fn stream_parse_matches_slice_parser_cases() {
         b"v8.4\n0\n%\"12345678901234567890\" }\n",
         b"v8.4\n0\n^ffi_name ~tag1,tag2 \"body\" `wrap ;callback !\"tick\" [5] }\n",
         b"v8.4\n0\nI \r\n}\n",
+        b"v8.4\n0\nquot\r#8 #2 @ @ }\n",
+        b"v8.4\n0\n~tag\r\"body\" `wrap\r[2] }\n",
     ];
     for case in cases {
         assert_stream_matches_slice(case);
@@ -170,14 +172,17 @@ fn stream_parse_matches_slice_parser_cases() {
 
 #[test]
 fn stream_parse_leaves_js_exports_trailer_readable() {
-    let input = b"v8.4\n0\n#42 }##### JS_EXPORTS\nrest";
-    let (streamed, tail) = stream_parse_with_tail(input, b"##### JS_EXPORTS\nrest".len()).unwrap();
-    let sliced = parse_program(input).unwrap();
+    let graph = b"v8.4\n0\n#42 }";
+    let trailer = b"##### JS_EXPORTS\nrest";
+    let mut input = graph.to_vec();
+    input.extend_from_slice(trailer);
+    let (streamed, tail) = stream_parse_with_tail(&input, trailer.len()).unwrap();
+    let sliced = parse_program(graph).unwrap();
     assert_eq!(
         streamed.serialize_program(streamed.root()).unwrap(),
         sliced.serialize_program(sliced.root()).unwrap()
     );
-    assert_eq!(tail, b"##### JS_EXPORTS\nrest");
+    assert_eq!(tail, trailer);
 }
 
 #[test]
