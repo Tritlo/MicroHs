@@ -24,8 +24,10 @@ impl Program {
                 b'P' => JsArg::Pointer(self.eval_pointer_value(args[idx])?),
                 b'J' => JsArg::Object(self.eval_js_object_handle(args[idx])?),
                 b'S' => JsArg::String(self.eval_bytes(args[idx])?),
-                b'U' => JsArg::UInt(self.eval_int(args[idx])? as u32),
-                b'I' => JsArg::Int(self.eval_int(args[idx])? as i32),
+                b'U' => JsArg::UInt(
+                    u32::try_from(self.eval_int(args[idx])?).map_err(|_| EvalError::Overflow)?,
+                ),
+                b'I' => JsArg::Int(int_to_i32(self.eval_int(args[idx])?)?),
                 _ => return Err(EvalError::InvalidByteString),
             };
             js_args.push(arg);
