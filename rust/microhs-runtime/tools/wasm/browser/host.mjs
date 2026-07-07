@@ -105,6 +105,12 @@ export async function instantiateMicroHsRuntime(wasm, options = {}) {
     reduceMain(handle, limit = Number.MAX_SAFE_INTEGER) {
       return state.exports.mhs_rust_program_reduce_main(handle, limit);
     },
+    reduceMainStatus() {
+      if (typeof state.exports.mhs_rust_program_reduce_main_status !== "function") {
+        return -1;
+      }
+      return state.exports.mhs_rust_program_reduce_main_status();
+    },
     render(handle) {
       const ptr = state.exports.mhs_rust_program_render(handle);
       const len = state.exports.mhs_rust_result_len();
@@ -131,6 +137,38 @@ export async function instantiateMicroHsRuntime(wasm, options = {}) {
     },
     resultText() {
       return decoder.decode(this.resultBytes());
+    },
+    lastError() {
+      if (
+        typeof state.exports.mhs_rust_last_error_ptr !== "function" ||
+        typeof state.exports.mhs_rust_last_error_len !== "function"
+      ) {
+        return "";
+      }
+      const len = state.exports.mhs_rust_last_error_len();
+      if (len === 0) {
+        return "";
+      }
+      return readUtf8(state, state.exports.mhs_rust_last_error_ptr(), len);
+    },
+    stats(handle) {
+      if (typeof state.exports.mhs_rust_program_stats !== "function") {
+        return null;
+      }
+      const ptr = state.exports.mhs_rust_program_stats(handle);
+      const len = state.exports.mhs_rust_result_len();
+      if (ptr === 0) {
+        return null;
+      }
+      const view = new DataView(readBytes(state, ptr, len).buffer);
+      return {
+        reductions: view.getBigUint64(0, true),
+        liveNodes: view.getBigUint64(8, true),
+        currentNodes: view.getBigUint64(16, true),
+        gcCollections: view.getBigUint64(24, true),
+        lastLiveNodes: view.getBigUint64(32, true),
+        highWaterNodes: view.getBigUint64(40, true),
+      };
     },
     hostWriteFile(path, bytes) {
       state.hostFs.writeFile(path, bytes);
@@ -207,6 +245,13 @@ function isNodeFileSource(wasm) {
 
 function makeImports(state, options) {
   return {
+    mhs_host_poll(stepsSoFar) {
+      try {
+        return typeof options.onPoll === "function" && options.onPoll(stepsSoFar) ? 1 : 0;
+      } catch {
+        return 0;
+      }
+    },
     mhs_host_result_copy(dst, len) {
       const bytes = state.hostResult.subarray(0, len);
       new Uint8Array(state.memory.buffer, dst, bytes.length).set(bytes);
