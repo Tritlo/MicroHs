@@ -65,29 +65,29 @@ pub unsafe extern "C" fn mhs_rust_program_new(ptr: *const u8, len: usize) -> u32
     } else {
         unsafe { std::slice::from_raw_parts(ptr, len) }
     };
-    #[cfg(not(feature = "embedded"))]
-    {
-        let Ok(program) = parse_program(input) else {
-            return 0;
-        };
-        insert_program(program).unwrap_or(0)
-    }
-    #[cfg(feature = "embedded")]
-    {
-        let program = match parse_program(input) {
-            Ok(program) => program,
-            Err(err) => {
-                store_last_error_bytes(err.to_string().into_bytes());
-                return 0;
+    std::cfg_select! {
+        feature = "embedded" => {
+            let program = match parse_program(input) {
+                Ok(program) => program,
+                Err(err) => {
+                    store_last_error_bytes(err.to_string().into_bytes());
+                    return 0;
+                }
+            };
+            let handle = insert_program(program).unwrap_or(0);
+            if handle == 0 {
+                store_last_error_bytes(b"program handle allocation failed".to_vec());
+            } else {
+                clear_last_error_bytes();
             }
-        };
-        let handle = insert_program(program).unwrap_or(0);
-        if handle == 0 {
-            store_last_error_bytes(b"program handle allocation failed".to_vec());
-        } else {
-            clear_last_error_bytes();
+            handle
         }
-        handle
+        _ => {
+            let Ok(program) = parse_program(input) else {
+                return 0;
+            };
+            insert_program(program).unwrap_or(0)
+        }
     }
 }
 
