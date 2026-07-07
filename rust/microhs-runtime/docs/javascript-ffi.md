@@ -799,13 +799,12 @@ Host:
 
 ## Limitations And Follow-Ups
 
-- There is no real public `Mhs.JavaScript` library module yet.  Smoke tests use
-  a temporary `JSVal` shim:
-
-  ```haskell
-  data JSValRep
-  newtype JSVal = JSVal (ForeignPtr JSValRep)
-  ```
+- `JSVal` is shipped as the public library type `lib/Mhs/JavaScript.hs`
+  (`import Mhs.JavaScript(JSVal)`): a `newtype JSVal = JSVal (ForeignPtr JSValRep)`
+  whose `JSValRep` phantom is the name `jsScalarTag` in ExpPrint keys the `J` tag
+  on.  Pure Haskell, no C dependency.  (Earlier smoke tests predating the module
+  used a local shim of the same shape.)  The module currently exports only the
+  opaque type; higher-level JS helper functions are not provided yet.
 
 - There is no async JS FFI in this Rust path.  Existing `wasm-js-ffi-async`
   work is for the C/emscripten side and should not be assumed to apply here.
