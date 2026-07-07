@@ -171,6 +171,7 @@ impl Program {
                     if tid == 0 {
                         // main finished: the program is done; other threads are dropped.
                         self.root = final_root;
+                        self.flush_open_bfiles()?;
                         return Ok((final_root, self.reductions - start));
                     }
                     self.finish_thread(tid, final_root);
@@ -193,6 +194,7 @@ impl Program {
                 Err(err) => {
                     self.save_current_thread_state(tid, root);
                     if tid == 0 {
+                        let _ = self.flush_open_bfiles();
                         return Err(err);
                     }
                     if let EvalError::Raised(exn) = err {

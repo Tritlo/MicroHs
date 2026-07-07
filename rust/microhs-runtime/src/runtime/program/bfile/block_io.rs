@@ -128,8 +128,6 @@ impl Program {
             BFileKind::ReadOnlyMemoryView { .. } => unreachable!("handled above"),
             #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
             BFileKind::NativeFile { file, ungot } => {
-                use std::io::Read as _;
-
                 let mut bytes = vec![0; len];
                 let mut read = 0;
                 while read < len {
@@ -141,7 +139,6 @@ impl Program {
                 }
                 if read < len {
                     read += file
-                        .borrow_mut()
                         .read(&mut bytes[read..])
                         .map_err(|_| EvalError::InvalidHandle)?;
                 }
@@ -278,10 +275,7 @@ impl Program {
             }
             #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
             BFileKind::NativeFile { file, .. } => {
-                use std::io::Write as _;
-
-                file.borrow_mut()
-                    .write_all(bytes)
+                file.write_all(bytes)
                     .map_err(|_| EvalError::InvalidHandle)?;
             }
             #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]

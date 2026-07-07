@@ -384,6 +384,33 @@ impl MpzValue {
     }
 
     pub(in crate::runtime) fn bit_len(&self) -> usize {
+        if self.digits.is_empty() {
+            return 0;
+        }
+        const EXACT_LIMBS: usize = 4;
+        let base = u128::from(MPZ_BASE);
+        if self.digits.len() <= EXACT_LIMBS {
+            let mut value = 0_u128;
+            for digit in self.digits.iter().rev() {
+                value = value * base + u128::from(*digit);
+            }
+            return u128::BITS as usize - value.leading_zeros() as usize;
+        }
+
+        let lower_limbs = self.digits.len() - EXACT_LIMBS;
+        let mut prefix = 0_u128;
+        for digit in self.digits[lower_limbs..].iter().rev() {
+            prefix = prefix * base + u128::from(*digit);
+        }
+        let scale = lower_limbs as f64 * f64::from(MPZ_BASE).log2();
+        let lower_log = (prefix as f64).log2() + scale;
+        let upper_log = ((prefix + 1) as f64).log2() + scale;
+        let lower_floor = lower_log.floor();
+        let upper_floor = (upper_log - 1.0e-12).floor();
+        if lower_floor == upper_floor {
+            return lower_floor as usize + 1;
+        }
+
         self.to_bits_abs().len()
     }
 
@@ -457,10 +484,10 @@ impl MpzValue {
 
     pub(in crate::runtime) fn to_u64_low(&self) -> u64 {
         let mut out = 0_u64;
-        for (idx, bit) in self.to_bits_abs().into_iter().take(64).enumerate() {
-            if bit {
-                out |= 1_u64 << idx;
-            }
+        let mut place = 1_u64;
+        for digit in &self.digits {
+            out = out.wrapping_add(u64::from(*digit).wrapping_mul(place));
+            place = place.wrapping_mul(u64::from(MPZ_BASE));
         }
         out
     }

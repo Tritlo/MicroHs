@@ -1,4 +1,6 @@
 //! Runtime parity and regression tests.
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
+use crate::runtime::native_fopen_bfile;
 use crate::runtime::{
     BFile, BFileKind, EvalSpine, FORCE_REDUCTION_LIMIT, IGNORED_IO_SHORTCUT_RECURSION_LIMIT,
     MpzValue, bwt_decode, bwt_encode, cell_size_bytes, lz77_compress, lz77_decompress,

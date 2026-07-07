@@ -73,16 +73,16 @@ impl Program {
         if let Some(inner) = close_inner {
             self.close_bfile(inner)?;
         }
-        let slot = self.bfiles.get_mut(slot).ok_or(EvalError::InvalidHandle)?;
+        let slot_index = slot;
+        let slot = self
+            .bfiles
+            .get_mut(slot_index)
+            .ok_or(EvalError::InvalidHandle)?;
         let _bfile = slot.as_ref().ok_or(EvalError::InvalidHandle)?;
         #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
         if let BFileKind::NativeFile { file, .. } = &_bfile.kind {
-            use std::io::Write as _;
-
             if _bfile.writable {
-                file.borrow_mut()
-                    .flush()
-                    .map_err(|_| EvalError::InvalidHandle)?;
+                file.flush().map_err(|_| EvalError::InvalidHandle)?;
             }
         }
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
@@ -99,6 +99,9 @@ impl Program {
             }
         }
         *slot = None;
+        if slot_index < self.bfile_first_free {
+            self.bfile_first_free = slot_index;
+        }
         Ok(())
     }
 
@@ -124,12 +127,18 @@ impl Program {
     }
 
     pub(in crate::runtime) fn close_dir(&mut self, ptr: i64) -> Result<(), EvalError> {
-        let slot = self.decode_dir_pointer(ptr)?;
-        let slot = self.dirs.get_mut(slot).ok_or(EvalError::InvalidHandle)?;
+        let slot_index = self.decode_dir_pointer(ptr)?;
+        let slot = self
+            .dirs
+            .get_mut(slot_index)
+            .ok_or(EvalError::InvalidHandle)?;
         if slot.is_none() {
             return Err(EvalError::InvalidHandle);
         }
         *slot = None;
+        if slot_index < self.dir_first_free {
+            self.dir_first_free = slot_index;
+        }
         Ok(())
     }
 
@@ -278,12 +287,8 @@ impl Program {
         let _bfile = self.bfile(ptr)?;
         #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
         if let BFileKind::NativeFile { file, .. } = &_bfile.kind {
-            use std::io::Write as _;
-
             if _bfile.writable {
-                file.borrow_mut()
-                    .flush()
-                    .map_err(|_| EvalError::InvalidHandle)?;
+                file.flush().map_err(|_| EvalError::InvalidHandle)?;
             }
         }
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
@@ -296,5 +301,27 @@ impl Program {
             }
         }
         Ok(())
+    }
+
+    pub(in crate::runtime) fn flush_open_bfiles(&mut self) -> Result<(), EvalError> {
+        let ptrs = self
+            .bfiles
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, bfile)| bfile.as_ref().filter(|bfile| bfile.writable).map(|_| slot))
+            .map(|slot| self.pointer_for_bfile(slot))
+            .collect::<Result<Vec<_>, _>>()?;
+        for ptr in ptrs {
+            if self.bfile(ptr).is_ok() {
+                self.flush_bfile(ptr)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Program {
+    fn drop(&mut self) {
+        let _ = self.flush_open_bfiles();
     }
 }

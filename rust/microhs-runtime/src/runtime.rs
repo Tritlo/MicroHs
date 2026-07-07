@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::mem::{MaybeUninit, size_of};
+use std::rc::Rc;
 #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 use std::time::Instant;
 

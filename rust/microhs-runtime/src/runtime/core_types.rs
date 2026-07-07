@@ -585,7 +585,7 @@ pub(in crate::runtime) struct SerializationLabels {
 
 #[derive(Clone, Debug)]
 pub struct ForeignPtrNode {
-    pub(crate) bytes: Option<Vec<u8>>,
+    pub(crate) bytes: Option<Rc<[u8]>>,
     pub(crate) offset: usize,
     pub(crate) ptr: i64,
     pub(crate) finalizer: Option<usize>,
@@ -827,7 +827,127 @@ pub(in crate::runtime) enum BFileKind {
 }
 
 #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
-pub(in crate::runtime) type NativeFileHandle = std::rc::Rc<std::cell::RefCell<std::fs::File>>;
+pub(in crate::runtime) const NATIVE_FILE_WRITE_BUFFER_CAPACITY: usize = 4096;
+
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
+#[derive(Clone, Debug)]
+pub(in crate::runtime) struct NativeFileHandle {
+    inner: std::rc::Rc<std::cell::RefCell<NativeFileState>>,
+}
+
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
+#[derive(Debug)]
+pub(in crate::runtime) struct NativeFileState {
+    file: std::fs::File,
+    write_buffer: Option<Vec<u8>>,
+}
+
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
+impl NativeFileHandle {
+    pub(in crate::runtime) fn raw(file: std::fs::File) -> Self {
+        Self {
+            inner: std::rc::Rc::new(std::cell::RefCell::new(NativeFileState {
+                file,
+                write_buffer: None,
+            })),
+        }
+    }
+
+    pub(in crate::runtime) fn buffered_write(file: std::fs::File) -> Self {
+        Self {
+            inner: std::rc::Rc::new(std::cell::RefCell::new(NativeFileState {
+                file,
+                write_buffer: Some(Vec::with_capacity(NATIVE_FILE_WRITE_BUFFER_CAPACITY)),
+            })),
+        }
+    }
+
+    pub(in crate::runtime) fn read_byte(&self) -> std::io::Result<Option<u8>> {
+        use std::io::Read as _;
+
+        let mut state = self.inner.borrow_mut();
+        let mut byte = [0];
+        match state.file.read(&mut byte)? {
+            0 => Ok(None),
+            _ => Ok(Some(byte[0])),
+        }
+    }
+
+    pub(in crate::runtime) fn read(&self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        use std::io::Read as _;
+
+        self.inner.borrow_mut().file.read(bytes)
+    }
+
+    pub(in crate::runtime) fn write_byte(&self, byte: u8) -> std::io::Result<()> {
+        use std::io::Write as _;
+
+        let mut state = self.inner.borrow_mut();
+        if state.write_buffer.is_some() {
+            if state.write_buffer.as_ref().unwrap().len() == NATIVE_FILE_WRITE_BUFFER_CAPACITY {
+                state.flush_write_buffer()?;
+            }
+            state.write_buffer.as_mut().unwrap().push(byte);
+            Ok(())
+        } else {
+            state.file.write_all(&[byte])
+        }
+    }
+
+    pub(in crate::runtime) fn write_all(&self, bytes: &[u8]) -> std::io::Result<()> {
+        use std::io::Write as _;
+
+        let mut state = self.inner.borrow_mut();
+        let Some(buffer) = state.write_buffer.as_ref() else {
+            return state.file.write_all(bytes);
+        };
+        if bytes.len() >= NATIVE_FILE_WRITE_BUFFER_CAPACITY {
+            state.flush_write_buffer()?;
+            return state.file.write_all(bytes);
+        }
+        if buffer.len() + bytes.len() > NATIVE_FILE_WRITE_BUFFER_CAPACITY {
+            state.flush_write_buffer()?;
+        }
+        state
+            .write_buffer
+            .as_mut()
+            .unwrap()
+            .extend_from_slice(bytes);
+        Ok(())
+    }
+
+    pub(in crate::runtime) fn flush(&self) -> std::io::Result<()> {
+        use std::io::Write as _;
+
+        let mut state = self.inner.borrow_mut();
+        state.flush_write_buffer()?;
+        state.file.flush()
+    }
+}
+
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
+impl NativeFileState {
+    fn flush_write_buffer(&mut self) -> std::io::Result<()> {
+        use std::io::Write as _;
+
+        if let Some(buffer) = &mut self.write_buffer {
+            if !buffer.is_empty() {
+                self.file.write_all(buffer)?;
+                buffer.clear();
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
+impl Drop for NativeFileState {
+    fn drop(&mut self) {
+        let _ = self.flush_write_buffer();
+        use std::io::Write as _;
+        let _ = self.file.flush();
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(in crate::runtime) struct DirHandle {
@@ -1027,13 +1147,17 @@ pub struct Program {
     pub(in crate::runtime) gc_foreign_finalizer_marked: Vec<bool>,
     pub(in crate::runtime) gc_events: Vec<GcEventStats>,
     pub(in crate::runtime) stable_ptrs: Vec<Option<NodeId>>,
+    pub(in crate::runtime) stable_ptr_first_free: usize,
     pub(in crate::runtime) weak_nodes: Vec<NodeId>,
     pub(in crate::runtime) pending_weak_finalizers: Vec<NodeId>,
     pub(in crate::runtime) foreign_finalizers: Vec<Option<ForeignFinalizerState>>,
     pub(in crate::runtime) foreign_finalizer_free: Vec<usize>,
     pub(in crate::runtime) allocations: Vec<Option<Vec<u8>>>,
+    pub(in crate::runtime) allocation_first_free: usize,
     pub(in crate::runtime) bfiles: Vec<Option<BFile>>,
+    pub(in crate::runtime) bfile_first_free: usize,
     pub(in crate::runtime) dirs: Vec<Option<DirHandle>>,
+    pub(in crate::runtime) dir_first_free: usize,
     pub(in crate::runtime) program_args: Vec<Vec<u8>>,
     pub(in crate::runtime) executable_path: Option<Vec<u8>>,
     pub(in crate::runtime) arg_ref_array: Option<NodeId>,

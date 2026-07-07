@@ -16,6 +16,75 @@ fn reduces_stable_pointer_primitives() {
 }
 
 #[test]
+fn handle_tables_reuse_lowest_free_slot() {
+    let mut program = parse_program(b"v8.4\n0\nI }\n").unwrap();
+    let value = program.root();
+
+    let stable_1 = program.new_stable_ptr_handle(value).unwrap();
+    let stable_2 = program.new_stable_ptr_handle(value).unwrap();
+    let stable_3 = program.new_stable_ptr_handle(value).unwrap();
+    assert_eq!((stable_1, stable_2, stable_3), (1, 2, 3));
+    program.free_stable_ptr(stable_2 as usize).unwrap();
+    assert_eq!(program.new_stable_ptr_handle(value).unwrap(), 2);
+    program.free_stable_ptr(stable_1 as usize).unwrap();
+    assert_eq!(program.new_stable_ptr_handle(value).unwrap(), 1);
+    assert_eq!(program.new_stable_ptr_handle(value).unwrap(), 4);
+
+    let mem_0 = program.alloc_memory(1).unwrap();
+    let mem_1 = program.alloc_memory(1).unwrap();
+    let mem_2 = program.alloc_memory(1).unwrap();
+    assert_eq!(program.decode_allocation_pointer(mem_0).unwrap().0, 0);
+    assert_eq!(program.decode_allocation_pointer(mem_1).unwrap().0, 1);
+    assert_eq!(program.decode_allocation_pointer(mem_2).unwrap().0, 2);
+    program.free_memory(mem_1).unwrap();
+    let mem_reused = program.alloc_memory(1).unwrap();
+    assert_eq!(program.decode_allocation_pointer(mem_reused).unwrap().0, 1);
+    program.free_memory(mem_0).unwrap();
+    let mem_reused = program.alloc_memory(1).unwrap();
+    assert_eq!(program.decode_allocation_pointer(mem_reused).unwrap().0, 0);
+    let mem_new = program.alloc_memory(1).unwrap();
+    assert_eq!(program.decode_allocation_pointer(mem_new).unwrap().0, 3);
+
+    let bfile = || BFile {
+        kind: BFileKind::Memory {
+            bytes: Vec::new(),
+            pos: 0,
+        },
+        readable: true,
+        writable: false,
+    };
+    let bfile_0 = program.alloc_bfile(bfile()).unwrap();
+    let bfile_1 = program.alloc_bfile(bfile()).unwrap();
+    let bfile_2 = program.alloc_bfile(bfile()).unwrap();
+    assert_eq!(program.decode_bfile_pointer(bfile_0).unwrap(), 0);
+    assert_eq!(program.decode_bfile_pointer(bfile_1).unwrap(), 1);
+    assert_eq!(program.decode_bfile_pointer(bfile_2).unwrap(), 2);
+    program.close_bfile(bfile_1).unwrap();
+    let bfile_reused = program.alloc_bfile(bfile()).unwrap();
+    assert_eq!(program.decode_bfile_pointer(bfile_reused).unwrap(), 1);
+    program.close_bfile(bfile_0).unwrap();
+    let bfile_reused = program.alloc_bfile(bfile()).unwrap();
+    assert_eq!(program.decode_bfile_pointer(bfile_reused).unwrap(), 0);
+    let bfile_new = program.alloc_bfile(bfile()).unwrap();
+    assert_eq!(program.decode_bfile_pointer(bfile_new).unwrap(), 3);
+
+    let dir_0 = program.alloc_dir(Vec::new()).unwrap();
+    let dir_1 = program.alloc_dir(Vec::new()).unwrap();
+    let dir_2 = program.alloc_dir(Vec::new()).unwrap();
+    assert_eq!(program.decode_dir_pointer(dir_0).unwrap(), 0);
+    assert_eq!(program.decode_dir_pointer(dir_1).unwrap(), 1);
+    assert_eq!(program.decode_dir_pointer(dir_2).unwrap(), 2);
+    program.close_dir(dir_1).unwrap();
+    let dir_reused = program.alloc_dir(Vec::new()).unwrap();
+    assert_eq!(program.decode_dir_pointer(dir_reused).unwrap(), 1);
+    program.close_dir(dir_0).unwrap();
+    let dir_reused = program.alloc_dir(Vec::new()).unwrap();
+    assert_eq!(program.decode_dir_pointer(dir_reused).unwrap(), 0);
+    let dir_new = program.alloc_dir(Vec::new()).unwrap();
+    assert_eq!(program.decode_dir_pointer(dir_new).unwrap(), 3);
+}
+
+#[test]
 fn reduces_pointer_conversion_primitives() {
     assert_eq!(whnf(b"v8.4\n0\ntoPtr #42 @ }"), "Ptr#42");
     assert_eq!(whnf(b"v8.4\n0\ntoInt toPtr #42 @ @ }"), "42");
@@ -45,6 +114,30 @@ fn reduces_foreign_pointer_primitives() {
     assert_eq!(
         whnf(b"v8.4\n0\nseq fpfin toFunPtr #0 @ @ bs2fp \"abc\" @ @ @ #7 @ }"),
         "7"
+    );
+}
+
+#[test]
+fn foreign_pointer_offsets_share_backing_and_serialize() {
+    let mut program = parse_program(b"v8.4\n0\nI }\n").unwrap();
+    let original_node = program.foreign_ptr_node(Some(b"abcdef".to_vec()), 0, 42);
+    let original = program.push_node(original_node);
+    let offset = program.offset_foreign_ptr(original, 2).unwrap();
+    let original_bytes = match program.cold_node(original) {
+        Some(Node::ForeignPtr(foreign_ptr)) => foreign_ptr.bytes.as_ref().unwrap().clone(),
+        other => panic!("expected original foreign pointer, got {other:?}"),
+    };
+    let offset_bytes = match program.cold_node(offset) {
+        Some(Node::ForeignPtr(foreign_ptr)) => foreign_ptr.bytes.as_ref().unwrap().clone(),
+        other => panic!("expected offset foreign pointer, got {other:?}"),
+    };
+    assert!(std::rc::Rc::ptr_eq(&original_bytes, &offset_bytes));
+
+    let bytes = program.foreign_ptr_to_bytes(offset, 3).unwrap();
+    assert_eq!(program.render(bytes), "\"cde\"");
+    assert_eq!(
+        program.serialize_program(offset).unwrap(),
+        b"v8.4\n0\nfp+ bs2fp \"abcdef\" @ #2 @ }\n"
     );
 }
 

@@ -72,3 +72,117 @@ fn reduces_mutable_bytestring_primitives_as_io_actions() {
             "\"A\""
         );
 }
+
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
+fn native_bfile_test_path(name: &str) -> std::path::PathBuf {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "microhs-runtime-{name}-{}-{now}.bin",
+        std::process::id()
+    ))
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn native_bfile_path_bytes(path: &std::path::Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    path.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(any(target_os = "wasi", not(any(unix, target_arch = "wasm32"))))]
+fn native_bfile_path_bytes(path: &std::path::Path) -> Vec<u8> {
+    path.to_string_lossy().into_owned().into_bytes()
+}
+
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
+fn native_bfile_payload(len: usize) -> Vec<u8> {
+    (0..len).map(|i| ((i * 37 + 11) % 251) as u8).collect()
+}
+
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
+#[test]
+fn native_fopen_bfile_byte_writes_round_trip() {
+    let path = native_bfile_test_path("byte-round-trip");
+    let path_bytes = native_bfile_path_bytes(&path);
+    let payload = native_bfile_payload(17 * 1024 + 19);
+    let mut program = parse_program(b"v8.4\n0\nI }\n").unwrap();
+
+    let ptr = program
+        .alloc_bfile(native_fopen_bfile(&path_bytes, b"w").unwrap())
+        .unwrap();
+    for byte in &payload {
+        program.put_bfile_byte(ptr, i64::from(*byte)).unwrap();
+    }
+    program.close_bfile(ptr).unwrap();
+
+    let ptr = program
+        .alloc_bfile(native_fopen_bfile(&path_bytes, b"r").unwrap())
+        .unwrap();
+    let mut actual = Vec::with_capacity(payload.len());
+    loop {
+        match program.get_bfile_byte(ptr).unwrap() {
+            -1 => break,
+            byte => actual.push(byte as u8),
+        }
+    }
+    program.close_bfile(ptr).unwrap();
+    assert_eq!(actual, payload);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
+#[test]
+fn native_fopen_bfile_drop_flushes_without_close() {
+    let path = native_bfile_test_path("drop-flush");
+    let path_bytes = native_bfile_path_bytes(&path);
+    let payload = native_bfile_payload(9 * 1024 + 7);
+    {
+        let mut program = parse_program(b"v8.4\n0\nI }\n").unwrap();
+        let ptr = program
+            .alloc_bfile(native_fopen_bfile(&path_bytes, b"w").unwrap())
+            .unwrap();
+        for byte in &payload {
+            program.put_bfile_byte(ptr, i64::from(*byte)).unwrap();
+        }
+    }
+
+    assert_eq!(std::fs::read(&path).unwrap(), payload);
+    let _ = std::fs::remove_file(path);
+}
+
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
+#[test]
+fn native_fopen_bfile_bulk_write_preserves_pending_byte_order() {
+    let path = native_bfile_test_path("interleaved-write");
+    let path_bytes = native_bfile_path_bytes(&path);
+    let prefix = native_bfile_payload(4091);
+    let middle = native_bfile_payload(8197);
+    let suffix = native_bfile_payload(413);
+    let mut expected = Vec::new();
+    expected.extend_from_slice(&prefix);
+    expected.extend_from_slice(&middle);
+    expected.extend_from_slice(&suffix);
+
+    let mut program = parse_program(b"v8.4\n0\nI }\n").unwrap();
+    let ptr = program
+        .alloc_bfile(native_fopen_bfile(&path_bytes, b"w").unwrap())
+        .unwrap();
+    for byte in &prefix {
+        program.put_bfile_byte(ptr, i64::from(*byte)).unwrap();
+    }
+    assert_eq!(
+        program.write_bfile_bytes(ptr, &middle).unwrap(),
+        middle.len()
+    );
+    for byte in &suffix {
+        program.put_bfile_byte(ptr, i64::from(*byte)).unwrap();
+    }
+    program.close_bfile(ptr).unwrap();
+
+    assert_eq!(std::fs::read(&path).unwrap(), expected);
+    let _ = std::fs::remove_file(path);
+}
