@@ -281,7 +281,8 @@ Compiler:
 
 Parse and register:
 
-1. `parse.rs:parse_top` parses the normal graph through `}`.
+1. `parse.rs:parse_program_file` (the slice entry of the unified
+   `Parser<ByteSource>`) parses the normal graph through `}`.
 2. It then calls `parse_js_export_trailer`.
 3. If no `#####` or no `JS_EXPORTS` marker follows, the parser restores the old
    position and returns no exports.
@@ -545,15 +546,17 @@ Rust runtime.
 
 ### Prewarmed Cache Status
 
-The goal is for browser workers to load `prewarm.mhscache` and use `-CR` to
-avoid cold compiler/cache work for common library modules.
+Browser workers load `prewarm.mhscache` and use `-CR` to avoid cold
+compiler/cache work for common library modules.
 
-Open limitation: this is not a browser win yet.  Reading the prewarm cache via
-`-CR` in browser wasm is currently very slow: observed runs timed out around
-240s, slower than a cold compile around 90s, even for the warmed module.  The
-browser wasm build already uses a generous 75M-cell GC interval, so this is not
-explained by the old small-interval GC issue.  The likely follow-up is the
-cache read/validate path.
+This pays off.  Reading the cache via `-CR` was originally pathologically slow
+(a 471KB cache took 14+ minutes natively, and browser runs timed out around
+240s, slower than a ~90s cold compile).  The cause was not GC: `deserialize_bfile`
+read the serialized graph one byte at a time and re-parsed the whole accumulated
+buffer after every byte -- O(N^2).  `IO.deserialize` now parses the graph in a
+single streaming pass, straight from the BFILE through the unified
+`Parser<ByteSource>` (`parse_graph_only` over a `StreamSource`), so `-CR` on that
+cache drops to ~0.5s -- far faster than a cold compile.
 
 ### Byte Identity
 
