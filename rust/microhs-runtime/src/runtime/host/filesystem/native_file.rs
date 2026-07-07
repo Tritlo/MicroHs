@@ -8,9 +8,10 @@ pub(in crate::runtime) fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result
 
     let mode = parse_native_file_mode(mode).ok_or_else(|| errno_i32("EINVAL"))?;
     let file = open_native_file(std::path::Path::new(OsStr::from_bytes(path)), mode)?;
+    let file = native_fopen_handle(file, mode);
     Ok(BFile {
         kind: BFileKind::NativeFile {
-            file: std::rc::Rc::new(std::cell::RefCell::new(file)),
+            file,
             ungot: Vec::new(),
         },
         readable: mode.readable,
@@ -41,9 +42,10 @@ pub(in crate::runtime) fn native_fopen_bfile(path: &[u8], mode: &[u8]) -> Result
     let path = std::str::from_utf8(path).map_err(|_| errno_i32("EINVAL"))?;
     let mode = parse_native_file_mode(mode).ok_or_else(|| errno_i32("EINVAL"))?;
     let file = open_native_file(std::path::Path::new(path), mode)?;
+    let file = native_fopen_handle(file, mode);
     Ok(BFile {
         kind: BFileKind::NativeFile {
-            file: std::rc::Rc::new(std::cell::RefCell::new(file)),
+            file,
             ungot: Vec::new(),
         },
         readable: mode.readable,
@@ -62,12 +64,21 @@ pub(in crate::runtime) fn native_fd_bfile(fd: i32) -> Result<BFile, i32> {
     let file = unsafe { std::fs::File::from_raw_fd(fd) };
     Ok(BFile {
         kind: BFileKind::NativeFile {
-            file: std::rc::Rc::new(std::cell::RefCell::new(file)),
+            file: NativeFileHandle::raw(file),
             ungot: Vec::new(),
         },
         readable: true,
         writable: true,
     })
+}
+
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
+fn native_fopen_handle(file: std::fs::File, mode: NativeFileMode) -> NativeFileHandle {
+    if mode.writable && !mode.readable {
+        NativeFileHandle::buffered_write(file)
+    } else {
+        NativeFileHandle::raw(file)
+    }
 }
 
 #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
