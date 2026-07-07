@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-readonly EXPECTED_COMPILER_SHA="94dcf3ba6d8d5f39e98daced1f799c6d4bbbbaffe039d1c272c71752b0e01e88"
+readonly EXPECTED_COMPILER_SHA="e0483c2fcb301e3d6f318603d3a394cfdf48b9c26f5d50f548845a12dba79968"
 readonly GC_INTERVAL="78643200"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -147,7 +147,7 @@ fi
 echo "RUST-READ: PASS nocache_sha=$(sha_file "$no_cache_comb") read_sha=$(sha_file "$rust_read_comb")"
 
 if [[ ! -x "$repo_root/bin/mhs" ]]; then
-  echo "CROSS-RUNTIME: SKIP no bin/mhs (build with: make bin/mhs; must be the 47ea3c40 compiler)"
+  echo "CROSS-RUNTIME: SKIP no bin/mhs (build with: make bin/mhs; must be the e0483c2f compiler)"
   exit 0
 fi
 
