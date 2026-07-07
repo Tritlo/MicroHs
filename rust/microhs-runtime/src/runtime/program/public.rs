@@ -389,20 +389,20 @@ fn embedded_poll_cancelled(steps_so_far: usize) -> bool {
     host_poll(u64::try_from(steps_so_far).unwrap_or(u64::MAX))
 }
 
-#[cfg(all(feature = "embedded", target_arch = "wasm32", not(target_os = "wasi")))]
-fn host_poll(steps_so_far: u64) -> bool {
-    unsafe { mhs_host_poll(steps_so_far) != 0 }
-}
+#[cfg(feature = "embedded")]
+std::cfg_select! {
+    all(target_arch = "wasm32", not(target_os = "wasi")) => {
+        fn host_poll(steps_so_far: u64) -> bool {
+            unsafe { mhs_host_poll(steps_so_far) != 0 }
+        }
 
-#[cfg(all(feature = "embedded", target_arch = "wasm32", not(target_os = "wasi")))]
-unsafe extern "C" {
-    fn mhs_host_poll(steps_so_far: u64) -> i32;
-}
-
-#[cfg(all(
-    feature = "embedded",
-    not(all(target_arch = "wasm32", not(target_os = "wasi")))
-))]
-fn host_poll(_steps_so_far: u64) -> bool {
-    false
+        unsafe extern "C" {
+            fn mhs_host_poll(steps_so_far: u64) -> i32;
+        }
+    }
+    _ => {
+        fn host_poll(_steps_so_far: u64) -> bool {
+            false
+        }
+    }
 }
