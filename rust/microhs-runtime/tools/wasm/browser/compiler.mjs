@@ -107,6 +107,84 @@ export async function createCompiler({ wasm, comb, files, onPoll }) {
         stats,
       };
     },
+    // Compile a main-less value module and return its entry's pruned combinator
+    // closure as structured JSON: { status, root, defs, ... }. `entry` is the
+    // unqualified value name; `root` comes back as "<Module>.<entry>". Uses the
+    // compiler's --entry flag, so there is no fake main, no failure to scrape,
+    // and no client-side re-pruning: on success `status` is "ok" and `defs` is
+    // the reachable closure, each `{ name, body }` with `body` a structured
+    // combinator tree (see docs/javascript-ffi.md for the schema).
+    toCombinators(source, entry, opts = {}) {
+      if (closed) {
+        throw new Error("MicroHs compiler is closed");
+      }
+      const module = opts.module ?? "Main";
+      const flags = opts.flags ?? [];
+      validateModuleName(module);
+      if (typeof entry !== "string" || entry.length === 0) {
+        throw new TypeError("toCombinators requires a non-empty entry name");
+      }
+      if (!Array.isArray(flags)) {
+        throw new TypeError("toCombinators opts.flags must be an array");
+      }
+
+      cleanupWork(runtime, workFiles);
+      captured = [];
+
+      const sourcePath = `/work/${module.replaceAll(".", "/")}.hs`;
+      const artifactPath = `/work/${module}.entry.json`;
+      mkdirp(runtime, dirname(sourcePath));
+      runtime.hostWriteFile(sourcePath, textBytes(source));
+      workFiles.add(sourcePath);
+      workFiles.add(artifactPath);
+
+      let handle = 0;
+      let status = "error";
+      let root = null;
+      let defs = null;
+      let error = "";
+      let stats = null;
+      try {
+        handle = runtime.newProgram(combBytes);
+        runtime.setArgs(handle, [
+          "mhs",
+          "-i",
+          "-i/work",
+          "-imhs",
+          "-isrc",
+          "-ilib",
+          ...flags.map(String),
+          `--entry=${entry}`,
+          `-ddump-combinator-out=${artifactPath}`,
+          module,
+        ]);
+        runtime.setExecutablePath(handle, "/mhs");
+
+        const reduceStatus = runtime.reduceMain(handle, REDUCE_LIMIT);
+        status = statusName(runtime.reduceMainStatus(), reduceStatus);
+        stats = runtime.stats(handle);
+        const artifact = readOptional(runtime, artifactPath);
+        if (status === "ok" && artifact) {
+          const parsed = JSON.parse(decoder.decode(artifact));
+          root = parsed.root;
+          defs = parsed.defs;
+        } else if (status !== "ok") {
+          error = runtime.lastError() || runtime.resultText();
+        } else {
+          status = "error";
+          error = "toCombinators: --entry artifact missing";
+        }
+      } catch (err) {
+        status = "error";
+        error = runtime.lastError?.() || String(err?.message ?? err);
+      } finally {
+        if (handle !== 0) {
+          runtime.freeProgram(handle);
+        }
+      }
+
+      return { status, root, defs, stderr: decodeCaptured(captured), error, stats };
+    },
     close() {
       cleanupWork(runtime, workFiles);
       closed = true;

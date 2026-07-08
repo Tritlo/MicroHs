@@ -434,9 +434,10 @@ file.  It works the same in native and wasm builds.
 
 This is not `-o`.  `-o` writes the linked postfix wire format: names are erased
 and it requires a successful `main` link.  Combinate's source modules are
-deliberately main-less, so the browser compiler needs the named combinator
-dump file instead.  The browser runtime also discards stdout as a dump channel,
-so a file artifact is required.
+deliberately main-less; the clean way to compile them is `--entry=NAME` /
+`toCombinators` (see *Stable Compiler API*), which roots at the named value and
+writes a pruned, rooted JSON artifact to this same file.  The browser runtime
+also discards stdout as a dump channel, so a file artifact is required.
 
 ### Primitive Tokens
 
@@ -513,10 +514,45 @@ The first `-i` clears inherited include paths.  A later bare `-i` would clear
 the paths added before it, so callers should not append one casually in
 `flags`.
 
-`compile()` reads and returns the dump even when `status != "ok"`.  That is the
-expected Combinate case: a main-less module can write its combinator dump and
-then fail on the missing `main`.  This replaces the older "ignore
-`No definition found for: Ex.main`" host hack.
+`compile()` reads and returns the dump even when `status != "ok"`, which was the
+original main-less workaround: a value module with no `main` still writes its
+combinator dump and then fails on the missing `main`, so the host scraped the
+dump from a failed compile.  Prefer `toCombinators` (below) for main-less value
+modules; `compile()`'s tolerate-failure behavior is retained for compatibility.
+
+#### `toCombinators(source, entry, { module, flags })`
+
+Compiles a main-less value module cleanly — no fake `main`, no failure to
+scrape, no client-side re-pruning — and returns the entry's pruned combinator
+closure as structured JSON:
+
+```javascript
+const { status, root, defs } = compiler.toCombinators(src, "out", { module: "Ex" });
+// status === "ok"; root === "Ex.out"
+```
+
+It drives the compiler's `--entry=NAME` flag, which roots and prunes the program
+at `NAME` instead of `main` and writes a JSON artifact to the
+`-ddump-combinator-out` file.  `root` is the entry's qualified id, returned
+explicitly (no magic root string).  `defs` is the reachable closure, each entry
+`{ "name": "<qualified-id>", "body": <expr> }`, where `<expr>` is a lossless
+structured combinator tree:
+
+```text
+{"var":"<ident>"}                 reference to another def or a bound variable
+{"app":[<expr>,<expr>]}           application
+{"lam":["<ident>",<expr>]}        lambda
+{"int":N} {"int64":N} {"double":X} {"float":X}      numeric literals
+{"integer":"N"} {"rat":"N%D"}     bignum / rational (string, exact)
+{"char":"c"} {"string":"…"} {"bstr":"…"}            text literals
+{"prim":"<token>"}                primitive token (e.g. "+", "C"; see below)
+{"forimp":"…"} {"exn":"…"} {"tick":"…"} {"ctype":"…"}
+```
+
+The `{"prim":…}` tokens are enumerated authoritatively in
+`rust/microhs-runtime/src/runtime/prims.rs` (see *Primitive Tokens*).  Without
+`--entry`, the `-ddump-combinator-out` file keeps its unpruned text form, so this
+is opt-in and does not change the existing dump.
 
 ### Web Distribution
 
