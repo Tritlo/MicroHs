@@ -34,6 +34,7 @@ data Flags = Flags {
   useStdin   :: Bool,       -- Use stdin in interactive system
   noLink     :: Bool,       -- Just generate an unlinked object file
   noMain     :: Bool,       -- Do not require a main definition
+  entry      :: Maybe String, -- --entry=NAME: root+prune at NAME (no main), emit JSON dump
   fPgm       :: Maybe String, -- preprocessor for -F
   fArgs      :: [String],   -- arguments for preprocessor
   doF        :: Bool,       -- run preprocessor
@@ -80,6 +81,7 @@ defaultFlags = Flags {
   useStdin   = False,
   noLink     = False,
   noMain     = False,
+  entry      = Nothing,
   fPgm       = Nothing,
   fArgs      = [],
   doF        = False,
