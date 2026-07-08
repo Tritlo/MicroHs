@@ -94,10 +94,13 @@ export async function createCompiler({ wasm, comb, files, onPoll, packages = [] 
         const reduceStatus = runtime.reduceMain(handle, REDUCE_LIMIT);
         status = statusName(runtime.reduceMainStatus(), reduceStatus);
         dump = readOptional(runtime, dumpPath);
-        stats = runtime.stats(handle);
         if (status !== "ok") {
+          // Read the error BEFORE stats(): stats() writes its struct into the shared
+          // result slot, and resultText() decodes that same slot — reading after
+          // stats() returns 48 bytes of counters instead of the compiler's message.
           error = runtime.lastError() || runtime.resultText();
         }
+        stats = runtime.stats(handle);
       } catch (err) {
         dump = readOptional(runtime, dumpPath);
         error = runtime.lastError?.() || String(err?.message ?? err);
@@ -171,18 +174,21 @@ export async function createCompiler({ wasm, comb, files, onPoll, packages = [] 
 
         const reduceStatus = runtime.reduceMain(handle, REDUCE_LIMIT);
         status = statusName(runtime.reduceMainStatus(), reduceStatus);
-        stats = runtime.stats(handle);
         const artifact = readOptional(runtime, artifactPath);
         if (status === "ok" && artifact) {
           const parsed = JSON.parse(decoder.decode(artifact));
           root = parsed.root;
           defs = parsed.defs;
         } else if (status !== "ok") {
+          // Read the error BEFORE stats(): stats() writes its struct into the shared
+          // result slot, and resultText() decodes that same slot — reading after
+          // stats() returns 48 bytes of counters instead of the compiler's message.
           error = runtime.lastError() || runtime.resultText();
         } else {
           status = "error";
           error = "toCombinators: --entry artifact missing";
         }
+        stats = runtime.stats(handle);
       } catch (err) {
         status = "error";
         error = runtime.lastError?.() || String(err?.message ?? err);
