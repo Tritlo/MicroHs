@@ -438,6 +438,22 @@ deliberately main-less, so the browser compiler needs the named combinator
 dump file instead.  The browser runtime also discards stdout as a dump channel,
 so a file artifact is required.
 
+### Primitive Tokens
+
+The primitive tokens in the dump (and in the linked `.comb`) — the SK(I)-family
+combinators, the `Tag n` / `Tn` constructor tags, and the `IO.*` / runtime / FFI
+prims — are enumerated authoritatively in
+`rust/microhs-runtime/src/runtime/prims.rs` (`Prim::from_name` plus the
+`RUNTIME_PRIM_NAMES` / `TAG_PRIM_NAMES` / `TUPLE_PRIM_NAMES` tables), which mirror
+the compiler's emitters (`lib/Primitives.hs`, `src/MicroHs/Abstract.hs`,
+`src/MicroHs/EncodeData.hs`) and the C runtime's `primops[]`
+(`src/runtime/eval.c`).  They are load-bearing ABI: the compiler compiles itself
+through this runtime, so a renamed or dropped token breaks the self-host fixed
+point or raises a hard "unknown primitive" parse error — never a silent change.
+Unlike the `.comb` format, the dump carries no version stamp, so a downstream
+`PRIM_OPS`-style map should be validated against `prims.rs` rather than
+hand-maintained.
+
 ### Browser Host Glue
 
 `tools/wasm/browser/host.mjs` provides the import:
