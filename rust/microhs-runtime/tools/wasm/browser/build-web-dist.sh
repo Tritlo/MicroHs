@@ -3,13 +3,15 @@ set -euo pipefail
 
 # Build the plain file-tree browser distribution consumed by Combinate CI.
 #
-# The prewarmed cache is generated at dist time from the current compiler comb
-# and library sources, then copied into the dist tree. It is intentionally not
-# committed, so it cannot go stale independently of generated/mhs.comb or lib/.
+# Ships the committed generated/base.pkg (the pre-typechecked base library) and
+# preloads it via -p, so library modules (Prelude, Data.*, ...) load from the
+# package instead of being recompiled from source. This replaces the old prewarm
+# .mhscache / -CR path (and its native<->wasm cache-portability question).
+# base.pkg is a tracked generated/ artifact kept in sync with generated/mhs.comb;
+# the dist smoke compiles through it, so a drift between the two fails the build.
 #
-# Includes: lib/ only. A browser compile probe for a user module importing
-# Prelude and Data.List succeeds with only /lib in the VFS; mhs/ and src/ are
-# compiler implementation sources already baked into generated/mhs.comb.
+# Includes: lib/ source as a fallback for any module not in base.pkg; mhs/ and
+# src/ are compiler sources already baked into generated/mhs.comb.
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../../../../.." && pwd)"
@@ -28,9 +30,8 @@ case "$dist" in
 esac
 
 runtime_wasm="$repo/target/wasm32-unknown-unknown/release/microhs_runtime.wasm"
-bench="$repo/target/release/mhs-rust-bench"
 comb="$repo/generated/mhs.comb"
-warm_modules=(Prelude Data.List Data.Maybe Data.Either Data.Tuple Data.Bool Data.Char)
+basepkg="$repo/generated/base.pkg"
 
 echo "building embedded browser wasm (Rust cdylib; no emcc)"
 # The dist ships only the Rust runtime wasm. emcc is used solely for the
@@ -46,12 +47,10 @@ RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=--allow-undefined" cargo build \
   --lib \
   --quiet
 
-echo "building native driver"
-cargo build \
-  --release \
-  --manifest-path "$repo/rust/microhs-runtime/Cargo.toml" \
-  --bin mhs-rust-bench \
-  --quiet
+[[ -s "$basepkg" ]] || {
+  echo "generated/base.pkg missing (run: make generated/base.pkg)" >&2
+  exit 1
+}
 
 rm -rf "$dist"
 mkdir -p "$dist/include/lib"
@@ -60,60 +59,12 @@ cp "$runtime_wasm" "$dist/microhs_runtime.wasm"
 cp "$here/compiler.mjs" "$dist/compiler.mjs"
 cp "$here/host.mjs" "$dist/host.mjs"
 cp "$comb" "$dist/mhs.comb"
+cp "$basepkg" "$dist/base.pkg"
 cp -a "$repo/lib/." "$dist/include/lib/"
 
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+echo "shipped base.pkg: $(wc -c < "$dist/base.pkg" | tr -d ' ') bytes"
 
-cat > "$tmp/Warm.hs" <<'WARM'
-module Warm where
-import Prelude
-import Data.List
-import Data.Maybe
-import Data.Either
-import Data.Tuple
-import Data.Bool
-import Data.Char
-
-foreign export javascript "warm" warm :: Int -> Int
-
-warm :: Int -> Int
-warm n = length (take n (map (+ 1) [1,2,3,4])) + maybe 0 id (Just n) + either id id (Right n) + bool 0 1 (isDigit '7')
-WARM
-
-echo "generating prewarm cache"
-if ! (
-  cd "$tmp"
-  "$bench" \
-    --input "$comb" \
-    --mode main \
-    --warmup-iters 0 \
-    --iters 1 \
-    -- \
-    mhs \
-    -q \
-    -i \
-    "-i$tmp" \
-    "-i$repo/lib" \
-    --no-main \
-    -CW \
-    "-ddump-combinator-out=$tmp/Warm.dump" \
-    Warm
-) >"$tmp/prewarm.log" 2>&1; then
-  cat "$tmp/prewarm.log" >&2
-  exit 1
-fi
-
-if [[ ! -s "$tmp/.mhscache" ]]; then
-  echo "prewarm cache was not generated" >&2
-  exit 1
-fi
-
-cp "$tmp/.mhscache" "$dist/prewarm.mhscache"
-cache_size="$(wc -c < "$dist/prewarm.mhscache" | tr -d ' ')"
-echo "prewarmed cache: $cache_size bytes (${warm_modules[*]})"
-
-DIST="$dist" PREWARM_MODULES="${warm_modules[*]}" node --input-type=module <<'NODE'
+DIST="$dist" node --input-type=module <<'NODE'
 import { readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -138,12 +89,11 @@ await walk(includeRoot);
 
 const manifest = {
   includeFiles: Object.fromEntries(Object.entries(includeFiles).sort()),
-  prewarmCache: {
-    dist: "prewarm.mhscache",
-    vfs: "/.mhscache",
-    generatedBy: "build-web-dist.sh",
-    warmedModules: process.env.PREWARM_MODULES.split(" "),
-  },
+  // Preload each package at its vfs path and pass it to createCompiler({ packages })
+  // (which adds -p<vfs>); library modules then load pre-typechecked from base.pkg.
+  packages: [
+    { dist: "base.pkg", vfs: "/base.pkg" },
+  ],
 };
 
 await writeFile(path.join(dist, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -151,7 +101,7 @@ NODE
 
 echo "running dist-only smoke"
 DIST="$dist" node --input-type=module <<'NODE'
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -163,16 +113,16 @@ const files = {};
 for (const [distRel, vfsPath] of Object.entries(manifest.includeFiles)) {
   files[vfsPath] = await readFile(path.join(dist, distRel));
 }
-
-const prewarm = await readFile(path.join(dist, manifest.prewarmCache.dist));
-if (prewarm.length === 0) {
-  throw new Error("prewarm cache is empty");
+// Preload the packages into the VFS at their declared paths.
+for (const pkg of manifest.packages) {
+  files[pkg.vfs] = await readFile(path.join(dist, pkg.dist));
 }
 
 const compiler = await createCompiler({
   wasm: await readFile(path.join(dist, "microhs_runtime.wasm")),
   comb: await readFile(path.join(dist, "mhs.comb")),
   files,
+  packages: manifest.packages.map((p) => p.vfs),
 });
 
 try {
@@ -180,21 +130,15 @@ try {
 import Prelude
 import Data.List
 
-foreign export javascript "distSmoke" distSmoke :: Int -> Int
-
-distSmoke :: Int -> Int
-distSmoke n = length (take n [1,2,3,4])
+out :: Int
+out = length (take 3 [1, 2, 3, 4, 5])
 `;
 
-  const out = compiler.compile(source, {
-    module: "DistSmoke",
-    flags: ["-q", "--no-main"],
-  });
-  if (!out.dump || out.dump.length === 0) {
-    throw new Error(`dist smoke produced empty dump; status=${out.status}; error=${out.error}`);
+  const { status, root, defs, error } = compiler.toCombinators(source, "out", { module: "DistSmoke" });
+  if (status !== "ok" || root !== "DistSmoke.out" || !Array.isArray(defs) || defs.length === 0) {
+    throw new Error(`dist smoke failed: status=${status} root=${root} defs=${defs?.length} error=${error}`);
   }
-  const cacheInfo = await stat(path.join(dist, manifest.prewarmCache.dist));
-  console.log(`smoke: status=${out.status} dump_bytes=${out.dump.length} prewarm_bytes=${cacheInfo.size}`);
+  console.log(`smoke: status=${status} root=${root} defs=${defs.length} (via base.pkg)`);
 } finally {
   compiler.close();
 }
