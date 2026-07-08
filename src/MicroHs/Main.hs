@@ -82,7 +82,7 @@ mHSPKG :: String
 mHSPKG = "MHSPKG"
 
 usage :: String
-usage = "Usage: mhs [-h|?] [--help] [--version] [--numeric-version] [-v] [-q] [-l] [-s] [-r] [-C[R|W]] [-XCPP] [-DDEF] [-IPATH] [-T] [-z] [-b64] [-iPATH] [-oFILE] [-a[PATH]] [-L[FILE|PKG]] [-PPKG] [-Q PKG [DIR]] [-pFILE] [-tTARGET] [-optc OPTION] [-optl OPTION] [--interactive] [--no-main] [-eEXPR] [-ECMD] [-ddump-PASS] [--embed-packages PKG:...] [--embed-ffis PKG:...] [MODULENAME...|FILE]"
+usage = "Usage: mhs [-h|?] [--help] [--version] [--numeric-version] [-v] [-q] [-l] [-s] [-r] [-C[R|W]] [-XCPP] [-DDEF] [-IPATH] [-T] [-z] [-b64] [-iPATH] [-oFILE] [-a[PATH]] [-L[FILE|PKG]] [-PPKG] [-Q PKG [DIR]] [-pFILE] [-tTARGET] [-optc OPTION] [-optl OPTION] [--interactive] [--no-main] [--entry=NAME] [-eEXPR] [-ECMD] [-ddump-PASS] [--embed-packages PKG:...] [--embed-ffis PKG:...] [MODULENAME...|FILE]"
 
 longUsage :: String
 longUsage = usage ++ "\nOptions:\n" ++ details
@@ -100,6 +100,8 @@ longUsage = usage ++ "\nOptions:\n" ++ details
       \-ddump-PASS        Debug, print AST after PASS\n\
       \                   Possible passes: preproc, parse, derive, typecheck, desugar, toplevel, combinator, linked, all\n\
       \-ddump-combinator-out=FILE Write combinator dump to FILE\n\
+      \--entry=NAME       Root and prune at value NAME (no main required);\n\
+      \                   with -ddump-combinator-out writes a JSON artifact\n\
       \-ECMD              Set editor for :edit command\n\
       \-eEXPR             Evaluate EXPR\n\
       \-embed-ffis PKG*   Embed packages FFI stubs in mhs binary\n\
@@ -192,7 +194,9 @@ decodeArgs f mdls (arg:args) =
     '-':'p':s   -> decodeArgs f{preload = preload f ++ [s]} mdls args
     '-':'E':s   -> decodeArgs f{editor = Just s} mdls args
     '-':'e':s   -> decodeArgs f{evalArg = Just s} mdls args
-    _ | Just s  <- stripPrefix "-ddump-combinator-out=" arg ->
+    _ | Just s  <- stripPrefix "--entry=" arg ->
+                   decodeArgs f{entry = Just s} mdls args
+      | Just s  <- stripPrefix "-ddump-combinator-out=" arg ->
                    decodeArgs f{dumpCombinatorOut = Just s} mdls args
       | Just r  <- stripPrefix "-ddump-" arg, Just d <- lookup r dumpFlagTable ->
                    decodeArgs f{dumpFlags = d : dumpFlags f} mdls args
@@ -343,7 +347,15 @@ mainCompile flags mn = do
   allDefs <- addEmbedPkgs flags allDefs'
   let
     mainName = qualIdent rmn (mkIdent "main")
-    cmdl = (allDefs, if noLink flags || noMain flags then Lit (LInt 0) else Var mainName)
+    -- --entry=NAME roots (and thus prunes) the program at NAME instead of
+    -- 'main'.  It is a distinct root selection from --no-main (which roots at
+    -- 'Lit 0' and guards on a JS export); a main-less value module is fine.
+    rootExp = case entry flags of
+                Just name -> Var (qualIdent rmn (mkIdent name))
+                Nothing
+                  | noLink flags || noMain flags -> Lit (LInt 0)
+                  | otherwise                    -> Var mainName
+    cmdl = (allDefs, rootExp)
     (forExps, outCMdl@(outDefs, _)) = renumberCMdl cmdl
     outData = toStringCMdl outCMdl
     numOutDefs = length outData

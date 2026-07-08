@@ -39,6 +39,7 @@ import MicroHs.CompileCache
 import MicroHs.Desugar
 import qualified MicroHs.Embed as Embed
 import MicroHs.Exp
+import MicroHs.ExpPrint(entryJSON)
 import MicroHs.Expr
 import MicroHs.Flags
 import MicroHs.Ident
@@ -69,13 +70,20 @@ type CM a = StateIO Cache a
 -- Return the "compiled module" and the resulting cache.
 compileCacheTop :: Flags -> IdentModule -> Cache -> IO ((IdentModule, [(Ident, Exp)]), Symbols, Cache)
 compileCacheTop flags mn ch = do
-  res@((_, ds), _, _) <- compile flags mn ch
-  let s = showLDefs ds
+  res@((rmn, ds), _, _) <- compile flags mn ch
+  -- The -ddump-combinator-out file channel.  With --entry=NAME it carries a
+  -- pruned, rooted, structured JSON artifact (the entry's reachable closure);
+  -- otherwise the unpruned text dump.  Only the file content differs, and only
+  -- when --entry is set; the -ddump-combinator stdout dump stays text.
   case dumpCombinatorOut flags of
-    Just fn -> writeFile fn s
+    Just fn ->
+      writeFile fn $
+        case entry flags of
+          Just name -> entryJSON (qualIdent rmn (mkIdent name)) ds
+          Nothing   -> showLDefs ds
     Nothing -> return ()
   dumpIf flags Dcombinator $
-    putStrLn $ "combinators:\n" ++ s
+    putStrLn $ "combinators:\n" ++ showLDefs ds
   return res
 
 compileMany :: Flags -> [IdentModule] -> Cache -> IO Cache
