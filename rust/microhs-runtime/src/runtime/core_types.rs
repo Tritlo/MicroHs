@@ -732,8 +732,17 @@ pub(in crate::runtime) const READ_ONLY_MEMORY_VIEW_MIN_LEN: usize = 8;
 // Default cells between GCs when MHS_GC_NODE_INTERVAL is unset: a lean 16M on
 // wasm32-wasi (memory-constrained hosts; ~180MB peak on the heavy self-host) vs
 // 75M native (~C's default footprint). Both packed-cell counts, overridable.
+// Browser wasm (wasm32-unknown-unknown) is NOT wasi, so it used to fall into the
+// 75M native arm — a compiler.mjs compile allocates only a few M cells, so GC
+// NEVER fired and wasm memory (which can't shrink) held every allocation ever
+// (~1.7GB RSS for one compile — an instant OOM kill on iOS Safari). std::env is
+// unavailable there too, so the env override can't help; give browsers their own
+// lean arm. 8M cells balances peak memory against GC churn: 2M held RSS at
+// ~250MB but doubled compile time (the compiler self-host allocates hard);
+// 8M keeps phones out of jetsam territory without the slowdown.
 pub(in crate::runtime) const GC_NODE_INTERVAL: usize = std::cfg_select! {
     target_os = "wasi" => { 16 * 1024 * 1024 }
+    target_arch = "wasm32" => { 8 * 1024 * 1024 }
     _ => { 75 * 1024 * 1024 }
 };
 
