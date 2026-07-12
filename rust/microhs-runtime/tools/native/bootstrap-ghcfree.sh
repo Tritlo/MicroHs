@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-readonly EXPECTED_SHA="8030b42d11ab0ad43118a2684fb4c51bd1787df0d0db10a5904b5f1f47fd3a27"
+readonly EXPECTED_SHA="47ea3c4062aa0f86d4bf77fe9dc864374b9b29073ed220e8d8f3fb41bb5ae862"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../../.." && pwd)"
