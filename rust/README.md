@@ -121,6 +121,7 @@ Generated local artifacts are ignored: `target/`,
 
 ```sh
 cargo fmt --check --manifest-path rust/microhs-runtime/Cargo.toml
+cargo +1.95.0 clippy --manifest-path rust/microhs-runtime/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path rust/microhs-runtime/Cargo.toml --lib
 cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features profile
 cargo check --manifest-path rust/microhs-runtime/Cargo.toml --features gc-phase-profile

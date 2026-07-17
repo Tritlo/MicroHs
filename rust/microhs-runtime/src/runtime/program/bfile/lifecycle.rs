@@ -80,10 +80,10 @@ impl Program {
             .ok_or(EvalError::InvalidHandle)?;
         let _bfile = slot.as_ref().ok_or(EvalError::InvalidHandle)?;
         #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
-        if let BFileKind::NativeFile { file, .. } = &_bfile.kind {
-            if _bfile.writable {
-                file.flush().map_err(|_| EvalError::InvalidHandle)?;
-            }
+        if let BFileKind::NativeFile { file, .. } = &_bfile.kind
+            && _bfile.writable
+        {
+            file.flush().map_err(|_| EvalError::InvalidHandle)?;
         }
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
         if let BFileKind::BrowserFile { handle, .. } = &_bfile.kind {
@@ -286,10 +286,10 @@ impl Program {
         }
         let _bfile = self.bfile(ptr)?;
         #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
-        if let BFileKind::NativeFile { file, .. } = &_bfile.kind {
-            if _bfile.writable {
-                file.flush().map_err(|_| EvalError::InvalidHandle)?;
-            }
+        if let BFileKind::NativeFile { file, .. } = &_bfile.kind
+            && _bfile.writable
+        {
+            file.flush().map_err(|_| EvalError::InvalidHandle)?;
         }
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
         if let BFileKind::BrowserFile { handle, .. } = &_bfile.kind {

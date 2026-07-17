@@ -87,6 +87,8 @@ impl Program {
         EvalLoopStep { node, reductions }
     }
 
+    // Keep hot reducer state explicit instead of constructing a one-off argument bundle.
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::runtime) fn eval_loop_app_result(
         &mut self,
         profile_head: ProfileHead,
@@ -101,6 +103,8 @@ impl Program {
         self.eval_loop_result(profile_head, node, reductions)
     }
 
+    // Nested shortcut checks benchmark faster in this reducer hot path.
+    #[allow(clippy::collapsible_if)]
     pub(in crate::runtime) fn eval_loop_step(
         &mut self,
         root: NodeId,
@@ -320,7 +324,10 @@ impl Program {
             Some(IoPrint) if args_len >= 3 => {
                 let ptr = self.eval_pointer_value(arg!(0))?;
                 let value = self.reduce_node_whnf(arg!(1), FORCE_REDUCTION_LIMIT)?;
-                let printed = self.print_program(value)?;
+                let printed = match self.print_program(value) {
+                    Ok(printed) => printed,
+                    Err(_) => return Err(self.rts_exception(RTS_EXN_SERIALIZE)),
+                };
                 self.write_bfile_bytes(ptr, &printed)?;
                 let unit = self.prim("I");
                 Some((3, self.pair(unit, arg!(2))))
@@ -328,14 +335,20 @@ impl Program {
             Some(IoSerialize) if args_len >= 3 => {
                 let ptr = self.eval_pointer_value(arg!(0))?;
                 let value = self.reduce_node_whnf(arg!(1), FORCE_REDUCTION_LIMIT)?;
-                let serialized = self.serialize_program(value)?;
+                let serialized = match self.serialize_program(value) {
+                    Ok(serialized) => serialized,
+                    Err(_) => return Err(self.rts_exception(RTS_EXN_SERIALIZE)),
+                };
                 self.write_bfile_bytes(ptr, &serialized)?;
                 let unit = self.prim("I");
                 Some((3, self.pair(unit, arg!(2))))
             }
             Some(IoDeserialize) if args_len >= 2 => {
                 let ptr = self.eval_pointer_value(arg!(0))?;
-                let value = self.deserialize_bfile(ptr)?;
+                let value = match self.deserialize_bfile(ptr) {
+                    Ok(value) => value,
+                    Err(_) => return Err(self.rts_exception(RTS_EXN_DESERIALIZE)),
+                };
                 Some((2, self.pair(value, arg!(1))))
             }
             Some(IoGetArgRef) if args_len >= 1 => {

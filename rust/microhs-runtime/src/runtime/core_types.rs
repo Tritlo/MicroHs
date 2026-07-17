@@ -694,6 +694,8 @@ pub(in crate::runtime) const FORCE_REDUCTION_LIMIT: usize = usize::MAX;
 pub(in crate::runtime) const REDUCTION_SLICE: usize = 100_000;
 pub(in crate::runtime) const RTS_EXN_DIVIDE_BY_ZERO: i64 = 4;
 pub(in crate::runtime) const RTS_EXN_OVERFLOW: i64 = 7;
+pub(in crate::runtime) const RTS_EXN_SERIALIZE: i64 = 8;
+pub(in crate::runtime) const RTS_EXN_DESERIALIZE: i64 = 9;
 pub(in crate::runtime) const MASK_UNMASKED: i64 = 0;
 pub(in crate::runtime) const MASK_INTERRUPTIBLE: i64 = 1;
 pub(in crate::runtime) const MASK_UNINTERRUPTIBLE: i64 = 2;
@@ -906,11 +908,11 @@ impl NativeFileState {
     fn flush_write_buffer(&mut self) -> std::io::Result<()> {
         use std::io::Write as _;
 
-        if let Some(buffer) = &mut self.write_buffer {
-            if !buffer.is_empty() {
-                self.file.write_all(buffer)?;
-                buffer.clear();
-            }
+        if let Some(buffer) = &mut self.write_buffer
+            && !buffer.is_empty()
+        {
+            self.file.write_all(buffer)?;
+            buffer.clear();
         }
         Ok(())
     }
@@ -1137,6 +1139,7 @@ pub struct Program {
     pub(in crate::runtime) program_args: Vec<Vec<u8>>,
     pub(in crate::runtime) executable_path: Option<Vec<u8>>,
     pub(in crate::runtime) arg_ref_array: Option<NodeId>,
+    pub(in crate::runtime) boot_time_micro: i64,
     pub(in crate::runtime) errno_value: i32,
     pub(in crate::runtime) errno_ptr: Option<i64>,
     pub(in crate::runtime) masking_state: i64,

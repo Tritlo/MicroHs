@@ -2,6 +2,8 @@
 use super::*;
 
 impl Program {
+    // Nested arity checks benchmark faster on the FFI dispatch path.
+    #[allow(clippy::collapsible_if)]
     pub(in crate::runtime) fn ffi_call(
         &mut self,
         name: &str,
@@ -803,6 +805,7 @@ impl Program {
         let result = match name {
             "GETRAW" => Node::Int(-1),
             "GETTIMEMICRO" => Node::Int(current_time_micro()),
+            "GETBOOTTIMEMICRO" => Node::Int(self.boot_time_micro),
             "islinux" => Node::Int(i64::from(cfg!(target_os = "linux"))),
             "ismacos" => Node::Int(i64::from(cfg!(target_os = "macos"))),
             "iswindows" => Node::Int(i64::from(cfg!(target_os = "windows"))),

@@ -29,6 +29,8 @@ impl Program {
         }
     }
 
+    // Nested bounds/mark checks benchmark faster in the GC mark loop.
+    #[allow(clippy::collapsible_if)]
     pub(in crate::runtime) fn mark_node_id(
         marked: &mut [bool],
         work: &mut Vec<NodeId>,
@@ -133,6 +135,8 @@ impl Program {
         }
     }
 
+    // Keep the independent root sets borrowed directly instead of wrapping them for one call.
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::runtime) fn mark_program_roots(
         &self,
         marked: &mut [bool],
@@ -229,9 +233,7 @@ impl Program {
         loop {
             match self.nodes.get(current.index()).map(|cell| cell.tag()) {
                 Some(CellTag::Indir) => {
-                    let Some(next) = self.nodes[current.index()].option_id_word1() else {
-                        return None;
-                    };
+                    let next = self.nodes[current.index()].option_id_word1()?;
                     current = next;
                     depth += 1;
                     if depth > self.nodes.len() {
@@ -248,10 +250,10 @@ impl Program {
         Some(current)
     }
 
+    // Nested canonicalization checks benchmark faster in the GC mark loop.
+    #[allow(clippy::collapsible_if)]
     pub(in crate::runtime) fn canonical_gc_target(&mut self, id: NodeId) -> Option<NodeId> {
-        let Some(cell) = self.nodes.get(id.index()).copied() else {
-            return None;
-        };
+        let cell = self.nodes.get(id.index()).copied()?;
         let tag = cell.tag_bits();
         let target = if tag == CellTag::Indir.bits() {
             self.compress_marked_indirection(id)?
@@ -284,6 +286,8 @@ impl Program {
         target
     }
 
+    // Nested optional-finalizer checks keep the measured GC loop shape.
+    #[allow(clippy::collapsible_if)]
     pub(in crate::runtime) fn mark_reachable(
         &mut self,
         marked: &mut [bool],
@@ -355,6 +359,8 @@ impl Program {
         }
     }
 
+    // Nested mark checks keep the measured weak-sweep loop shape.
+    #[allow(clippy::collapsible_if)]
     pub(in crate::runtime) fn sweep_weaks_after_mark(
         &mut self,
         marked: &mut [bool],
@@ -533,6 +539,8 @@ impl Program {
         self.free_nodes = 0;
         let mut freed = 0;
         let mut live = 0;
+        // Indexed sweep benchmarks faster; index is also the reclaimed node id.
+        #[allow(clippy::needless_range_loop)]
         for index in 0..marked.len() {
             if marked[index] {
                 marked[index] = false;

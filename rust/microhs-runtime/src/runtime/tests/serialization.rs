@@ -118,6 +118,59 @@ fn io_deserialize_preserves_shared_cycles() {
     parse_program(&serialized).unwrap();
 }
 
+#[test]
+fn io_serialization_failures_raise_rts_exceptions() {
+    fn raised_code(program: &Program, error: EvalError) -> i64 {
+        let EvalError::Raised(exn) = error else {
+            panic!("expected RTS exception, got {error:?}");
+        };
+        program.cell_int_value(exn).unwrap()
+    }
+
+    for prim in ["IO.print", "IO.serialize"] {
+        let mut program = parse_program(b"v8.4\n0\nI }").unwrap();
+        let ptr = program
+            .alloc_bfile(BFile {
+                kind: BFileKind::Memory {
+                    bytes: Vec::new(),
+                    pos: 0,
+                },
+                readable: false,
+                writable: true,
+            })
+            .unwrap();
+        let ptr = program.push_node(Node::Ptr(ptr));
+        let mvar = program.push_node(Node::MVar(None));
+        let world = program.prim("I");
+        let action = program.prim(prim);
+        let action = program.app(action, ptr);
+        let action = program.app(action, mvar);
+        let action = program.app(action, world);
+        let error = program
+            .reduce_node_whnf(action, FORCE_REDUCTION_LIMIT)
+            .unwrap_err();
+        assert_eq!(
+            raised_code(&program, error),
+            crate::runtime::RTS_EXN_SERIALIZE
+        );
+    }
+
+    let mut program = parse_program(b"v8.4\n0\nI }").unwrap();
+    let ptr = alloc_read_bfile(&mut program, b"bad".to_vec());
+    let ptr = program.push_node(Node::Ptr(ptr));
+    let world = program.prim("I");
+    let action = program.prim("IO.deserialize");
+    let action = program.app(action, ptr);
+    let action = program.app(action, world);
+    let error = program
+        .reduce_node_whnf(action, FORCE_REDUCTION_LIMIT)
+        .unwrap_err();
+    assert_eq!(
+        raised_code(&program, error),
+        crate::runtime::RTS_EXN_DESERIALIZE
+    );
+}
+
 fn alloc_read_bfile(program: &mut Program, bytes: Vec<u8>) -> i64 {
     program
         .alloc_bfile(BFile {

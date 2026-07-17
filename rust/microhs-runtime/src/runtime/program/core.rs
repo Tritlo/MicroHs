@@ -3,6 +3,7 @@ use super::*;
 
 impl Program {
     pub(crate) fn new(nodes: Vec<Node>, root: NodeId, labels: HashMap<usize, NodeId>) -> Self {
+        let boot_time_micro = current_time_micro();
         #[cfg(target_os = "wasi")]
         let default_gc_node_interval = WASI_GC_NODE_INTERVAL;
         #[cfg(not(target_os = "wasi"))]
@@ -31,10 +32,10 @@ impl Program {
             })
             .collect();
         for (index, node) in nodes.iter().enumerate() {
-            if let Some(value) = node.int_value() {
-                if let Some(slot) = small_int_index(value) {
-                    small_ints[slot].get_or_insert(NodeId::from_index(index));
-                }
+            if let Some(value) = node.int_value()
+                && let Some(slot) = small_int_index(value)
+            {
+                small_ints[slot].get_or_insert(NodeId::from_index(index));
             }
         }
         Self {
@@ -84,6 +85,7 @@ impl Program {
             program_args: Vec::new(),
             executable_path: None,
             arg_ref_array: None,
+            boot_time_micro,
             errno_value: 0,
             errno_ptr: None,
             masking_state: 0,

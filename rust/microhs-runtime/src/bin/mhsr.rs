@@ -21,8 +21,10 @@ use std::process::ExitCode;
 use microhs_runtime::{EvalError, Program, parse_program};
 
 /// The compiler comb, baked in at build time like the C `bin/mhs` embeds its own.
-static COMB: &[u8] =
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../generated/mhs.comb"));
+static COMB: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../generated/mhs.comb"
+));
 
 fn main() -> ExitCode {
     // argv[0] is deliberately "mhs" so getProgName and the compiler's diagnostic

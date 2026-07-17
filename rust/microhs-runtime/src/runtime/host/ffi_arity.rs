@@ -11,6 +11,7 @@ pub(in crate::runtime) fn ffi_arity(name: &str) -> Option<usize> {
     Some(match name {
         "GETRAW"
         | "GETTIMEMICRO"
+        | "GETBOOTTIMEMICRO"
         | "islinux"
         | "ismacos"
         | "iswindows"

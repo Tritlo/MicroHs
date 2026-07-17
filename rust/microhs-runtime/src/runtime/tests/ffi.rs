@@ -38,6 +38,15 @@ fn reduces_builtin_ffi_calls() {
 }
 
 #[test]
+fn returns_program_boot_time() {
+    let mut program = parse_program(b"v8.4\n0\nIO.performIO ^GETBOOTTIMEMICRO @ }").unwrap();
+    let boot_time = program.boot_time_micro;
+    let (root, _) = program.reduce_whnf(100).unwrap();
+    let root = program.resolve(root).unwrap();
+    assert!(matches!(program.node_for_debug(root), Node::Int(n) if n == boot_time));
+}
+
+#[test]
 fn lz77c_ffi_compresses_to_guest_buffer() {
     let mut program = parse_program(b"v8.4\n0\nI }\n").unwrap();
     let input = b"AAAAAAAAAAAAAAAAzzzzzzzzzzzzzzzz";

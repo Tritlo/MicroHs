@@ -248,6 +248,8 @@ impl Program {
         Ok((extra <= available_extra).then_some(extra))
     }
 
+    // Explicit indexing benchmarks faster when the inline spine spills.
+    #[allow(clippy::needless_range_loop)]
     pub(in crate::runtime) fn spine(&mut self, root: NodeId) -> Result<Spine, EvalError> {
         let mut node = self.resolve_profiled(root)?;
         let mut inline_args = [const { MaybeUninit::uninit() }; INLINE_SPINE];

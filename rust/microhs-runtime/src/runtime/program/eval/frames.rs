@@ -654,6 +654,8 @@ impl Program {
         result
     }
 
+    // Nested readiness checks benchmark faster in this reducer hot loop.
+    #[allow(clippy::collapsible_if)]
     pub(in crate::runtime) fn reduce_whnf_from_stack(
         &mut self,
         mut current: NodeId,

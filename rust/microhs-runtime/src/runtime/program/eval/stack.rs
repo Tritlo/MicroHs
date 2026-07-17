@@ -4,6 +4,8 @@ use super::*;
 impl Program {
     /// Run the hot explicit-stack reducer until it spends `budget` reductions,
     /// reaches WHNF, or delegates to the fallback runtime path.
+    // Nested readiness checks benchmark faster in this reducer hot loop.
+    #[allow(clippy::collapsible_if)]
     pub(in crate::runtime) fn stack_eval_step(
         &mut self,
         mut head: NodeId,
