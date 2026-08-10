@@ -12,7 +12,7 @@ pub(in crate::runtime) fn open_fd_path_bytes(path: &[u8], flags: i32, mode: i64)
         Err(_) => return HostIntResult::err(errno_i32("EINVAL")),
     };
     // SAFETY: path is NUL-terminated and flags/mode are plain C values.
-    let fd = unsafe { libc::open(path.as_ptr(), flags, mode) };
+    let fd = unsafe { libc::open(path.as_ptr(), flags, mode as libc::c_uint) };
     if fd < 0 {
         HostIntResult::err(last_errno())
     } else {
