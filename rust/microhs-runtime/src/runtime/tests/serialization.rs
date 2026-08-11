@@ -44,7 +44,7 @@ fn serializes_bigints_with_c_wire_format() {
 
 #[test]
 fn serializes_shared_apps_with_labels() {
-    let program = parse_program(b"v8.4\n1\nK #1 @ :0 _0 @ }\n").unwrap();
+    let program = parse_program(b"v8.4\n1\nP #1 @ :0 _0 @ }\n").unwrap();
     let serialized = program.serialize_program(program.root()).unwrap();
     assert!(serialized.starts_with(b"v8.4\n1\n"), "{serialized:?}");
     assert!(
@@ -191,7 +191,8 @@ fn deserialize_with_tail(input: &[u8], tail_len: usize) -> Result<(Program, Vec<
 
 fn assert_stream_matches_slice(input: &[u8]) {
     let sliced = parse_program(input).unwrap();
-    let (streamed, _) = deserialize_with_tail(input, 0).unwrap();
+    let (mut streamed, _) = deserialize_with_tail(input, 0).unwrap();
+    streamed.collect_garbage_after_parse();
     assert_eq!(
         streamed.serialize_program(streamed.root()).unwrap(),
         sliced.serialize_program(sliced.root()).unwrap(),

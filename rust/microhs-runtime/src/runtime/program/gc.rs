@@ -3,6 +3,11 @@ use super::*;
 
 const GC_EVENTS_LIMIT: usize = 1024;
 
+enum GcRedRewrite {
+    Indir(NodeId),
+    Prim(Prim),
+}
+
 impl Program {
     pub fn gc_stats(&self) -> GcStats {
         GcStats {
@@ -286,9 +291,167 @@ impl Program {
         target
     }
 
+    fn gc_red_resolved_id(&self, id: NodeId) -> Option<NodeId> {
+        let mut current = id;
+        for _ in 0..self.nodes.len() {
+            let cell = self.nodes.get(current.index())?;
+            match cell.tag() {
+                CellTag::Indir => current = cell.option_id_word1()?,
+                CellTag::Free => return None,
+                _ => return Some(current),
+            }
+        }
+        None
+    }
+
+    fn gc_red_prim(&self, id: NodeId) -> Option<Prim> {
+        let id = self.gc_red_resolved_id(id)?;
+        self.nodes.get(id.index())?.prim()
+    }
+
+    fn gc_red_app_fields(&self, id: NodeId) -> Option<(NodeId, NodeId)> {
+        let id = self.gc_red_resolved_id(id)?;
+        self.nodes.get(id.index())?.app_fields()
+    }
+
+    fn gc_red_flipped_prim(prim: Prim) -> Option<Prim> {
+        match prim {
+            Prim::Known(KnownPrim::K) => Some(Prim::Known(KnownPrim::A)),
+            Prim::Known(KnownPrim::A) => Some(Prim::Known(KnownPrim::K)),
+            Prim::Runtime(runtime) => {
+                let flipped = match runtime.name() {
+                    "+" => "+",
+                    "-" => "subtract",
+                    "*" => "*",
+                    "u+" => "u+",
+                    "u-" => "usubtract",
+                    "u*" => "u*",
+                    "subtract" => "-",
+                    "usubtract" => "u-",
+                    "and" => "and",
+                    "or" => "or",
+                    "xor" => "xor",
+                    "d+" => "d+",
+                    "d*" => "d*",
+                    "d==" => "d==",
+                    "d/=" => "d/=",
+                    "d<" => "d>",
+                    "d<=" => "d>=",
+                    "d>" => "d<",
+                    "d>=" => "d<=",
+                    "f+" => "f+",
+                    "f*" => "f*",
+                    "f==" => "f==",
+                    "f/=" => "f/=",
+                    "f<" => "f>",
+                    "f<=" => "f>=",
+                    "f>" => "f<",
+                    "f>=" => "f<=",
+                    "bs==" => "bs==",
+                    "bs/=" => "bs/=",
+                    "bs<" => "bs>",
+                    "bs<=" => "bs>=",
+                    "bs>" => "bs<",
+                    "bs>=" => "bs<=",
+                    "==" => "==",
+                    "/=" => "/=",
+                    "<" => ">",
+                    "u<" => "u>",
+                    "u<=" => "u>=",
+                    "u>" => "u<",
+                    "u>=" => "u<=",
+                    "<=" => ">=",
+                    ">" => "<",
+                    ">=" => "<=",
+                    "I+" => "I+",
+                    "I-" => "Isubtract",
+                    "I*" => "I*",
+                    "Iu+" => "Iu+",
+                    "Iu-" => "Iusubtract",
+                    "Iu*" => "Iu*",
+                    "Isubtract" => "I-",
+                    "Iusubtract" => "Iu-",
+                    "Iand" => "Iand",
+                    "Ior" => "Ior",
+                    "Ixor" => "Ixor",
+                    "I==" => "I==",
+                    "I/=" => "I/=",
+                    "I<" => "I>",
+                    "Iu<" => "Iu>",
+                    "Iu<=" => "Iu>=",
+                    "Iu>" => "Iu<",
+                    "Iu>=" => "Iu<=",
+                    "I<=" => "I>=",
+                    "I>" => "I<",
+                    "I>=" => "I<=",
+                    _ => return None,
+                };
+                Prim::from_name(flipped)
+            }
+            _ => None,
+        }
+    }
+
+    fn gc_red_rewrite(&self, fun: NodeId, arg: NodeId) -> Option<GcRedRewrite> {
+        use KnownPrim::*;
+
+        let funt = self.gc_red_prim(fun);
+        let argt = self.gc_red_prim(arg);
+        let fun_app = self.gc_red_app_fields(fun);
+        let funfunt = fun_app.and_then(|(fun_fun, _)| self.gc_red_prim(fun_fun));
+        let arg_app = self.gc_red_app_fields(arg);
+        let arg_fun_t = arg_app.and_then(|(arg_fun, _)| self.gc_red_prim(arg_fun));
+
+        if funfunt == Some(Prim::Known(A)) {
+            return Some(GcRedRewrite::Indir(arg));
+        }
+        if funfunt == Some(Prim::Known(K)) {
+            return Some(GcRedRewrite::Indir(fun_app?.1));
+        }
+        if funt == Some(Prim::Known(I)) {
+            return Some(GcRedRewrite::Indir(arg));
+        }
+        if funt == Some(Prim::Known(CPrime)) && argt == Some(Prim::Known(I)) {
+            return Some(GcRedRewrite::Prim(Prim::Known(C)));
+        }
+        if funt == Some(Prim::Known(CPrimeB))
+            && let Some((arg_fun, arg_arg)) = arg_app
+        {
+            let arg_is_p = self.gc_red_prim(arg_arg) == Some(Prim::Known(P));
+            let arg_fun_is_bc = self
+                .gc_red_app_fields(arg_fun)
+                .map(|(bc_fun, bc_arg)| {
+                    self.gc_red_prim(bc_fun) == Some(Prim::Known(B))
+                        && self.gc_red_prim(bc_arg) == Some(Prim::Known(C))
+                })
+                .unwrap_or(false);
+            if arg_is_p && arg_fun_is_bc {
+                return Some(GcRedRewrite::Prim(Prim::Known(C)));
+            }
+        }
+        if funt == Some(Prim::Known(B)) && argt == Some(Prim::Known(I)) {
+            return Some(GcRedRewrite::Prim(Prim::Known(I)));
+        }
+        if funfunt == Some(Prim::Known(B)) && argt == Some(Prim::Known(I)) {
+            return Some(GcRedRewrite::Indir(fun_app?.1));
+        }
+        if funfunt == Some(Prim::Known(CPrimeB)) && argt == Some(Prim::Known(I)) {
+            return Some(GcRedRewrite::Indir(fun_app?.1));
+        }
+        if funt == Some(Prim::Known(C)) && arg_fun_t == Some(Prim::Known(C)) {
+            return Some(GcRedRewrite::Indir(arg_app?.1));
+        }
+        if funt == Some(Prim::Known(C))
+            && let Some(flipped) = argt.and_then(Self::gc_red_flipped_prim)
+        {
+            return Some(GcRedRewrite::Prim(flipped));
+        }
+        None
+    }
+
     // Nested optional-finalizer checks keep the measured GC loop shape.
     #[allow(clippy::collapsible_if)]
-    pub(in crate::runtime) fn mark_reachable(
+    pub(in crate::runtime) fn mark_reachable<const REDUCE_APPS: bool>(
         &mut self,
         marked: &mut [bool],
         work: &mut Vec<NodeId>,
@@ -308,8 +471,27 @@ impl Program {
             if tag == CellTag::App.bits() {
                 let fun = cell.id_payload();
                 let arg = cell.id_word1();
-                let fun = self.mark_canonical_child(marked, work, fun);
-                let arg = self.mark_canonical_child(marked, work, arg);
+                let fun = self.canonical_gc_target(fun).unwrap_or(fun);
+                let arg = self.canonical_gc_target(arg).unwrap_or(arg);
+                if REDUCE_APPS {
+                    if let Some(rewrite) = self.gc_red_rewrite(fun, arg) {
+                        match rewrite {
+                            GcRedRewrite::Indir(target) => {
+                                let target = self.mark_canonical_child(marked, work, target);
+                                self.set_app_cell_at(id.index(), Cell::indir_trusted(target));
+                            }
+                            GcRedRewrite::Prim(Prim::Known(known)) => {
+                                self.set_app_cell_at(id.index(), Cell::known_prim_trusted(known))
+                            }
+                            GcRedRewrite::Prim(Prim::Runtime(runtime)) => {
+                                self.set_app_cell_at(id.index(), Cell::runtime_prim(runtime))
+                            }
+                        }
+                        continue;
+                    }
+                }
+                Self::mark_node_id(marked, work, fun);
+                Self::mark_node_id(marked, work, arg);
                 if fun != cell.id_payload() || arg != cell.id_word1() {
                     self.set_app_cell_at(id.index(), Cell::app_trusted(fun, arg));
                 }
@@ -361,7 +543,7 @@ impl Program {
 
     // Nested mark checks keep the measured weak-sweep loop shape.
     #[allow(clippy::collapsible_if)]
-    pub(in crate::runtime) fn sweep_weaks_after_mark(
+    pub(in crate::runtime) fn sweep_weaks_after_mark<const REDUCE_APPS: bool>(
         &mut self,
         marked: &mut [bool],
         work: &mut Vec<NodeId>,
@@ -434,7 +616,7 @@ impl Program {
             if !added_marks {
                 break;
             }
-            self.mark_reachable(marked, work, foreign_finalizer_marked);
+            self.mark_reachable::<REDUCE_APPS>(marked, work, foreign_finalizer_marked);
         }
 
         let mut finalizers = Vec::new();
@@ -452,7 +634,7 @@ impl Program {
             }
         }
         if !work.is_empty() {
-            self.mark_reachable(marked, work, foreign_finalizer_marked);
+            self.mark_reachable::<REDUCE_APPS>(marked, work, foreign_finalizer_marked);
         }
         self.weak_nodes = weak_nodes;
         finalizers
@@ -489,11 +671,7 @@ impl Program {
         Ok(())
     }
 
-    /// Run one non-moving mark-sweep collection between evaluator steps.
-    ///
-    /// The caller passes the active reducer roots because they are not all
-    /// stored on `Program` while a reduction slice is running.
-    pub(in crate::runtime) fn collect_garbage_between_steps(
+    pub(in crate::runtime) fn collect_garbage<const REDUCE_APPS: bool>(
         &mut self,
         current_root: NodeId,
         eval_spine: &EvalSpine,
@@ -523,9 +701,12 @@ impl Program {
             scratch_apps,
             machine_stack,
         );
-        self.mark_reachable(&mut marked, &mut work, &mut foreign_finalizer_marked);
-        let weak_finalizers =
-            self.sweep_weaks_after_mark(&mut marked, &mut work, &mut foreign_finalizer_marked);
+        self.mark_reachable::<REDUCE_APPS>(&mut marked, &mut work, &mut foreign_finalizer_marked);
+        let weak_finalizers = self.sweep_weaks_after_mark::<REDUCE_APPS>(
+            &mut marked,
+            &mut work,
+            &mut foreign_finalizer_marked,
+        );
         #[cfg(feature = "gc-phase-profile")]
         let mark_nanos = mark_started.elapsed().as_nanos();
         work.clear();
@@ -592,6 +773,37 @@ impl Program {
         // observed dead by `deRefWeak` runs its finalizer only afterwards.
         self.pending_weak_finalizers.extend(weak_finalizers);
         Ok(freed)
+    }
+
+    /// Run one non-moving mark-sweep collection between evaluator steps.
+    ///
+    /// The caller passes the active reducer roots because they are not all
+    /// stored on `Program` while a reduction slice is running.
+    pub(in crate::runtime) fn collect_garbage_between_steps(
+        &mut self,
+        current_root: NodeId,
+        eval_spine: &EvalSpine,
+        scratch_args: &[NodeId],
+        scratch_apps: &[NodeId],
+        machine_stack: Option<&EvalStack>,
+    ) -> Result<usize, EvalError> {
+        self.collect_garbage::<false>(
+            current_root,
+            eval_spine,
+            scratch_args,
+            scratch_apps,
+            machine_stack,
+        )
+    }
+
+    /// Match the C runtime's two post-parse, allocation-free GCRED passes.
+    pub(crate) fn collect_garbage_after_parse(&mut self) {
+        let root = self.root;
+        let eval_spine = EvalSpine::default();
+        for _ in 0..2 {
+            self.collect_garbage::<true>(root, &eval_spine, &[], &[], None)
+                .expect("a freshly parsed program has no fallible GC finalizers");
+        }
     }
 
     /// Run and clear any finalizers queued by dead weak pointers. Invoked at

@@ -32,7 +32,7 @@ fn reduces_partial_arity_specializations() {
     assert_eq!(whnf(b"v8.4\n0\nR #1 @ #2 @ }"), "((C 2) 1)");
     assert_eq!(whnf(b"v8.4\n0\nK2 #1 @ #2 @ }"), "(K 1)");
     assert_eq!(whnf(b"v8.4\n0\nK3 #1 @ #2 @ #3 @ }"), "(K 1)");
-    assert_eq!(whnf(b"v8.4\n0\nC'B K @ I @ #9 @ }"), "((B (K 9)) I)");
+    assert_eq!(whnf(b"v8.4\n0\nC'B K @ A @ #9 @ }"), "((B (K 9)) A)");
 }
 
 #[test]

@@ -629,7 +629,9 @@ where
         self.parse_header()?;
         let root = self.parse_expr()?;
         self.probe_js_exports_trailer()?;
-        self.finish_program(root)
+        let mut program = self.finish_program(root)?;
+        program.collect_garbage_after_parse();
+        Ok(program)
     }
 
     fn probe_js_exports_trailer(&mut self) -> Result<(), S::Error> {
