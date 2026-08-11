@@ -533,6 +533,7 @@ fn copy_host_bytes(ptr: *const std::os::raw::c_char, len: usize) -> Result<Vec<u
     Ok(unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) }.to_vec())
 }
 
+#[link(wasm_import_module = "env")]
 unsafe extern "C" {
     fn mhs_js_arg_int(index: i32) -> i32;
     fn mhs_js_arg_uint(index: i32) -> u32;

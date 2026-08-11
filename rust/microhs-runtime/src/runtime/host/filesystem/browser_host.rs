@@ -2,6 +2,7 @@
 use super::*;
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+#[link(wasm_import_module = "env")]
 unsafe extern "C" {
     pub(in crate::runtime) fn mhs_host_result_copy(dst: *mut u8, len: usize) -> usize;
     pub(in crate::runtime) fn mhs_host_getenv(name_ptr: *const u8, name_len: usize) -> isize;

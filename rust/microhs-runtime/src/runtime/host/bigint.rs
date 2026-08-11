@@ -394,7 +394,7 @@ impl MpzValue {
             for digit in self.digits.iter().rev() {
                 value = value * base + u128::from(*digit);
             }
-            return u128::BITS as usize - value.leading_zeros() as usize;
+            return value.bit_width() as usize;
         }
 
         let lower_limbs = self.digits.len() - EXACT_LIMBS;

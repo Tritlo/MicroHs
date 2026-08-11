@@ -398,6 +398,7 @@ std::cfg_select! {
             unsafe { mhs_host_poll(steps_so_far) != 0 }
         }
 
+        #[link(wasm_import_module = "env")]
         unsafe extern "C" {
             fn mhs_host_poll(steps_so_far: u64) -> i32;
         }

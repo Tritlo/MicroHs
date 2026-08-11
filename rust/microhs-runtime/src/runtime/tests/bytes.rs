@@ -30,10 +30,7 @@ fn reduces_bytestring_primitives() {
     assert_eq!(whnf(b"v8.4\n0\nfromUTF8 $1 \xc3 @ }"), "K");
 
     let mut program = parse_program(b"v8.4\n0\nfromUTF8 $2 \xc1\x81 @ }").unwrap();
-    assert!(matches!(
-        program.reduce_whnf(100),
-        Err(EvalError::InvalidByteString)
-    ));
+    assert_matches!(program.reduce_whnf(100), Err(EvalError::InvalidByteString));
 }
 
 #[test]

@@ -200,6 +200,7 @@ unsafe fn copy_host_bytes(
     Ok(unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) }.to_vec())
 }
 
+#[link(wasm_import_module = "env")]
 unsafe extern "C" {
     fn mhs_js_debug(ptr: *const u8);
     fn mhs_js_eval_run(ptr: *const u8);

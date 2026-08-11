@@ -1,4 +1,6 @@
 //! Runtime parity and regression tests.
+use std::assert_matches;
+
 #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 use crate::runtime::native_fopen_bfile;
 use crate::runtime::{
@@ -41,10 +43,7 @@ fn deserialize_memory(program: &mut Program, bytes: Vec<u8>) -> (NodeId, i64) {
     let (left, returned_world) = program.cell(pair).app_fields().unwrap();
     assert_eq!(returned_world, world);
     let (head, value) = program.cell(left).app_fields().unwrap();
-    assert!(matches!(
-        program.cell(head).prim(),
-        Some(Prim::Known(KnownPrim::P))
-    ));
+    assert_matches!(program.cell(head).prim(), Some(Prim::Known(KnownPrim::P)));
     (value, ptr)
 }
 

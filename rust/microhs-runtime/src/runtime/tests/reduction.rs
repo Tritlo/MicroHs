@@ -59,14 +59,14 @@ fn reduces_strict_alias_and_probe_primitives() {
 
 #[test]
 fn rejects_unknown_primitives() {
-    assert!(matches!(
+    assert_matches!(
         parse_program(b"v8.4\n0\nnot-a-prim }"),
         Err(ParseError::UnknownPrim(name)) if name == "not-a-prim"
-    ));
+    );
 
     let mut unsupported = parse_program(b"v8.4\n0\nIO.waitrdfd #1 @ }").unwrap();
-    assert!(matches!(
+    assert_matches!(
         unsupported.reduce_whnf(10),
         Err(EvalError::UnknownPrim(name)) if name == "IO.waitrdfd"
-    ));
+    );
 }

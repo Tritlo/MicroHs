@@ -12,6 +12,15 @@ merged_profile="$profile_dir/merged.profdata"
 gc_interval=${MHS_GC_NODE_INTERVAL:-33554432}
 train_timeout=${MHS_PGO_TRAIN_TIMEOUT:-900s}
 
+timeout_command=()
+if command -v timeout >/dev/null 2>&1; then
+  timeout_command=(timeout "$train_timeout")
+elif command -v gtimeout >/dev/null 2>&1; then
+  timeout_command=(gtimeout "$train_timeout")
+else
+  echo "warning: timeout command not found; PGO training will run without a deadline" >&2
+fi
+
 host=$(rustc -vV | awk '/^host:/ { print $2 }')
 sysroot=$(rustc --print sysroot)
 llvm_profdata=${LLVM_PROFDATA:-"$sysroot/lib/rustlib/$host/bin/llvm-profdata"}
@@ -35,7 +44,7 @@ env CARGO_TARGET_DIR="$profile_dir/gen" \
 
 env LLVM_PROFILE_FILE="$raw_dir/mhs-%p-%m.profraw" \
   MHS_GC_NODE_INTERVAL="$gc_interval" \
-  timeout "$train_timeout" \
+  "${timeout_command[@]}" \
   "$profile_dir/gen/release/mhs-rust-bench" \
   --input "$input" --mode main --warmup-iters 0 --iters 1 -- \
   "$repo_root/bin/mhs" -i -imhs -isrc -ilib MicroHs.Main -o"$profile_dir/train.comb"

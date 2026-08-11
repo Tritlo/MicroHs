@@ -6,10 +6,7 @@ fn reduces_rnf_and_exception_primitives() {
     assert_eq!(whnf(b"v8.4\n0\nrnf #1 @ raise #7 @ @ }"), "I");
 
     let mut program = parse_program(b"v8.4\n0\nraise #7 @ }").unwrap();
-    assert!(matches!(
-        program.reduce_whnf(100),
-        Err(EvalError::Raised(_))
-    ));
+    assert_matches!(program.reduce_whnf(100), Err(EvalError::Raised(_)));
 
     assert_eq!(
         whnf(b"v8.4\n0\nIO.performIO catch IO.return #5 @ @ K IO.return #42 @ @ @ @ }"),
@@ -39,10 +36,7 @@ fn reduces_rnf_and_exception_primitives() {
         );
 
     let mut program = parse_program(b"v8.4\n0\nshl #1 @ #64 @ }").unwrap();
-    assert!(matches!(
-        program.reduce_whnf(100),
-        Err(EvalError::InvalidShift(64))
-    ));
+    assert_matches!(program.reduce_whnf(100), Err(EvalError::InvalidShift(64)));
 }
 
 #[test]

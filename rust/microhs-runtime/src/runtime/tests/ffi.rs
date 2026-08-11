@@ -23,10 +23,10 @@ fn reduces_builtin_ffi_calls() {
         );
 
     let mut program = parse_program(b"v8.4\n0\nIO.performIO ^does_not_exist @ }").unwrap();
-    assert!(matches!(
+    assert_matches!(
         program.reduce_whnf(100),
         Err(EvalError::UnknownFfi(name)) if name == "does_not_exist"
-    ));
+    );
 
     let mut program = parse_program(b"v8.4\n0\nIO.performIO ^GETTIMEMICRO @ }").unwrap();
     let (root, _) = program.reduce_whnf(100).unwrap();
@@ -43,7 +43,7 @@ fn returns_program_boot_time() {
     let boot_time = program.boot_time_micro;
     let (root, _) = program.reduce_whnf(100).unwrap();
     let root = program.resolve(root).unwrap();
-    assert!(matches!(program.node_for_debug(root), Node::Int(n) if n == boot_time));
+    assert_matches!(program.node_for_debug(root), Node::Int(n) if n == boot_time);
 }
 
 #[test]
