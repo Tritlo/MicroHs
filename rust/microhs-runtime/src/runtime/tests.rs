@@ -57,7 +57,6 @@ fn packed_cell_size_is_eight_bytes() {
 #[test]
 fn wide_cell_size_cap_and_large_app_ids() {
     assert_eq!(cell_size_bytes(), 16);
-    assert!(CELL_NONE_ID > (1_u64 << 30));
     assert_eq!(CELL_NONE_ID, u64::from(u32::MAX));
 
     let fun = NodeId((1_u32 << 30) + 17);

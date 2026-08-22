@@ -9,18 +9,24 @@ pub(in crate::runtime) fn host_js_debug(bytes: &[u8]) -> Result<(), EvalError> {
     Ok(())
 }
 
-pub(in crate::runtime) fn host_js_eval_run(bytes: &[u8]) -> Result<(), EvalError> {
+pub(in crate::runtime) fn host_js_eval_run(
+    program_handle: u32,
+    bytes: &[u8],
+) -> Result<(), EvalError> {
     let bytes = nul_terminated(bytes)?;
     unsafe {
-        mhs_js_eval_run(bytes.as_ptr());
+        mhs_js_eval_run(program_handle, bytes.as_ptr());
     }
     Ok(())
 }
 
-pub(in crate::runtime) fn host_js_eval_call(bytes: &[u8]) -> Result<Vec<u8>, EvalError> {
+pub(in crate::runtime) fn host_js_eval_call(
+    program_handle: u32,
+    bytes: &[u8],
+) -> Result<Vec<u8>, EvalError> {
     let bytes = nul_terminated(bytes)?;
     unsafe {
-        let ptr = mhs_js_eval_call(bytes.as_ptr());
+        let ptr = mhs_js_eval_call(program_handle, bytes.as_ptr());
         copy_host_c_string(ptr)
     }
 }
@@ -33,11 +39,12 @@ pub(in crate::runtime) fn host_js_set_haskell_callback(callback: i32) -> Result<
 }
 
 pub(in crate::runtime) fn host_js_call_void(
+    program_handle: u32,
     body: &[u8],
     arity: usize,
     args: &[JsArg],
 ) -> Result<(), EvalError> {
-    let idx = host_js_prepare_call(body, arity, args)?;
+    let idx = host_js_prepare_call(program_handle, body, arity, args)?;
     unsafe {
         mhs_js_call_void(idx);
     }
@@ -45,77 +52,84 @@ pub(in crate::runtime) fn host_js_call_void(
 }
 
 pub(in crate::runtime) fn host_js_call_int(
+    program_handle: u32,
     body: &[u8],
     arity: usize,
     args: &[JsArg],
 ) -> Result<i32, EvalError> {
-    let idx = host_js_prepare_call(body, arity, args)?;
+    let idx = host_js_prepare_call(program_handle, body, arity, args)?;
     let result = unsafe { mhs_js_call_int(idx) };
     host_js_check_error()?;
     Ok(result)
 }
 
 pub(in crate::runtime) fn host_js_call_uint(
+    program_handle: u32,
     body: &[u8],
     arity: usize,
     args: &[JsArg],
 ) -> Result<u32, EvalError> {
-    let idx = host_js_prepare_call(body, arity, args)?;
+    let idx = host_js_prepare_call(program_handle, body, arity, args)?;
     let result = unsafe { mhs_js_call_uint(idx) };
     host_js_check_error()?;
     Ok(result)
 }
 
 pub(in crate::runtime) fn host_js_call_double(
+    program_handle: u32,
     body: &[u8],
     arity: usize,
     args: &[JsArg],
 ) -> Result<f64, EvalError> {
-    let idx = host_js_prepare_call(body, arity, args)?;
+    let idx = host_js_prepare_call(program_handle, body, arity, args)?;
     let result = unsafe { mhs_js_call_dbl(idx) };
     host_js_check_error()?;
     Ok(result)
 }
 
 pub(in crate::runtime) fn host_js_call_ptr(
+    program_handle: u32,
     body: &[u8],
     arity: usize,
     args: &[JsArg],
 ) -> Result<i64, EvalError> {
-    let idx = host_js_prepare_call(body, arity, args)?;
+    let idx = host_js_prepare_call(program_handle, body, arity, args)?;
     let result = unsafe { mhs_js_call_ptr(idx) };
     host_js_check_error()?;
     Ok(result)
 }
 
 pub(in crate::runtime) fn host_js_call_object(
+    program_handle: u32,
     body: &[u8],
     arity: usize,
     args: &[JsArg],
 ) -> Result<u32, EvalError> {
-    let idx = host_js_prepare_call(body, arity, args)?;
+    let idx = host_js_prepare_call(program_handle, body, arity, args)?;
     let result = unsafe { mhs_js_call_obj(idx) };
     host_js_check_error()?;
     Ok(result)
 }
 
 pub(in crate::runtime) fn host_js_call_bool(
+    program_handle: u32,
     body: &[u8],
     arity: usize,
     args: &[JsArg],
 ) -> Result<bool, EvalError> {
-    let idx = host_js_prepare_call(body, arity, args)?;
+    let idx = host_js_prepare_call(program_handle, body, arity, args)?;
     let result = unsafe { mhs_js_call_bool(idx) != 0 };
     host_js_check_error()?;
     Ok(result)
 }
 
 pub(in crate::runtime) fn host_js_call_string(
+    program_handle: u32,
     body: &[u8],
     arity: usize,
     args: &[JsArg],
 ) -> Result<Vec<u8>, EvalError> {
-    let idx = host_js_prepare_call(body, arity, args)?;
+    let idx = host_js_prepare_call(program_handle, body, arity, args)?;
     unsafe {
         let ptr = mhs_js_call_str(idx);
         let len = usize::try_from(mhs_js_slen()).map_err(|_| EvalError::Overflow)?;
@@ -143,12 +157,16 @@ pub(in crate::runtime) fn host_js_obj_free(handle: u32) -> Result<(), EvalError>
     Ok(())
 }
 
-fn host_js_prepare_call(body: &[u8], arity: usize, args: &[JsArg]) -> Result<i32, EvalError> {
+fn host_js_prepare_call(
+    program_handle: u32,
+    body: &[u8],
+    arity: usize,
+    args: &[JsArg],
+) -> Result<i32, EvalError> {
     let body = nul_terminated(body)?;
     let arity = i32::try_from(arity).map_err(|_| EvalError::Overflow)?;
     unsafe {
-        mhs_js_setup();
-        let idx = mhs_js_register(body.as_ptr(), arity);
+        let idx = mhs_js_register(program_handle, body.as_ptr(), arity);
         mhs_js_argreset();
         for arg in args {
             match arg {
@@ -227,11 +245,10 @@ unsafe fn free_host_bytes(ptr: *const std::os::raw::c_char, len: usize) {
 #[link(wasm_import_module = "env")]
 unsafe extern "C" {
     fn mhs_js_debug(ptr: *const u8);
-    fn mhs_js_eval_run(ptr: *const u8);
-    fn mhs_js_eval_call(ptr: *const u8) -> *const std::os::raw::c_char;
+    fn mhs_js_eval_run(program_handle: u32, ptr: *const u8);
+    fn mhs_js_eval_call(program_handle: u32, ptr: *const u8) -> *const std::os::raw::c_char;
     fn mhs_js_set_haskellCallback(callback: i32);
-    fn mhs_js_setup();
-    fn mhs_js_register(body: *const u8, arity: i32) -> i32;
+    fn mhs_js_register(program_handle: u32, body: *const u8, arity: i32) -> i32;
     fn mhs_js_argreset();
     fn mhs_js_push_int(value: i32);
     fn mhs_js_push_uint(value: u32);

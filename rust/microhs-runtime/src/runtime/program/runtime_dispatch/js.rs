@@ -32,23 +32,40 @@ impl Program {
             };
             js_args.push(arg);
         }
+        let program_handle = self.js_program_handle.ok_or(EvalError::UnsupportedJsFfi)?;
         let result = match tags[0] {
             b'V' => {
-                host_js_call_void(body, arity, &js_args)?;
+                host_js_call_void(program_handle, body, arity, &js_args)?;
                 Node::prim("I")
             }
-            b'D' => Node::Float64(host_js_call_double(body, arity, &js_args)?),
-            b'F' => Node::Float32(host_js_call_double(body, arity, &js_args)? as f32),
-            b'P' => Node::Ptr(host_js_call_ptr(body, arity, &js_args)?),
-            b'B' => Node::prim(if host_js_call_bool(body, arity, &js_args)? {
-                "A"
-            } else {
-                "K"
-            }),
-            b'S' => Node::bytes(host_js_call_string(body, arity, &js_args)?),
-            b'I' => Node::Int(i64::from(host_js_call_int(body, arity, &js_args)?)),
-            b'U' => Node::Int(i64::from(host_js_call_uint(body, arity, &js_args)?)),
-            b'J' => self.js_object_node(host_js_call_object(body, arity, &js_args)?),
+            b'D' => Node::Float64(host_js_call_double(program_handle, body, arity, &js_args)?),
+            b'F' => {
+                Node::Float32(host_js_call_double(program_handle, body, arity, &js_args)? as f32)
+            }
+            b'P' => Node::Ptr(host_js_call_ptr(program_handle, body, arity, &js_args)?),
+            b'B' => Node::prim(
+                if host_js_call_bool(program_handle, body, arity, &js_args)? {
+                    "A"
+                } else {
+                    "K"
+                },
+            ),
+            b'S' => Node::bytes(host_js_call_string(program_handle, body, arity, &js_args)?),
+            b'I' => Node::Int(i64::from(host_js_call_int(
+                program_handle,
+                body,
+                arity,
+                &js_args,
+            )?)),
+            b'U' => Node::Int(i64::from(host_js_call_uint(
+                program_handle,
+                body,
+                arity,
+                &js_args,
+            )?)),
+            b'J' => {
+                self.js_object_node(host_js_call_object(program_handle, body, arity, &js_args)?)
+            }
             _ => return Err(EvalError::InvalidByteString),
         };
         let result = self.push_node(result);

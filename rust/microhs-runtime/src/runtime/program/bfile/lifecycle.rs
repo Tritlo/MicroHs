@@ -318,6 +318,30 @@ impl Program {
         }
         Ok(())
     }
+
+    /// Release host-owned resources while the browser host bridge is still available.
+    ///
+    /// `Drop` cannot report failures and historically only flushed BFILEs. In particular,
+    /// JavaScript object handles are foreign finalizers, so they must be drained explicitly
+    /// before the wasm program table forgets this Program.
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    pub(crate) fn shutdown(&mut self) -> Result<(), EvalError> {
+        let finalizers = self
+            .foreign_finalizers
+            .iter_mut()
+            .filter_map(Option::take)
+            .collect::<Vec<_>>();
+        self.foreign_finalizer_free.clear();
+        let mut first_error = self.flush_open_bfiles().err();
+        for state in finalizers {
+            if let Some(finalizer) = state.finalizer
+                && let Err(error) = self.run_foreign_finalizer(finalizer, state.arg)
+            {
+                first_error.get_or_insert(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
 }
 
 impl Drop for Program {

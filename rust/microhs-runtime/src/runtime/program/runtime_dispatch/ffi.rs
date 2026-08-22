@@ -36,13 +36,15 @@ impl Program {
             "js_eval_run" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let bytes = self.read_c_string(ptr)?;
-                host_js_eval_run(&bytes)?;
+                let program_handle = self.js_program_handle.ok_or(EvalError::UnsupportedJsFfi)?;
+                host_js_eval_run(program_handle, &bytes)?;
                 Node::prim("I")
             }
             "js_eval_call" => {
                 let ptr = self.eval_pointer_value(args[0])?;
                 let bytes = self.read_c_string(ptr)?;
-                let result = host_js_eval_call(&bytes)?;
+                let program_handle = self.js_program_handle.ok_or(EvalError::UnsupportedJsFfi)?;
+                let result = host_js_eval_call(program_handle, &bytes)?;
                 Node::Ptr(self.alloc_c_string_bytes(&result)?)
             }
             "js_set_haskellCallback" => {
