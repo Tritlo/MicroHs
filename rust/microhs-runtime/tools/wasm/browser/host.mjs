@@ -15,13 +15,18 @@ const ERRNO = {
 
 export async function instantiateMicroHsRuntime(wasm, options = {}) {
   const state = {
-    reg: [],
+    reg: new Map(),
+    regfree: [],
+    programRegs: new Map(),
+    nextReg: 0,
+    livePrograms: new Set(),
+    activeProgramHandles: [],
+    preparedProgramHandle: 0,
     argbuf: [],
     wargs: [],
     obj: [null],
     objfree: [],
-    ptr: new Map(),
-    ptrReverse: new Map(),
+    programPtrs: new Map(),
     nextPtr: 0x100000000,
     err: null,
     slen: 0,
@@ -29,8 +34,10 @@ export async function instantiateMicroHsRuntime(wasm, options = {}) {
     exports: null,
     memory: null,
     hostResult: new Uint8Array(),
+    stringHelpers: null,
     hostFs: makeHostFs(options.host),
     jsExports: {},
+    jsExportsHandle: 0,
   };
   state.intern = (value) => {
     const handle = state.objfree.length ? state.objfree.pop() : state.obj.length;
@@ -46,6 +53,7 @@ export async function instantiateMicroHsRuntime(wasm, options = {}) {
       : await WebAssembly.instantiate(source, imports);
   state.exports = instance.exports;
   state.memory = instance.exports.memory;
+  state.stringHelpers = makeStringHelpers(state);
 
   return {
     instance,
@@ -57,10 +65,19 @@ export async function instantiateMicroHsRuntime(wasm, options = {}) {
       try {
         const handle = state.exports.mhs_rust_program_new(ptr, bytes.length);
         if (handle === 0) {
-          throw new Error("MicroHs program parse failed");
+          const detail = readLastError(state);
+          throw new Error(`MicroHs program parse failed${detail ? `: ${detail}` : ""}`);
         }
-        state.jsExports = makeJsExports(state, handle);
-        return handle;
+        state.livePrograms.add(handle);
+        try {
+          state.jsExports = makeJsExports(state, handle);
+          state.jsExportsHandle = handle;
+          return handle;
+        } catch (error) {
+          state.exports.mhs_rust_program_free(handle);
+          releaseProgram(state, handle);
+          throw error;
+        }
       } finally {
         state.exports.mhs_rust_dealloc(ptr, bytes.length);
       }
@@ -139,17 +156,7 @@ export async function instantiateMicroHsRuntime(wasm, options = {}) {
       return decoder.decode(this.resultBytes());
     },
     lastError() {
-      if (
-        typeof state.exports.mhs_rust_last_error_ptr !== "function" ||
-        typeof state.exports.mhs_rust_last_error_len !== "function"
-      ) {
-        return "";
-      }
-      const len = state.exports.mhs_rust_last_error_len();
-      if (len === 0) {
-        return "";
-      }
-      return readUtf8(state, state.exports.mhs_rust_last_error_ptr(), len);
+      return readLastError(state);
     },
     stats(handle) {
       if (typeof state.exports.mhs_rust_program_stats !== "function") {
@@ -183,7 +190,15 @@ export async function instantiateMicroHsRuntime(wasm, options = {}) {
       state.hostFs.mkdirp(path);
     },
     freeProgram(handle) {
-      state.exports.mhs_rust_program_free(handle);
+      if (!state.livePrograms.has(handle)) return;
+      if (state.exports.mhs_rust_program_free(handle) !== 0) {
+        throw new Error("MicroHs program is active and cannot be freed");
+      }
+      releaseProgram(state, handle);
+      if (state.jsExportsHandle === handle) {
+        state.jsExports = {};
+        state.jsExportsHandle = 0;
+      }
     },
   };
 }
@@ -347,33 +362,58 @@ function makeImports(state, options) {
     mhs_js_debug(ptr) {
       console.log(readCString(state, ptr));
     },
-    mhs_js_eval_run(ptr) {
-      globalThis.eval(readCString(state, ptr));
+    mhs_js_eval_run(programHandle, ptr) {
+      withActiveProgram(state, programHandle, () =>
+        evaluateWithHelpers(state, readCString(state, ptr))
+      );
     },
-    mhs_js_eval_call(ptr) {
-      return writeHostString(state, JSON.stringify(globalThis.eval(readCString(state, ptr))), true);
+    mhs_js_eval_call(programHandle, ptr) {
+      return withActiveProgram(
+        state,
+        programHandle,
+        () =>
+          writeHostString(
+            state,
+            JSON.stringify(evaluateWithHelpers(state, readCString(state, ptr))),
+            true
+          )
+      );
     },
     mhs_js_set_haskellCallback(callback) {
       globalThis._haskellCallback = callback;
     },
-    mhs_js_setup() {
-      installStringHelpers(state);
-    },
-    mhs_js_register(bodyp, arity) {
+    mhs_js_register(programHandle, bodyp, arity) {
+      state.preparedProgramHandle = programHandle;
       const body = readCString(state, bodyp);
+      let programRegs = state.programRegs.get(programHandle);
+      if (programRegs === undefined) {
+        programRegs = new Map();
+        state.programRegs.set(programHandle, programRegs);
+      }
+      const key = `${arity}\0${body}`;
+      const registered = programRegs.get(key);
+      if (registered !== undefined) return registered;
       const names = [];
       for (let idx = 0; idx < arity; idx += 1) names.push(`$${idx}`);
-      names.push(body);
       let fn;
       try {
-        fn = Function.apply(null, names);
+        fn = Function(
+          "helpers",
+          `return function(${names.join(",")}) {\n` +
+            `const { UTF8ToString, lengthBytesUTF8, stringToNewUTF8 } = helpers;\n` +
+            `${body}\n` +
+            `};`
+        )(state.stringHelpers);
       } catch (error) {
         const message = String(error);
         fn = () => {
           throw new Error(message);
         };
       }
-      return state.reg.push(fn) - 1;
+      const idx = state.regfree.length ? state.regfree.pop() : state.nextReg++;
+      state.reg.set(idx, fn);
+      programRegs.set(key, idx);
+      return idx;
     },
     mhs_js_argreset() {
       state.argbuf.length = 0;
@@ -410,7 +450,7 @@ function makeImports(state, options) {
       return callJs(state, idx, 0, (value) => +value);
     },
     mhs_js_call_ptr(idx) {
-      return ptrFromJs(state, callJs(state, idx, 0, (value) => value));
+      return callJs(state, idx, 0n, (value) => ptrFromJs(state, value));
     },
     mhs_js_call_obj(idx) {
       return callJs(state, idx, 0, (value) => state.intern(value));
@@ -419,32 +459,31 @@ function makeImports(state, options) {
       return callJs(state, idx, 0, (value) => (value ? 1 : 0));
     },
     mhs_js_call_str(idx) {
-      try {
-        return writeHostString(state, String(state.reg[idx].apply(null, state.argbuf)), false);
-      } catch (error) {
-        state.err = String(error);
-        return writeHostString(state, "", false);
-      }
+      const value = callJs(state, idx, "", (result) => String(result));
+      return writeHostString(state, value, false);
     },
     mhs_js_call_void(idx) {
       callJs(state, idx, undefined, () => undefined);
     },
     mhs_js_make_wrapper(programHandle, stablePtr, wrapperIndex) {
       const fn = (...args) => {
-        state.wargs.push(args);
-        try {
-          const status = state.exports.mhs_rust_wrapper_invoke(
-            programHandle,
-            stablePtr,
-            wrapperIndex
-          );
-          if (status !== 0) {
-            throw new Error("MicroHs wrapper callback failed");
+        assertLiveProgram(state, programHandle);
+        return withActiveProgram(state, programHandle, () => {
+          state.wargs.push(args);
+          try {
+            const status = state.exports.mhs_rust_wrapper_invoke(
+              programHandle,
+              stablePtr,
+              wrapperIndex
+            );
+            if (status !== 0) {
+              throw new Error("MicroHs wrapper callback failed");
+            }
+            return state.wres;
+          } finally {
+            state.wargs.pop();
           }
-          return state.wres;
-        } finally {
-          state.wargs.pop();
-        }
+        });
       };
       return state.intern(fn);
     },
@@ -537,8 +576,12 @@ function makeImports(state, options) {
 }
 
 function callJs(state, idx, fallback, convert) {
+  const programHandle = state.preparedProgramHandle;
+  state.preparedProgramHandle = 0;
   try {
-    return convert(state.reg[idx].apply(null, state.argbuf));
+    return withActiveProgram(state, programHandle, () =>
+      convert(registeredFunction(state, idx).apply(null, state.argbuf))
+    );
   } catch (error) {
     state.err = String(error);
     return fallback;
@@ -546,32 +589,111 @@ function callJs(state, idx, fallback, convert) {
 }
 
 function makeJsExports(state, handle) {
-  const exports = {};
+  assertLiveProgram(state, handle);
+  const exports = Object.create(null);
   const count = state.exports.mhs_rust_js_export_count(handle);
   for (let idx = 0; idx < count; idx += 1) {
     const namePtr = state.exports.mhs_rust_js_export_name(handle, idx);
     const nameLen = state.exports.mhs_rust_result_len();
     if (namePtr === 0) continue;
     const name = readUtf8(state, namePtr, nameLen);
+    if (Object.prototype.hasOwnProperty.call(exports, name)) {
+      throw new Error(`duplicate MicroHs JavaScript export: ${name}`);
+    }
     exports[name] = (...args) => {
-      state.wargs.push(args);
-      try {
-        const status = state.exports.mhs_rust_js_export_invoke(handle, idx);
-        if (status !== 0) {
-          const message = state.exports.mhs_rust_result_len() ? `: ${readResultText(state)}` : "";
-          throw new Error(`MicroHs JavaScript export failed${message}`);
+      assertLiveProgram(state, handle);
+      return withActiveProgram(state, handle, () => {
+        state.wargs.push(args);
+        try {
+          const status = state.exports.mhs_rust_js_export_invoke(handle, idx);
+          if (status !== 0) {
+            const message = state.exports.mhs_rust_result_len() ? `: ${readResultText(state)}` : "";
+            throw new Error(`MicroHs JavaScript export failed${message}`);
+          }
+          return state.wres;
+        } finally {
+          state.wargs.pop();
         }
-        return state.wres;
-      } finally {
-        state.wargs.pop();
-      }
+      });
     };
   }
   return exports;
 }
 
-function installStringHelpers(state) {
-  globalThis.UTF8ToString = (ptr, maxBytesToRead, ignoreNul) => {
+function registeredFunction(state, idx) {
+  const fn = state.reg.get(idx);
+  if (fn === undefined) throw new Error("MicroHs JavaScript function is no longer registered");
+  return fn;
+}
+
+function readLastError(state) {
+  if (
+    typeof state.exports.mhs_rust_last_error_ptr !== "function" ||
+    typeof state.exports.mhs_rust_last_error_len !== "function"
+  ) {
+    return "";
+  }
+  const len = state.exports.mhs_rust_last_error_len();
+  if (len === 0) return "";
+  return readUtf8(state, state.exports.mhs_rust_last_error_ptr(), len);
+}
+
+function assertLiveProgram(state, handle) {
+  if (!state.livePrograms.has(handle)) {
+    throw new Error("MicroHs program has been freed");
+  }
+}
+
+function withActiveProgram(state, handle, fn) {
+  assertLiveProgram(state, handle);
+  state.activeProgramHandles.push(handle);
+  try {
+    return fn();
+  } finally {
+    state.activeProgramHandles.pop();
+  }
+}
+
+function currentProgramHandle(state) {
+  return (
+    state.activeProgramHandles[state.activeProgramHandles.length - 1] ??
+    state.preparedProgramHandle
+  );
+}
+
+function releaseProgram(state, handle) {
+  state.livePrograms.delete(handle);
+  state.programPtrs.delete(handle);
+  const programRegs = state.programRegs.get(handle);
+  if (programRegs !== undefined) {
+    for (const idx of programRegs.values()) {
+      state.reg.delete(idx);
+      state.regfree.push(idx);
+    }
+    state.programRegs.delete(handle);
+  }
+  if (state.livePrograms.size === 0) {
+    state.reg.clear();
+    state.regfree.length = 0;
+    state.programRegs.clear();
+    state.nextReg = 0;
+    state.obj.length = 1;
+    state.objfree.length = 0;
+    state.programPtrs.clear();
+    state.nextPtr = 0x100000000;
+    state.activeProgramHandles.length = 0;
+    state.preparedProgramHandle = 0;
+    state.argbuf.length = 0;
+    state.wargs.length = 0;
+    state.err = null;
+    state.slen = 0;
+    state.wres = undefined;
+    state.hostResult = new Uint8Array();
+  }
+}
+
+function makeStringHelpers(state) {
+  const UTF8ToString = (ptr, maxBytesToRead, ignoreNul) => {
     try {
       if (maxBytesToRead == null) {
         const len = state.exports.mhs_rust_active_cstring_len(ptrFromJs(state, ptr));
@@ -588,8 +710,8 @@ function installStringHelpers(state) {
       return "";
     }
   };
-  globalThis.lengthBytesUTF8 = (value) => encoder.encode(String(value)).length;
-  globalThis.stringToNewUTF8 = (value) => {
+  const lengthBytesUTF8 = (value) => encoder.encode(String(value)).length;
+  const stringToNewUTF8 = (value) => {
     const bytes = encoder.encode(String(value));
     const out = new Uint8Array(bytes.length + 1);
     out.set(bytes);
@@ -601,6 +723,17 @@ function installStringHelpers(state) {
       state.exports.mhs_rust_dealloc(scratch, out.length);
     }
   };
+  return { UTF8ToString, lengthBytesUTF8, stringToNewUTF8 };
+}
+
+function evaluateWithHelpers(state, source) {
+  const evaluator = Function(
+    "helpers",
+    "source",
+    "const { UTF8ToString, lengthBytesUTF8, stringToNewUTF8 } = helpers; " +
+      "return eval(source);"
+  );
+  return evaluator(state.stringHelpers, source);
 }
 
 function activePointerBytes(state, ptr, len) {
@@ -619,13 +752,20 @@ function activePointerBytes(state, ptr, len) {
 function ptrToJs(state, value) {
   const ptr = BigInt.asIntN(64, BigInt(value));
   if (ptr >= 0n && ptr <= 0xffffffffn) return Number(ptr);
+  const programHandle = currentProgramHandle(state);
+  assertLiveProgram(state, programHandle);
+  let pointers = state.programPtrs.get(programHandle);
+  if (pointers === undefined) {
+    pointers = { values: new Map(), reverse: new Map() };
+    state.programPtrs.set(programHandle, pointers);
+  }
   const key = ptr.toString();
-  const existing = state.ptrReverse.get(key);
+  const existing = pointers.reverse.get(key);
   if (existing !== undefined) return existing;
   const handle = state.nextPtr;
   state.nextPtr += 1;
-  state.ptr.set(handle, ptr);
-  state.ptrReverse.set(key, handle);
+  pointers.values.set(handle, ptr);
+  pointers.reverse.set(key, handle);
   return handle;
 }
 
@@ -633,8 +773,11 @@ function ptrFromJs(state, value) {
   if (typeof value === "bigint") return BigInt.asIntN(64, value);
   const number = Number(value);
   if (!Number.isFinite(number)) return 0n;
-  if (Number.isInteger(number) && state.ptr.has(number)) {
-    return state.ptr.get(number);
+  if (Number.isInteger(number) && number >= 0x100000000) {
+    const programHandle = currentProgramHandle(state);
+    const pointer = state.programPtrs.get(programHandle)?.values.get(number);
+    if (pointer === undefined) throw new Error("MicroHs pointer belongs to another program");
+    return pointer;
   }
   return BigInt.asUintN(32, BigInt(number >>> 0));
 }

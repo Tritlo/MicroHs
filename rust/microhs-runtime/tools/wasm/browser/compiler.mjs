@@ -32,7 +32,7 @@ export async function createCompiler({ wasm, comb, files, onPoll, packages = [] 
   }
 
   let captured = [];
-  const runtime = await instantiateMicroHsRuntime(wasm, {
+  let runtime = await instantiateMicroHsRuntime(wasm, {
     stdout(bytes) {
       captured.push(bytes);
     },
@@ -41,7 +41,7 @@ export async function createCompiler({ wasm, comb, files, onPoll, packages = [] 
     },
     onPoll,
   });
-  const combBytes = toBytes(comb);
+  let combBytes = toBytes(comb);
   const workFiles = new Set();
   let closed = false;
 
@@ -94,10 +94,10 @@ export async function createCompiler({ wasm, comb, files, onPoll, packages = [] 
         const reduceStatus = runtime.reduceMain(handle, REDUCE_LIMIT);
         status = statusName(runtime.reduceMainStatus(), reduceStatus);
         dump = readOptional(runtime, dumpPath);
-        stats = runtime.stats(handle);
         if (status !== "ok") {
           error = runtime.lastError() || runtime.resultText();
         }
+        stats = runtime.stats(handle);
       } catch (err) {
         dump = readOptional(runtime, dumpPath);
         error = runtime.lastError?.() || String(err?.message ?? err);
@@ -171,15 +171,16 @@ export async function createCompiler({ wasm, comb, files, onPoll, packages = [] 
 
         const reduceStatus = runtime.reduceMain(handle, REDUCE_LIMIT);
         status = statusName(runtime.reduceMainStatus(), reduceStatus);
+        if (status !== "ok") {
+          error = runtime.lastError() || runtime.resultText();
+        }
         stats = runtime.stats(handle);
         const artifact = readOptional(runtime, artifactPath);
         if (status === "ok" && artifact) {
           const parsed = JSON.parse(decoder.decode(artifact));
           root = parsed.root;
           defs = parsed.defs;
-        } else if (status !== "ok") {
-          error = runtime.lastError() || runtime.resultText();
-        } else {
+        } else if (status === "ok") {
           status = "error";
           error = "toCombinators: --entry artifact missing";
         }
@@ -195,7 +196,11 @@ export async function createCompiler({ wasm, comb, files, onPoll, packages = [] 
       return { status, root, defs, stderr: decodeCaptured(captured), error, stats };
     },
     close() {
+      if (closed) return;
       cleanupWork(runtime, workFiles);
+      captured = [];
+      combBytes = null;
+      runtime = null;
       closed = true;
     },
   };

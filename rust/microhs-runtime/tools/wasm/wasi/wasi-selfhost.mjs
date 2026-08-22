@@ -75,15 +75,20 @@ const elapsedMs = performance.now() - t0;
 
 const refSha = createHash("sha256").update(combBytes).digest("hex");
 const out = tmp.contents.get("out.comb");
+let outputSha = null;
 console.log("wasi_selfhost:");
 console.log(`  status: ${code === 0 ? "ok" : "error"}`);
 console.log(`  elapsed_ms: ${elapsedMs.toFixed(1)}`);
 console.log(`  exit_code: ${code}`);
 if (out && out.data) {
-  const sha = createHash("sha256").update(out.data).digest("hex");
+  outputSha = createHash("sha256").update(out.data).digest("hex");
   console.log(`  output_bytes: ${out.data.length}`);
-  console.log(`  output_sha256: ${sha}`);
-  console.log(`  byte_match_reference: ${sha === refSha}`);
+  console.log(`  output_sha256: ${outputSha}`);
+  console.log(`  byte_match_reference: ${outputSha === refSha}`);
 } else {
   console.log("  NO OUTPUT (tmp/out.comb missing)");
 }
+
+if (code !== 0) throw new Error(`WASI self-host exited with status ${code}`);
+if (outputSha === null) throw new Error("WASI self-host produced no compiler output");
+if (outputSha !== refSha) throw new Error(`WASI fixed point mismatch: ${outputSha} != ${refSha}`);

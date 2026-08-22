@@ -15,19 +15,44 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../../../../.." && pwd)"
-dist_arg="${1:-${DIST:-$here/dist}}"
+default_dist="$here/dist"
+dist_arg="${1:-${DIST:-$default_dist}}"
 if [[ "$dist_arg" = /* ]]; then
-  dist="$dist_arg"
+  requested_dist="$dist_arg"
 else
-  dist="$repo/$dist_arg"
+  requested_dist="$repo/$dist_arg"
 fi
 
-case "$dist" in
-  ""|"/")
-    echo "refusing unsafe dist path: $dist" >&2
-    exit 1
-    ;;
-esac
+dist_parent_arg="$(dirname "$requested_dist")"
+dist_name="$(basename "$requested_dist")"
+[[ "$dist_name" != "." && "$dist_name" != ".." ]] || {
+  echo "refusing unsafe dist path: $requested_dist" >&2
+  exit 1
+}
+mkdir -p "$dist_parent_arg"
+dist_parent="$(cd "$dist_parent_arg" && pwd -P)"
+dist="$dist_parent/$dist_name"
+user_home="$(cd && pwd -P)"
+
+if [[ "$dist" = "/" || "$dist" = "$repo" || "$dist" = "$here" || "$dist" = "$user_home" ]] ||
+   [[ "$repo/" = "$dist/"* ]]; then
+  echo "refusing unsafe dist path: $dist" >&2
+  exit 1
+fi
+
+owner_marker=".microhs-web-dist"
+if [[ -e "$dist" && "$dist" != "$default_dist" && ! -f "$dist/$owner_marker" ]]; then
+  echo "refusing to replace unowned dist path (missing $owner_marker): $dist" >&2
+  exit 1
+fi
+
+stage="$(mktemp -d "$dist_parent/.microhs-web-dist.XXXXXX")"
+cleanup() {
+  if [[ -n "${stage:-}" && -d "$stage" ]]; then
+    rm -rf -- "$stage"
+  fi
+}
+trap cleanup EXIT
 
 runtime_wasm="$repo/target/wasm32-unknown-unknown/release/microhs_runtime.wasm"
 comb="$repo/generated/mhs.comb"
@@ -52,19 +77,20 @@ RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=--allow-undefined" cargo build \
   exit 1
 }
 
-rm -rf "$dist"
-mkdir -p "$dist/include/lib"
+mkdir -p "$stage/include/lib"
 
-cp "$runtime_wasm" "$dist/microhs_runtime.wasm"
-cp "$here/compiler.mjs" "$dist/compiler.mjs"
-cp "$here/host.mjs" "$dist/host.mjs"
-cp "$comb" "$dist/mhs.comb"
-cp "$basepkg" "$dist/base.pkg"
-cp -a "$repo/lib/." "$dist/include/lib/"
+cp "$runtime_wasm" "$stage/microhs_runtime.wasm"
+cp "$here/compiler.mjs" "$stage/compiler.mjs"
+cp "$here/host.mjs" "$stage/host.mjs"
+cp "$comb" "$stage/mhs.comb"
+cp "$basepkg" "$stage/base.pkg"
+cp "$repo/LICENSE" "$stage/LICENSE"
+cp -a "$repo/lib/." "$stage/include/lib/"
+printf '%s\n' "MicroHs Rust browser distribution" > "$stage/$owner_marker"
 
-echo "shipped base.pkg: $(wc -c < "$dist/base.pkg" | tr -d ' ') bytes"
+echo "shipped base.pkg: $(wc -c < "$stage/base.pkg" | tr -d ' ') bytes"
 
-DIST="$dist" node --input-type=module <<'NODE'
+DIST="$stage" node --input-type=module <<'NODE'
 import { readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -100,7 +126,7 @@ await writeFile(path.join(dist, "manifest.json"), `${JSON.stringify(manifest, nu
 NODE
 
 echo "running dist-only smoke"
-DIST="$dist" node --input-type=module <<'NODE'
+DIST="$stage" node --input-type=module <<'NODE'
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -144,5 +170,13 @@ out = length (take 3 [1, 2, 3, 4, 5])
 }
 NODE
 
+rm -rf -- "$dist"
+mv -- "$stage" "$dist"
+stage=""
+
 echo "dist manifest:"
-find "$dist" -type f -printf '%P\t%s bytes\n' | sort
+while IFS= read -r file; do
+  relative="${file#"$dist"/}"
+  bytes="$(wc -c < "$file" | tr -d ' ')"
+  printf '%s\t%s bytes\n' "$relative" "$bytes"
+done < <(find "$dist" -type f | sort)

@@ -1,5 +1,6 @@
 use std::alloc::{Layout, alloc, dealloc};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 #[cfg(feature = "embedded")]
 use std::mem::size_of;
 
@@ -7,7 +8,11 @@ use crate::runtime::JsValue;
 use crate::{EvalError, Program, parse_program};
 
 thread_local! {
-    static PROGRAMS: RefCell<Vec<Option<Program>>> = const { RefCell::new(Vec::new()) };
+    static PROGRAMS: RefCell<BTreeMap<u32, Box<Program>>> = const { RefCell::new(BTreeMap::new()) };
+    // Handles are never reused. JavaScript exports and wrappers retain their handle after the
+    // corresponding Program has been freed, so reusing an old value would let a stale closure
+    // address an unrelated Program (the classic ABA problem).
+    static NEXT_PROGRAM_HANDLE: Cell<u32> = const { Cell::new(1) };
     static ACTIVE_PROGRAMS: RefCell<Vec<(u32, *mut Program)>> = const { RefCell::new(Vec::new()) };
     static RESULT_BYTES: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     #[cfg(feature = "embedded")]
@@ -90,14 +95,16 @@ pub unsafe extern "C" fn mhs_rust_program_new(ptr: *const u8, len: usize) -> u32
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mhs_rust_program_free(handle: u32) {
-    let _ = PROGRAMS.try_with(|programs| {
-        if let Ok(mut programs) = programs.try_borrow_mut() {
-            if let Some(slot) = programs.get_mut(handle as usize) {
-                *slot = None;
-            }
-        }
-    });
+pub extern "C" fn mhs_rust_program_free(handle: u32) -> i32 {
+    let program = PROGRAMS
+        .try_with(|programs| programs.try_borrow_mut().ok()?.remove(&handle))
+        .ok()
+        .flatten();
+    let Some(mut program) = program else {
+        return 1;
+    };
+    let _ = program.shutdown();
+    0
 }
 
 #[unsafe(no_mangle)]
@@ -444,30 +451,17 @@ pub extern "C" fn mhs_rust_wrapper_invoke(
 }
 
 fn insert_program(mut program: Program) -> Option<u32> {
-    PROGRAMS
-        .try_with(|programs| {
+    NEXT_PROGRAM_HANDLE.with(|next| {
+        let handle = next.get();
+        let following = handle.checked_add(1)?;
+        PROGRAMS.with(|programs| {
             let mut programs = programs.try_borrow_mut().ok()?;
-            if programs.is_empty() {
-                programs.push(None);
-            }
-            let handle = programs
-                .iter()
-                .enumerate()
-                .skip(1)
-                .find_map(|(index, slot)| slot.is_none().then_some(index))
-                .unwrap_or(programs.len());
-            let handle = u32::try_from(handle).ok()?;
             program.set_js_program_handle(handle);
-            let index = handle as usize;
-            if index == programs.len() {
-                programs.push(Some(program));
-            } else {
-                programs[index] = Some(program);
-            }
+            programs.insert(handle, Box::new(program));
+            next.set(following);
             Some(handle)
         })
-        .ok()
-        .flatten()
+    })
 }
 
 fn clear_result_bytes() {
@@ -530,10 +524,7 @@ fn with_program_mut<R>(
 ) -> Result<R, ()> {
     PROGRAMS.with(|programs| {
         if let Ok(mut programs) = programs.try_borrow_mut() {
-            let program = programs
-                .get_mut(handle as usize)
-                .and_then(Option::as_mut)
-                .ok_or(())?;
+            let program = programs.get_mut(&handle).map(Box::as_mut).ok_or(())?;
             let _active = ActiveProgram::push(handle, program)?;
             f(program).map_err(|_| ())
         } else {
