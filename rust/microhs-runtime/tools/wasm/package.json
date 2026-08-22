@@ -1,0 +1,15 @@
+{
+  "name": "microhs-runtime-js-harness",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser/WASI harnesses comparing the Rust MicroHs runtime wasm against emscripten eval.c.",
+  "scripts": {
+    "browser-compare": "node browser/browser-compare.mjs",
+    "browser-selfhost": "node browser/browser-selfhost.mjs",
+    "wasi-selfhost": "node wasi/wasi-selfhost.mjs"
+  },
+  "dependencies": {
+    "@bjorn3/browser_wasi_shim": "^0.4.2"
+  }
+}

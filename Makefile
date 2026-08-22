@@ -52,7 +52,11 @@ MHSINCNP= -i $(MHSGMP) -imhs -isrc -ilib
 MHSINC=$(MHSINCNP)
 MAINMODULE=MicroHs.Main
 #
-.PHONY:	clean bootstrap install ghcgen newmhs newmhsz cachelib timecompile exampletest cachetest runtest runtestmhs everytest everytestmhs nfibtest info install minstall installmsg
+.PHONY:	clean bootstrap install ghcgen newmhs newmhsz cachelib timecompile exampletest cachetest runtest runtestmhs everytest everytestmhs nfibtest info install minstall installmsg FORCE
+
+# Always-out-of-date prerequisite: forces its dependents' recipes to run every
+# time (used to defer staleness decisions to cargo, which is cheap when current).
+FORCE:
 
 all:	bin/mhs bin/cpphs bin/mcabal
 
@@ -67,6 +71,17 @@ newmhsz:	newmhs
 
 sanitizemhs:	ghcgen mhs.conf
 	$(CCEVAL) $(CCSANITIZE) generated/mhs.c $(CCLIBS) -o bin/mhssane
+
+# Compile mhs on the Rust runtime: a self-contained binary that bakes in
+# generated/mhs.comb (rebuild when the comb is rebaselined). Beside the C
+# bin/mhs, so it resolves the inplace lib/ and reads mhs.conf the same way.
+# Opt-in, so a C-only build does not require the Rust toolchain. FORCE lets
+# cargo decide staleness across all of rust/microhs-runtime/src (it is cheap
+# when up to date), rather than listing the crate sources here.
+bin/mhsr:	generated/mhs.comb mhs.conf FORCE
+	@mkdir -p bin
+	cargo build --release --manifest-path rust/microhs-runtime/Cargo.toml --bin mhsr
+	cp target/release/mhsr bin/mhsr
 
 # Compile mhs from distribution, with C compiler
 bin/mhs:	$(RTS)/*.c $(RTS)/*.h $(RTS)/*/*.h mhs.conf #generated/mhs.c
@@ -93,6 +108,10 @@ bin/mhseval:	$(RTS)/*.c $(RTS)/*.h $(RTS)/*/*.h
 	@mkdir -p bin
 	$(CCEVAL) $(RTS)/comb.c $(CCLIBS) -o bin/mhseval
 	size bin/mhseval
+
+bin/mhsbench:	$(RTS)/*.c $(RTS)/*.h $(RTS)/*/*.h
+	@mkdir -p bin
+	$(CC) $(CCWARNS) $(CCOPTS) $(MHSGMPCCFLAGS) $(RTSINC) $(RTS)/mhsbench.c $(CCLIBS) -o bin/mhsbench
 
 bin/mhsevalgdb:	$(RTS)/*.c $(RTS)/*/*.h
 	@mkdir -p bin
@@ -412,5 +431,4 @@ generated/hmhs.c:
 bin/hmhs: generated/hmhs.c
 	@mkdir -p bin
 	$(CCEVAL) generated/hmhs.c $(CCLIBS) -o bin/hmhs
-
 

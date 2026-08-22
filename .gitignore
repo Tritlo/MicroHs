@@ -16,11 +16,13 @@ a.out
 *.prof
 dist-newstyle/
 dist/
+target/
 .mhsi
 Interactive.hs
 .mhscache
 *.js
 *.wasm
+rust/microhs-runtime/js/browser-bench-c.mjs
 /tags
 .hpc/*
 *.pkg
