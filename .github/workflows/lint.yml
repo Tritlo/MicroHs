@@ -11,7 +11,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: 1.97.1
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Install Rust 1.97.1
       run: rustup toolchain install 1.97.1 --profile minimal --component clippy --component rustfmt
     - name: Rustfmt
@@ -26,7 +26,10 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: 1.97.1
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
+    - uses: actions/setup-node@v6
+      with:
+        node-version: "24"
     - name: Install Rust 1.97.1 with browser WASM
       run: rustup toolchain install 1.97.1 --profile minimal --target wasm32-unknown-unknown
     - name: Build browser WASM
@@ -41,7 +44,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: 1.97.1
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Install Rust 1.97.1
       run: rustup toolchain install 1.97.1 --profile minimal
     - name: Native GHC-free fixed point
@@ -54,7 +57,10 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: 1.97.1
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
+    - uses: actions/setup-node@v6
+      with:
+        node-version: "24"
     - name: Install Rust 1.97.1 with WASI
       run: rustup toolchain install 1.97.1 --profile minimal --target wasm32-wasip1
     - name: Install locked WASI harness dependencies
@@ -68,11 +74,15 @@ jobs:
   hlint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - uses: haskell-actions/hlint-setup@v2
-      with:
-        version: "3.10"
-    - uses: haskell-actions/hlint-run@v2
-      with:
-        path: "."
-        fail-on: suggestion
+    - uses: actions/checkout@v6
+    - name: Install HLint 3.10
+      env:
+        HLINT_URL: https://github.com/ndmitchell/hlint/releases/download/v3.10/hlint-3.10-x86_64-linux.tar.gz
+        HLINT_SHA256: ccabc8802a58154699a3583b8dddc5ea2e6d65753a62c45c0e80088ebb16b42b
+      run: |
+        curl --fail --location --silent --show-error "$HLINT_URL" --output "$RUNNER_TEMP/hlint.tar.gz"
+        echo "$HLINT_SHA256  $RUNNER_TEMP/hlint.tar.gz" | sha256sum --check
+        tar --extract --gzip --file "$RUNNER_TEMP/hlint.tar.gz" --directory "$RUNNER_TEMP"
+        echo "$RUNNER_TEMP/hlint-3.10" >> "$GITHUB_PATH"
+    - name: HLint
+      run: hlint .
