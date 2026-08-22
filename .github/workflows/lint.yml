@@ -5,16 +5,64 @@ on:
   push:
 
 jobs:
-  rust-clippy:
+  rust-quality:
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.1
     steps:
     - uses: actions/checkout@v4
-    - name: Install Rust 1.97.1 with Clippy and browser WASM
-      run: rustup toolchain install 1.97.1 --profile minimal --component clippy --target wasm32-unknown-unknown
+    - name: Install Rust 1.97.1
+      run: rustup toolchain install 1.97.1 --profile minimal --component clippy --component rustfmt
+    - name: Rustfmt
+      run: cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check
+    - name: Test all features
+      run: cargo test --manifest-path rust/microhs-runtime/Cargo.toml --all-features --lib
     - name: Clippy
-      run: cargo +1.97.1 clippy --manifest-path rust/microhs-runtime/Cargo.toml --all-targets -- -D warnings
+      run: cargo clippy --manifest-path rust/microhs-runtime/Cargo.toml --all-targets --all-features -- -D warnings
+
+  rust-browser:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.1
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust 1.97.1 with browser WASM
+      run: rustup toolchain install 1.97.1 --profile minimal --target wasm32-unknown-unknown
     - name: Build browser WASM
-      run: cargo +1.97.1 build --release --manifest-path rust/microhs-runtime/Cargo.toml --target wasm32-unknown-unknown --features embedded --lib
+      run: cargo build --release --manifest-path rust/microhs-runtime/Cargo.toml --target wasm32-unknown-unknown --features embedded --lib
+    - name: Browser compiler and JS lifecycle E2E
+      run: node rust/microhs-runtime/tools/wasm/browser/compiler-e2e.mjs
+    - name: Build and smoke-test web distribution
+      run: bash rust/microhs-runtime/tools/wasm/browser/build-web-dist.sh
+
+  rust-selfhost:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.1
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust 1.97.1
+      run: rustup toolchain install 1.97.1 --profile minimal
+    - name: Native GHC-free fixed point
+      run: bash rust/microhs-runtime/tools/native/bootstrap-ghcfree.sh
+    - name: Native Rust cache compatibility
+      run: bash rust/microhs-runtime/tools/native/test-mhscache.sh
+
+  rust-wasi:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.1
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust 1.97.1 with WASI
+      run: rustup toolchain install 1.97.1 --profile minimal --target wasm32-wasip1
+    - name: Install locked WASI harness dependencies
+      working-directory: rust/microhs-runtime/tools/wasm
+      run: npm ci
+    - name: Build WASI runtime
+      run: cargo build --release --manifest-path rust/microhs-runtime/Cargo.toml --target wasm32-wasip1 --bin mhs-rust-bench
+    - name: WASI self-host fixed point
+      run: node rust/microhs-runtime/tools/wasm/wasi/wasi-selfhost.mjs generated/mhs.comb
 
   hlint:
     runs-on: ubuntu-latest
