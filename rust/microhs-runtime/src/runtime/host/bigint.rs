@@ -501,18 +501,39 @@ impl MpzValue {
         }
     }
 
+    /// Convert to `f64` exactly like GMP `mpz_get_d`: truncate toward zero (keep the top
+    /// 53 significant magnitude bits and discard the rest — never round to nearest),
+    /// saturating to +/-infinity only when the magnitude is too large for a finite
+    /// double (matching `mpz_get_d`).
     #[cold]
     #[inline(never)]
     pub(in crate::runtime) fn to_f64(&self) -> f64 {
-        let decimal = self.to_decimal_bytes();
-        mpz_decimal_to_f64(&decimal)
+        if self.is_zero() {
+            return 0.0;
+        }
+        // `to_bits_abs` is little-endian (bit 0 = LSB) and its top bit is set, so its
+        // length is the bit length of |n| with the leading 1 at index `bit_len - 1`.
+        let bits = self.to_bits_abs();
+        let bit_len = bits.len() as u64;
+        let exponent = (bit_len - 1) + 1023;
+        if exponent >= 2047 {
+            // Magnitude >= 2^1024: no finite double, so GMP yields +/-infinity.
+            return if self.negative {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            };
+        }
+        // The 52 fraction bits are the ones immediately below the leading 1, truncated:
+        // any magnitude bits below index `bit_len - 53` are simply discarded.
+        let mut fraction = 0_u64;
+        for i in 0..52_i64 {
+            let pos = bit_len as i64 - 2 - i;
+            if pos >= 0 && bits[pos as usize] {
+                fraction |= 1_u64 << (51 - i);
+            }
+        }
+        let sign = if self.negative { 1_u64 << 63 } else { 0 };
+        f64::from_bits(sign | (exponent << 52) | fraction)
     }
-}
-
-#[cold]
-#[inline(never)]
-pub(in crate::runtime) fn mpz_decimal_to_f64(decimal: &[u8]) -> f64 {
-    let text = std::str::from_utf8(decimal).expect("mpz decimal bytes are ASCII");
-    text.parse::<f64>()
-        .expect("mpz decimal bytes should parse as f64")
 }

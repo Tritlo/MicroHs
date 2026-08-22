@@ -111,7 +111,6 @@ impl Program {
         budget: usize,
         spine: &mut EvalSpine,
         scratch_args: &mut Vec<NodeId>,
-        _scratch_apps: &mut Vec<NodeId>,
     ) -> Result<Option<EvalLoopStep>, EvalError> {
         if self.profiling_enabled() {
             self.profile_fallback_eval_loop_step();
@@ -173,6 +172,7 @@ impl Program {
 
         let (known, fallback_name) = match head_dispatch {
             EvalHead::Ffi(name) => {
+                std::hint::cold_path();
                 if self.profiling_enabled() {
                     self.profile_arg_materialization(args_len);
                 }
@@ -183,6 +183,7 @@ impl Program {
                 rewrite_step!(used, node, 1);
             }
             EvalHead::JsCall { tags, body } => {
+                std::hint::cold_path();
                 if self.profiling_enabled() {
                     self.profile_arg_materialization(args_len);
                 }
@@ -194,6 +195,7 @@ impl Program {
                 rewrite_step!(used, node, 1);
             }
             EvalHead::JsWrap { tags } => {
+                std::hint::cold_path();
                 if self.profiling_enabled() {
                     self.profile_arg_materialization(args_len);
                 }

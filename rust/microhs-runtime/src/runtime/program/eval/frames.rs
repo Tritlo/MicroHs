@@ -666,7 +666,6 @@ impl Program {
         let mut stack = EvalStack::default();
         let mut eval_spine = EvalSpine::default();
         let mut scratch_args = Vec::new();
-        let mut scratch_apps = Vec::new();
         let profiling = self.profiling_enabled();
 
         while steps < limit {
@@ -683,7 +682,6 @@ impl Program {
                 current,
                 &eval_spine,
                 &scratch_args,
-                &scratch_apps,
                 Some(&stack),
             )?;
 
@@ -792,7 +790,6 @@ impl Program {
                         limit - steps,
                         &mut eval_spine,
                         &mut scratch_args,
-                        &mut scratch_apps,
                     )?
                     else {
                         if stack.top_is_frame() {

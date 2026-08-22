@@ -595,6 +595,7 @@ pub struct ForeignPtrNode {
 pub(in crate::runtime) enum ForeignFinalizer {
     Free,
     CloseB,
+    JsObjFree,
     RawZero,
 }
 
@@ -615,6 +616,26 @@ pub struct BytesViewNode {
 pub struct JsCallNode {
     pub(crate) tags: String,
     pub(crate) body: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct JsExportDecl {
+    pub(crate) name: String,
+    pub(crate) closure: NodeId,
+    pub(crate) tags: String,
+    pub(crate) is_io: bool,
+}
+
+#[derive(Clone, Debug)]
+#[cfg_attr(
+    not(all(target_arch = "wasm32", not(target_os = "wasi"))),
+    allow(dead_code)
+)]
+pub(in crate::runtime) struct JsExport {
+    pub(in crate::runtime) name: String,
+    pub(in crate::runtime) stable_ptr: usize,
+    pub(in crate::runtime) wrapper_index: u32,
+    pub(in crate::runtime) is_io: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -710,10 +731,13 @@ pub(in crate::runtime) const SMALL_INT_COUNT: usize = (SMALL_INT_MAX - SMALL_INT
 pub(in crate::runtime) const IGNORED_IO_SHORTCUT_RECURSION_LIMIT: usize = 256;
 pub(in crate::runtime) const UTF8_ASCII_REFILL: usize = 1024;
 pub(in crate::runtime) const READ_ONLY_MEMORY_VIEW_MIN_LEN: usize = 8;
-#[cfg(not(target_os = "wasi"))]
-pub(in crate::runtime) const GC_NODE_INTERVAL: usize = 75 * 1024 * 1024;
-#[cfg(target_os = "wasi")]
-pub(in crate::runtime) const WASI_GC_NODE_INTERVAL: usize = 500_000;
+// Default cells between GCs when MHS_GC_NODE_INTERVAL is unset: a lean 16M on
+// wasm32-wasi (memory-constrained hosts; ~180MB peak on the heavy self-host) vs
+// 75M native (~C's default footprint). Both packed-cell counts, overridable.
+pub(in crate::runtime) const GC_NODE_INTERVAL: usize = std::cfg_select! {
+    target_os = "wasi" => { 16 * 1024 * 1024 }
+    _ => { 75 * 1024 * 1024 }
+};
 
 #[derive(Clone, Debug)]
 pub(in crate::runtime) struct BFile {
@@ -1146,6 +1170,7 @@ pub struct Program {
     pub(in crate::runtime) reductions: usize,
     pub(in crate::runtime) js_program_handle: Option<u32>,
     pub(in crate::runtime) js_wrapper_tags: Vec<String>,
+    pub(in crate::runtime) js_exports: Vec<JsExport>,
     pub(in crate::runtime) prim_cache: PrimCache,
     pub(in crate::runtime) compound_cache: CompoundCache,
     pub(in crate::runtime) small_ints: [Option<NodeId>; SMALL_INT_COUNT],

@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-readonly EXPECTED_COMPILER_SHA="94dcf3ba6d8d5f39e98daced1f799c6d4bbbbaffe039d1c272c71752b0e01e88"
+readonly EXPECTED_COMPILER_SHA="$(cat "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/NORTH")"
 readonly GC_INTERVAL="78643200"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -147,7 +147,7 @@ fi
 echo "RUST-READ: PASS nocache_sha=$(sha_file "$no_cache_comb") read_sha=$(sha_file "$rust_read_comb")"
 
 if [[ ! -x "$repo_root/bin/mhs" ]]; then
-  echo "CROSS-RUNTIME: SKIP no bin/mhs (build with: make bin/mhs; must be the 47ea3c40 compiler)"
+  echo "CROSS-RUNTIME: SKIP no bin/mhs (build with: make bin/mhs; must be the ${EXPECTED_COMPILER_SHA:0:12} compiler)"
   exit 0
 fi
 
@@ -155,25 +155,25 @@ if ! run_c_mhs "$c_write_dir" "$c_write_dir/write.log" \
   -CW "${include_args[@]}" Main -o"$c_write_comb"; then
   echo "CROSS-RUNTIME: FAIL c-write-failed" >&2
   print_log "$c_write_dir/write.log"
-  exit 0
+  exit 1
 fi
 
 c_cache="$c_write_dir/.mhscache"
 if [[ ! -s "$c_cache" ]]; then
   echo "CROSS-RUNTIME: FAIL c-cache-missing-or-empty cache=$c_cache" >&2
-  exit 0
+  exit 1
 fi
 
 if ! run_rust_mhs "$c_write_dir" "$c_write_dir/read-by-rust.log" \
   -CR "${include_args[@]}" Main -o"$c_read_by_rust_comb"; then
   echo "CROSS-RUNTIME: FAIL rust-read-failed c_cache_sha=$(sha_file "$c_cache") c_cache_bytes=$(file_size "$c_cache")" >&2
   print_log "$c_write_dir/read-by-rust.log"
-  exit 0
+  exit 1
 fi
 
 if ! cmp -s "$no_cache_comb" "$c_read_by_rust_comb"; then
   echo "CROSS-RUNTIME: FAIL output-diverged c_cache_sha=$(sha_file "$c_cache") expected_sha=$(sha_file "$no_cache_comb") actual_sha=$(sha_file "$c_read_by_rust_comb") expected_bytes=$(file_size "$no_cache_comb") actual_bytes=$(file_size "$c_read_by_rust_comb") $(first_diff "$no_cache_comb" "$c_read_by_rust_comb")" >&2
-  exit 0
+  exit 1
 fi
 
 echo "CROSS-RUNTIME: PASS c_cache_sha=$(sha_file "$c_cache") c_cache_bytes=$(file_size "$c_cache") read_sha=$(sha_file "$c_read_by_rust_comb")"

@@ -83,7 +83,7 @@ mHSPKG :: String
 mHSPKG = "MHSPKG"
 
 usage :: String
-usage = "Usage: mhs [-h|?] [--help] [--version] [--numeric-version] [-v] [-q] [-l] [-s] [-r] [-C[R|W]] [-XCPP] [-DDEF] [-IPATH] [-T] [-z] [-b64] [-iPATH] [-oFILE] [-a[PATH]] [-L[FILE|PKG]] [-PPKG] [-Q PKG [DIR]] [-pFILE] [-tTARGET] [-optc OPTION] [-optl OPTION] [--interactive] [-eEXPR] [-ECMD] [-ddump-PASS] [--embed-packages PKG:...] [--embed-ffis PKG:...] [MODULENAME...|FILE]"
+usage = "Usage: mhs [-h|?] [--help] [--version] [--numeric-version] [-v] [-q] [-l] [-s] [-r] [-C[R|W]] [-XCPP] [-DDEF] [-IPATH] [-T] [-z] [-b64] [-iPATH] [-oFILE] [-a[PATH]] [-L[FILE|PKG]] [-PPKG] [-Q PKG [DIR]] [-pFILE] [-tTARGET] [-optc OPTION] [-optl OPTION] [--interactive] [--no-main] [--entry=NAME] [-eEXPR] [-ECMD] [-ddump-PASS] [--embed-packages PKG:...] [--embed-ffis PKG:...] [MODULENAME...|FILE]"
 
 longUsage :: String
 longUsage = usage ++ "\nOptions:\n" ++ details
@@ -101,6 +101,8 @@ longUsage = usage ++ "\nOptions:\n" ++ details
       \-ddump-PASS        Debug, print AST after PASS\n\
       \                   Possible passes: preproc, parse, derive, typecheck, desugar, toplevel, combinator, linked, all\n\
       \-ddump-combinator-out=FILE Write combinator dump to FILE\n\
+      \--entry=NAME       Root and prune at value NAME (no main required);\n\
+      \                   with -ddump-combinator-out writes a JSON artifact\n\
       \-ECMD              Set editor for :edit command\n\
       \-eEXPR             Evaluate EXPR\n\
       \-embed-ffis PKG*   Embed packages FFI stubs in mhs binary\n\
@@ -115,6 +117,7 @@ longUsage = usage ++ "\nOptions:\n" ++ details
       \-l                 Show every time a module is loaded\n\
       \-L[FILE|PKG]       List all modules of a package\n\
       \--numeric-version  Print the version number\n\
+      \--no-main          Do not require a main definition\n\
       \-oFILE             Output to FILE\n\
       \                   If FILE ends in .comb produce a combinator file\n\
       \                   If FILE ends in .c produce a C file\n\
@@ -174,6 +177,7 @@ decodeArgs f mdls (arg:args) =
     "-F"        -> decodeArgs f{doF = True} mdls args
     "--stdin"   -> decodeArgs f{useStdin = True} mdls args
     "--interactive"   -> decodeArgs f{interactive = True} mdls args
+    "--no-main" -> decodeArgs f{noMain = True} mdls args
     "--embed-ffis" | s : args' <- args
                 -> decodeArgs f{embedFFIs = embedFFIs f ++ splitColonPath s} mdls args'
     "--embed-packages" | s : args' <- args, let ps = splitColonPath s
@@ -192,7 +196,9 @@ decodeArgs f mdls (arg:args) =
     '-':'p':s   -> decodeArgs f{preload = preload f ++ [s]} mdls args
     '-':'E':s   -> decodeArgs f{editor = Just s} mdls args
     '-':'e':s   -> decodeArgs f{evalArg = Just s} mdls args
-    _ | Just s  <- stripPrefix "-ddump-combinator-out=" arg ->
+    _ | Just s  <- stripPrefix "--entry=" arg ->
+                   decodeArgs f{entry = Just s} mdls args
+      | Just s  <- stripPrefix "-ddump-combinator-out=" arg ->
                    decodeArgs f{dumpCombinatorOut = Just s} mdls args
       | Just r  <- stripPrefix "-ddump-" arg, Just d <- lookup r dumpFlagTable ->
                    decodeArgs f{dumpFlags = d : dumpFlags f} mdls args
@@ -357,11 +363,22 @@ mainCompile flags mn = do
   allDefs <- addEmbedPkgs flags allDefs'
   let
     mainName = qualIdent rmn (mkIdent "main")
-    cmdl = (allDefs, if noLink flags then Lit (LInt 0) else Var mainName)
+    -- --entry=NAME roots (and thus prunes) the program at NAME instead of
+    -- 'main'.  It is a distinct root selection from --no-main (which roots at
+    -- 'Lit 0' and guards on a JS export); a main-less value module is fine.
+    rootExp = case entry flags of
+                Just name -> Var (qualIdent rmn (mkIdent name))
+                Nothing
+                  | noLink flags || noMain flags -> Lit (LInt 0)
+                  | otherwise                    -> Var mainName
+    cmdl = (allDefs, rootExp)
     (forExps, outCMdl@(outDefs, _)) = renumberCMdl cmdl
     outData = toStringCMdl outCMdl
     numOutDefs = length outData
     numDefs = length allDefs
+    hasJsExports = or [ js | (_, _, _, js) <- forExps ]
+  when (noMain flags && not hasJsExports) $
+    mhsError "--no-main requires at least one foreign export javascript"
   when (verbosityGT flags 0) $
     putStrLn $ "top level defns:      " ++ padLeft 6 (show numOutDefs) ++ " (unpruned " ++ show numDefs ++ ")"
   let printLDefs = mapM_ (\ (i, e) -> putStrLn $ showIdent i ++ " = " ++ toStringP e "")
@@ -391,12 +408,6 @@ mainCompile flags mn = do
         cCode = "#include \"mhsffi.h\"\n" ++ makeCArray flags outData ++ cFFI
 
     let outFile = output flags
-    -- Generate stub file for 'foreign export'
-    unless (null forExps) $ do
-      let stubName = takeDirectory outFile </> dropExtension (showIdent mn) ++ "_stub.h"
-      when (verbosityGT flags 0) $
-        putStrLn $ "generate stub: " ++ stubName
-      writeFile stubName hFFI
     -- Decode what to do:
     --  * file ends in .comb: write combinator file
     --  * file ends in .c: write C version of combinator
@@ -406,6 +417,7 @@ mainCompile flags mn = do
       h' <- if base64 flags then do addBase64 h else return h
       h'' <- if compress flags then do hPutChar h' 'z'; addLZ77 h' else return h'
       hPutStr h'' outData
+      hPutStr h'' $ toJsExportTrailer forExps
       when (outFile `hasTheExtension` ".combffi") $ do
         -- add FFI info
         hPutStrLn h'' "\n#####"
@@ -413,15 +425,22 @@ mainCompile flags mn = do
             putFFI _ = return ()
         mapM_ putFFI outDefs
       hClose h''
-     else if outFile `hasTheExtension` ".c" then
-      writeFile outFile cCode
      else do
-       (fn, h) <- openTmpFile "mhsc.c"
-       let ppkgs = getPathPkgs cash
-       hPutStr h cCode
-       hClose h
-       mainCompileC flags (embedPkg ++ ppkgs) fn
-       removeFile fn
+      -- Generate stub file for 'foreign export'
+      unless (null forExps) $ do
+        let stubName = takeDirectory outFile </> dropExtension (showIdent mn) ++ "_stub.h"
+        when (verbosityGT flags 0) $
+          putStrLn $ "generate stub: " ++ stubName
+        writeFile stubName hFFI
+      if outFile `hasTheExtension` ".c" then
+        writeFile outFile cCode
+      else do
+        (fn, h) <- openTmpFile "mhsc.c"
+        let ppkgs = getPathPkgs cash
+        hPutStr h cCode
+        hClose h
+        mainCompileC flags (embedPkg ++ ppkgs) fn
+        removeFile fn
 
 mainCompileC :: Flags -> [(FilePath, Package)] -> FilePath -> IO ()
 mainCompileC flags pkgs infile = do

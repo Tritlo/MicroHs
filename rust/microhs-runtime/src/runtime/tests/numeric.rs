@@ -1,14 +1,32 @@
 use super::*;
 
 #[test]
-fn mpz_get_d_uses_decimal_rounding_like_c() {
-    let decimal = b"-299228957055072645483636";
-    let value = MpzValue::parse_decimal(decimal).unwrap();
-    let expected = std::str::from_utf8(decimal)
-        .unwrap()
-        .parse::<f64>()
-        .unwrap();
-    assert_eq!(value.to_f64().to_bits(), expected.to_bits());
+fn mpz_get_d_truncates_toward_zero_like_c() {
+    // Goldens are the exact IEEE-754 bit patterns GMP `mpz_get_d` produces (truncation
+    // toward zero, NOT round-to-nearest). For 2^63-1 and the large negative value below,
+    // round-to-nearest would give the next bit pattern up (…0000 / …057); truncation
+    // keeps the lower value (…ffff / …056), matching the C runtime.
+    let cases: &[(&[u8], u64)] = &[
+        (b"0", 0x0000000000000000),
+        (b"1", 0x3ff0000000000000),
+        (b"-1", 0xbff0000000000000),
+        (b"42", 0x4045000000000000),
+        (b"9007199254740992", 0x4340000000000000), // 2^53 (exact)
+        (b"9223372036854775807", 0x43dfffffffffffff), // 2^63 - 1 (truncates, not rounds)
+        (b"-299228957055072645483636", 0xc4cfae9dfc695056),
+        (b"18446744073709551616", 0x43f0000000000000), // 2^64
+        (b"-18446744073709551616", 0xc3f0000000000000), // -2^64
+        (b"1267650600228229401496703205376", 0x4630000000000000), // 2^100
+    ];
+    for (decimal, expected_bits) in cases {
+        let value = MpzValue::parse_decimal(decimal).unwrap();
+        assert_eq!(
+            value.to_f64().to_bits(),
+            *expected_bits,
+            "{decimal:?}: got 0x{:016x}, want 0x{expected_bits:016x}",
+            value.to_f64().to_bits(),
+        );
+    }
 }
 
 #[test]

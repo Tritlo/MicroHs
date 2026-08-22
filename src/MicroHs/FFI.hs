@@ -19,11 +19,11 @@ makeFFI _ forExps exclude dss =
                        eq (_, n, _, _) (_, n', _, _) = n == n'
       wrappers = [ t | (ImpWrapper, _, t, _) <- ffiImports]
       dynamics = [ t | (ImpDynamic, _, t, _) <- ffiImports]
-      imps     = filter ((`notElem` exclude) . impModule) $ filter ((`notElem` runtimeFFI) . impName) ffiImports
-      includes = jsincs ++ nub [ inc | (ImpStatic iincs _ _, _, _, _) <- imps, inc <- iincs ]
-      jsincs   = if any isJS ffiImports then ["emscripten.h"] else []
-        where isJS (ImpJS _, _, _, _) = True
-              isJS _ = False
+      jsImps   = filter isJS ffiImports
+      imps     = filter (not . isJS) $ filter ((`notElem` exclude) . impModule) $ filter ((`notElem` runtimeFFI) . impName) ffiImports
+      includes = nub [ inc | (ImpStatic iincs _ _, _, _, _) <- imps, inc <- iincs ]
+      isJS (ImpJS _, _, _, _) = True
+      isJS _ = False
       mkSig (_, i, CType t, js) = let (as, ior) = getArrows t in mkExportSig js i as ior ++ ";"
       header = unlines
         ["#include <stdint.h>",
@@ -37,6 +37,10 @@ makeFFI _ forExps exclude dss =
          "#endif"
         ]
   in
+    -- makeFFI is only forced for C/native output (the .comb branch never
+    -- references the FFI code), so a foreign import javascript reaching here
+    -- means the JS runtime backend was not targeted.
+    if not (null jsImps) then errorMessage (getSLoc (head [ t | (_, _, t, _) <- jsImps ])) "foreign import javascript is not supported by the C/emscripten backend; compile to a combinator file (.comb) for the JavaScript runtime" else
     if not (null wrappers) || not (null dynamics) then mhsError "Unimplemented FFI feature" else
     (unlines $
       map (\ fn -> "#include \"" ++ fn ++ "\"") includes ++
@@ -105,7 +109,6 @@ mkEntry :: (ImpEnt, String, EType, IdentModule) -> String
 mkEntry (ImpStatic _ IFunc  _, f, t, _) = "{ \"" ++ f ++ "\", " ++ show (arity t) ++ ", mhs_" ++ f ++ "},"
 mkEntry (ImpStatic _ IPtr   _, f, _, _) = "{ \"&" ++ f ++ "\", 0, mhs_addr_" ++ f ++ "},"
 mkEntry (ImpStatic _ IValue _, f, _, _) = "{ \"" ++ f ++ "\", 0, mhs_" ++ f ++ "},"
-mkEntry (ImpJS _,              f, t, _) = "{ \"" ++ f ++ "\", " ++ show (arity t) ++ ", mhs_" ++ f ++ "},"
 mkEntry _ = undefined
 
 mkMhsFun :: String -> String -> String
@@ -130,9 +133,6 @@ mkRet t n call = "mhs_from_" ++ cTypeHsName t ++ "(s, " ++ show n ++ ", " ++ cal
 
 mkArg :: EType -> Int -> String
 mkArg t i = "mhs_to_" ++ cTypeHsName t ++ "(s, " ++ show i ++ ")"
-
-mkJSArg :: EType -> Int -> String
-mkJSArg t i = "mhs_to_" ++ jsTypeName t ++ "(s, " ++ show i ++ ")"
 
 mkHdr :: (ImpEnt, String, EType, IdentModule) -> String
 mkHdr (ImpStatic _ IPtr fn, f, iot, _) =
@@ -173,22 +173,6 @@ mkHdr (ImpStatic _ IValue val, f, t, _) =
         else
           "return " ++ mkRet r len call
   in  mkMhsFun f fcall
-mkHdr (ImpJS s, f, ty, _) =
-  let (as, ior) = getArrows ty
-      rt = checkIO ior
-      jsr = jsTypeNameR rt
-      n = length as
-      args = concat $ zipWith arg as [0..]
-      arg t i = ", " ++ mkJSArg t i
-      call = "EM_ASM" ++
-             (if isUnit rt then "" else '_':jsr) ++
-             "({ " ++ s ++ " }" ++ args ++ ")"
-      fcall =
-        if isUnit rt then
-          call ++ "; return mhs_from_Unit(s, " ++ show n ++ ")"
-        else
-          "return " ++ mkRet rt n call
-  in  mkMhsFun f fcall
 mkHdr _ = undefined
 
 arity :: EType -> Int
@@ -213,13 +197,19 @@ cHsTypes =
   , ("System.IO.Handle",  "Ptr")
   ]
 
--- Foreign export type names; a javascript export also allows Bool.
+-- Foreign export type names.  A Bool result/argument is only meaningful for the
+-- combinator (.comb) JavaScript runtime, which encodes it in the JS_EXPORTS
+-- trailer; the C/emscripten backend has no mhs_from_Bool/mhs_to_Bool, so reject
+-- it here at compile time with a clear message instead of failing at link time.
+jsBoolExportMsg :: String
+jsBoolExportMsg = "foreign export javascript with a Bool result/argument is only supported when compiling to a combinator file (.comb) for the JavaScript runtime, not the C/emscripten backend"
+
 expTypeName :: IsJavascript -> EType -> String
-expTypeName True (EVar i) | unIdent i == "Data.Bool_Type.Bool" = "int"
+expTypeName True t@(EVar i) | unIdent i == "Data.Bool_Type.Bool" = errorMessage (getSLoc t) jsBoolExportMsg
 expTypeName _ t = cTypeName t
 
 expTypeHsName :: IsJavascript -> EType -> String
-expTypeHsName True (EVar i) | unIdent i == "Data.Bool_Type.Bool" = "Bool"
+expTypeHsName True t@(EVar i) | unIdent i == "Data.Bool_Type.Bool" = errorMessage (getSLoc t) jsBoolExportMsg
 expTypeHsName _ t = cTypeHsName t
 
 -- Use to construct 'foreign export ccall' signature.
@@ -238,32 +228,6 @@ cTypes =
   , ("Primitives.Word64", "uint64_t")
   , ("()",                "void")
   , ("System.IO.Handle",  "void*")
-  ]
-
--- Use to construct 'foreign import javascript' return value wrapper.
-jsTypeNameR :: EType -> String
-jsTypeNameR (EApp (EVar ptr) _) | ptr == identPtr = "PTR"
-jsTypeNameR (EVar i) | Just c <- lookup (unIdent i) jsTypesR = c
-jsTypeNameR t = errorMessage (getSLoc t) $ "Not a valid Javascript return type: " ++ showEType t
-
-jsTypesR :: [(String, String)]
-jsTypesR =
-  [ ("Primitives.Int",    "INT")
-  , ("Primitives.Double", "DOUBLE")
-  , ("Primitives.Float",  "DOUBLE")
-  ]
-
--- Use to construct 'foreign import javascript' argument wrapper.
-jsTypeName :: EType -> String
-jsTypeName (EApp (EVar ptr) _) | ptr == identPtr = "Ptr"
-jsTypeName (EVar i) | Just c <- lookup (unIdent i) jsTypes = c
-jsTypeName t = errorMessage (getSLoc t) $ "Not a valid Javascript argument type: " ++ showEType t
-
-jsTypes :: [(String, String)]
-jsTypes =
-  [ ("Primitives.Int",    "Int")
-  , ("Primitives.Double", "Double")
-  , ("Primitives.Float",  "Float")
   ]
 
 -- These are already in the runtime

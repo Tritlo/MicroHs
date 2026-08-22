@@ -2,6 +2,7 @@
 use super::*;
 
 impl Program {
+    #[cold]
     pub(in crate::runtime) fn js_call(
         &mut self,
         tags: &str,
@@ -19,39 +20,59 @@ impl Program {
             let arg = match tag {
                 b'D' => JsArg::Double(self.eval_float64(args[idx])?),
                 b'F' => JsArg::Double(f64::from(self.eval_float32(args[idx])?)),
-                b'B' => JsArg::Int(i32::from(self.eval_bool(args[idx])?)),
-                b'P' => JsArg::UInt(self.eval_pointer_value(args[idx])? as u32),
+                b'B' => JsArg::Bool(self.eval_bool(args[idx])?),
+                b'P' => JsArg::Pointer(self.eval_pointer_value(args[idx])?),
                 b'J' => JsArg::Object(self.eval_js_object_handle(args[idx])?),
                 b'S' => JsArg::String(self.eval_bytes(args[idx])?),
-                b'U' => JsArg::UInt(self.eval_int(args[idx])? as u32),
-                b'I' => JsArg::Int(self.eval_int(args[idx])? as i32),
+                b'U' => JsArg::UInt(
+                    u32::try_from(self.eval_int(args[idx])?).map_err(|_| EvalError::Overflow)?,
+                ),
+                b'I' => JsArg::Int(int_to_i32(self.eval_int(args[idx])?)?),
                 _ => return Err(EvalError::InvalidByteString),
             };
             js_args.push(arg);
         }
+        let program_handle = self.js_program_handle.ok_or(EvalError::UnsupportedJsFfi)?;
         let result = match tags[0] {
             b'V' => {
-                host_js_call_void(body, arity, &js_args)?;
+                host_js_call_void(program_handle, body, arity, &js_args)?;
                 Node::prim("I")
             }
-            b'D' => Node::Float64(host_js_call_double(body, arity, &js_args)?),
-            b'F' => Node::Float32(host_js_call_double(body, arity, &js_args)? as f32),
-            b'P' => Node::Ptr(i64::from(host_js_call_ptr(body, arity, &js_args)?)),
-            b'B' => Node::prim(if host_js_call_bool(body, arity, &js_args)? {
-                "A"
-            } else {
-                "K"
-            }),
-            b'S' => Node::bytes(host_js_call_string(body, arity, &js_args)?),
-            b'I' => Node::Int(i64::from(host_js_call_int(body, arity, &js_args)?)),
-            b'U' => Node::Int(i64::from(host_js_call_uint(body, arity, &js_args)?)),
-            b'J' => self.js_object_node(host_js_call_object(body, arity, &js_args)?),
+            b'D' => Node::Float64(host_js_call_double(program_handle, body, arity, &js_args)?),
+            b'F' => {
+                Node::Float32(host_js_call_double(program_handle, body, arity, &js_args)? as f32)
+            }
+            b'P' => Node::Ptr(host_js_call_ptr(program_handle, body, arity, &js_args)?),
+            b'B' => Node::prim(
+                if host_js_call_bool(program_handle, body, arity, &js_args)? {
+                    "A"
+                } else {
+                    "K"
+                },
+            ),
+            b'S' => Node::bytes(host_js_call_string(program_handle, body, arity, &js_args)?),
+            b'I' => Node::Int(i64::from(host_js_call_int(
+                program_handle,
+                body,
+                arity,
+                &js_args,
+            )?)),
+            b'U' => Node::Int(i64::from(host_js_call_uint(
+                program_handle,
+                body,
+                arity,
+                &js_args,
+            )?)),
+            b'J' => {
+                self.js_object_node(host_js_call_object(program_handle, body, arity, &js_args)?)
+            }
             _ => return Err(EvalError::InvalidByteString),
         };
         let result = self.push_node(result);
         Ok(Some((arity + 1, self.pair(result, args[arity]))))
     }
 
+    #[cold]
     pub(in crate::runtime) fn js_wrap(
         &mut self,
         tags: &str,
@@ -85,6 +106,27 @@ impl Program {
         Ok(index)
     }
 
+    #[cold]
+    pub(crate) fn register_js_exports(
+        &mut self,
+        exports: Vec<JsExportDecl>,
+    ) -> Result<(), EvalError> {
+        std::hint::cold_path();
+        for export in exports {
+            validate_js_tags(export.tags.as_bytes())?;
+            let stable_ptr = usize::try_from(self.new_stable_ptr_handle(export.closure)?)
+                .map_err(|_| EvalError::Overflow)?;
+            let wrapper_index = self.register_js_wrapper_tags(&export.tags)?;
+            self.js_exports.push(JsExport {
+                name: export.name,
+                stable_ptr,
+                wrapper_index,
+                is_io: export.is_io,
+            });
+        }
+        Ok(())
+    }
+
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     pub(in crate::runtime) fn js_value_node(
         &mut self,
@@ -97,7 +139,7 @@ impl Program {
             (b'D', JsValue::Double(value)) => Node::Float64(*value),
             (b'F', JsValue::Float(value)) => Node::Float32(*value),
             (b'B', JsValue::Bool(value)) => return Ok(self.prim(if *value { "A" } else { "K" })),
-            (b'P', JsValue::Pointer(value)) => Node::Ptr(i64::from(*value)),
+            (b'P', JsValue::Pointer(value)) => Node::Ptr(*value),
             (b'J', JsValue::Object(value)) => self.js_object_node(*value),
             (b'S', JsValue::Bytes(value)) => Node::bytes(value.clone()),
             _ => return Err(EvalError::InvalidByteString),
@@ -123,9 +165,7 @@ impl Program {
             b'D' => Ok(JsValue::Double(self.eval_float64(id)?)),
             b'F' => Ok(JsValue::Float(self.eval_float32(id)?)),
             b'B' => Ok(JsValue::Bool(self.eval_bool(id)?)),
-            b'P' => Ok(JsValue::Pointer(
-                u32::try_from(self.eval_pointer_value(id)?).map_err(|_| EvalError::Overflow)?,
-            )),
+            b'P' => Ok(JsValue::Pointer(self.eval_pointer_value(id)?)),
             b'J' => Ok(JsValue::Object(self.eval_js_object_handle(id)?)),
             b'S' => Ok(JsValue::Bytes(self.eval_bytes(id)?)),
             _ => Err(EvalError::InvalidByteString),
