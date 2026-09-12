@@ -250,7 +250,7 @@ impl Program {
             Some(U) if args_len >= 2 => {
                 app_step!(2, arg!(1), arg!(0));
             }
-            Some(IoPerformIo) if args_len >= 1 => {
+            Some(IoPerformIo) if args_len >= 1 && !self.doing_rnf => {
                 let world = self.world();
                 let k = self.prim("K");
                 let action = self.app(arg!(0), world);
@@ -520,8 +520,10 @@ impl Program {
             Some(CatchR) if args_len >= 3 => {
                 Some((3, self.catch_result(arg!(0), arg!(1), arg!(2))?))
             }
-            Some(Raise) if args_len >= 1 => return Err(EvalError::Raised(arg!(0))),
-            Some(Rnf) if args_len >= 2 => {
+            Some(Raise) if args_len >= 1 && !self.doing_rnf => {
+                return Err(EvalError::Raised(arg!(0)));
+            }
+            Some(Rnf) if args_len >= 2 && !self.doing_rnf => {
                 let noerr = self.eval_int(arg!(0))? != 0;
                 self.rnf(noerr, arg!(1))?;
                 Some((2, self.prim("I")))

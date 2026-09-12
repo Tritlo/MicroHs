@@ -689,7 +689,7 @@ impl Program {
                     let then = app_site!("IO.then.k", k, y);
                     app_taken!(redex, 2, bind_action, then);
                 }
-                IoPerformIo if args_len >= 1 => {
+                IoPerformIo if args_len >= 1 && !self.doing_rnf => {
                     let (redex, io) = take_args!(1, take_args1);
                     let world = self.world();
                     let k = self.prim_k();

@@ -775,6 +775,8 @@ pub(in crate::runtime) const SMALL_INT_MAX: i64 = 255;
 pub(in crate::runtime) const SMALL_INT_COUNT: usize = (SMALL_INT_MAX - SMALL_INT_MIN + 1) as usize;
 pub(in crate::runtime) const IGNORED_IO_SHORTCUT_RECURSION_LIMIT: usize = 256;
 pub(in crate::runtime) const UTF8_ASCII_REFILL: usize = 1024;
+/// Bytes read before committing to a full `UTF8_ASCII_REFILL` block.
+pub(in crate::runtime) const UTF8_ASCII_PROBE: usize = 16;
 pub(in crate::runtime) const READ_ONLY_MEMORY_VIEW_MIN_LEN: usize = 8;
 #[cfg(not(target_os = "wasi"))]
 /// `Program::current_thread` value while no thread is running.
@@ -999,6 +1001,9 @@ impl Drop for NativeFileState {
 pub(in crate::runtime) struct DirHandle {
     pub(in crate::runtime) entries: Vec<Vec<u8>>,
     pub(in crate::runtime) pos: usize,
+    /// Buffer of the entry name last returned by `readdir`; freed by the
+    /// next `readdir` or by `closedir` (C hands out one static `dirent`).
+    pub(in crate::runtime) entry_ptr: Option<i64>,
 }
 
 #[cfg_attr(all(target_arch = "wasm32", not(target_os = "wasi")), allow(dead_code))]
@@ -1259,6 +1264,10 @@ pub struct Program {
     /// Set when the running thread should yield to the scheduler at the next step
     /// boundary (e.g. right after a `forkIO` that makes the program multi-threaded),
     /// so the reducer can leave an otherwise-unbounded single-thread slice.
+    /// True while `rnf` with `noerr` walks a value: like eval.c's
+    /// `doing_rnf`, `performIO`, `raise`, `bsunpack`, `fromUTF8` and a
+    /// nested `rnf` are then left unevaluated instead of run.
+    pub(in crate::runtime) doing_rnf: bool,
     pub(in crate::runtime) reschedule_now: bool,
     /// With `reschedule_now`: requeue the current thread at the back (a
     /// `yield`, or a finalizer thread that must run first), not the front.

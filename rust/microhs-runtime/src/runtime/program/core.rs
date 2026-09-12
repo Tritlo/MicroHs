@@ -109,6 +109,7 @@ impl Program {
             scheduler_epoch: Instant::now(),
             current_thread: 0,
             next_thread_id: 1,
+            doing_rnf: false,
             reschedule_now: false,
             reschedule_to_back: false,
         }

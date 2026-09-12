@@ -85,6 +85,10 @@ struct RangeDecoder<'a> {
     pos: usize,
     range: u32,
     code: u32,
+    /// Set once a byte past the end of the input was requested. The C
+    /// decoder reports that as `SZ_ERROR_INPUT_EOF`; a payload that needs
+    /// it is corrupt, so the caller must not return the output.
+    underrun: bool,
 }
 
 impl<'a> RangeDecoder<'a> {
@@ -99,12 +103,21 @@ impl<'a> RangeDecoder<'a> {
             pos: 5,
             range: 0xFFFF_FFFF,
             code,
+            // The range coder always starts with a zero byte; C rejects
+            // anything else as SZ_ERROR_DATA.
+            underrun: input.len() < 5 || input[0] != 0,
         }
     }
 
     #[inline]
     fn next_byte(&mut self) -> u32 {
-        let b = self.input.get(self.pos).copied().unwrap_or(0);
+        let b = match self.input.get(self.pos) {
+            Some(b) => *b,
+            None => {
+                self.underrun = true;
+                0
+            }
+        };
         self.pos += 1;
         u32::from(b)
     }
@@ -199,6 +212,11 @@ pub(crate) fn decode_raw_checked(input: &[u8], props: &[u8; 5], out_len: usize) 
     let mut reps: [u32; 4] = [1, 1, 1, 1];
 
     while out.len() < out_len {
+        if rc.underrun {
+            // Out of input: stop here like C's LzmaDecode (SZ_ERROR_INPUT_EOF)
+            // instead of decoding zero padding up to a possibly corrupt length.
+            return None;
+        }
         let pos_state = (out.len() as u32 & pb_mask) as usize;
 
         if rc.decode_bit(probs.is_match.get_mut(state as usize)?.get_mut(pos_state)?) == 0 {
@@ -342,5 +360,8 @@ pub(crate) fn decode_raw_checked(input: &[u8], props: &[u8; 5], out_len: usize) 
         }
     }
 
+    if rc.underrun {
+        return None;
+    }
     Some(out)
 }

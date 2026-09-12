@@ -93,7 +93,7 @@ impl Program {
     pub(in crate::runtime) fn offset_foreign_ptr(
         &mut self,
         id: NodeId,
-        by: usize,
+        by: i64,
     ) -> Result<NodeId, EvalError> {
         let (bytes, offset, ptr, finalizer) = match self.cold_node(id) {
             Some(Node::ForeignPtr(foreign_ptr)) => (
@@ -104,10 +104,13 @@ impl Program {
             ),
             _ => return Err(EvalError::ExpectedForeignPtr(id)),
         };
-        let offset = offset.checked_add(by).ok_or(EvalError::Overflow)?;
-        let ptr = ptr
-            .checked_add(i64::try_from(by).map_err(|_| EvalError::Overflow)?)
+        // The offset may go backwards, but not before the start of the block.
+        let offset = i64::try_from(offset)
+            .ok()
+            .and_then(|offset| offset.checked_add(by))
+            .and_then(|offset| usize::try_from(offset).ok())
             .ok_or(EvalError::Overflow)?;
+        let ptr = ptr.checked_add(by).ok_or(EvalError::Overflow)?;
         Ok(self.push_node(Node::ForeignPtr(Box::new(ForeignPtrNode {
             bytes,
             offset,
@@ -631,6 +634,14 @@ impl Program {
     }
 
     pub(in crate::runtime) fn rnf(&mut self, noerr: bool, root: NodeId) -> Result<(), EvalError> {
+        debug_assert!(!self.doing_rnf, "recursive rnf()");
+        self.doing_rnf = noerr;
+        let result = self.rnf_walk(noerr, root);
+        self.doing_rnf = false;
+        result
+    }
+
+    fn rnf_walk(&mut self, noerr: bool, root: NodeId) -> Result<(), EvalError> {
         let mut seen = HashSet::new();
         let mut stack = vec![root];
         while let Some(root) = stack.pop() {

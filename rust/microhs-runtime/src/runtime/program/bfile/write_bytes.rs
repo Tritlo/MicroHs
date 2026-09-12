@@ -45,12 +45,16 @@ impl Program {
             BFileKind::ReadOnlyMemoryView { .. } => unreachable!("handled above"),
             #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
             BFileKind::NativeFile { ungot, .. } => {
-                ungot.push(byte as u8);
+                if byte >= 0 {
+                    ungot.push(byte as u8); // -1 (EOF) is not stored, as in C
+                }
                 Ok(())
             }
             #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
             BFileKind::BrowserFile { ungot, .. } => {
-                ungot.push(byte as u8);
+                if byte >= 0 {
+                    ungot.push(byte as u8);
+                }
                 Ok(())
             }
             BFileKind::Utf8 { unget, .. } => {

@@ -72,7 +72,11 @@ impl Program {
         &mut self,
         entries: Vec<Vec<u8>>,
     ) -> Result<i64, EvalError> {
-        let dir = DirHandle { entries, pos: 0 };
+        let dir = DirHandle {
+            entries,
+            pos: 0,
+            entry_ptr: None,
+        };
         let mut slot = self.dir_first_free;
         while self.dirs.get(slot).is_some_and(Option::is_some) {
             slot += 1;

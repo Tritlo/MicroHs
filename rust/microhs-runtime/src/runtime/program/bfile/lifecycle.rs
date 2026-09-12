@@ -121,13 +121,30 @@ impl Program {
         };
         let mut bytes = name;
         bytes.push(0);
+        self.free_dir_entry(slot)?;
         let ptr = self.alloc_memory(bytes.len())?;
         self.write_pointer_bytes(ptr, &bytes)?;
+        if let Some(dir) = self.dirs.get_mut(slot).and_then(Option::as_mut) {
+            dir.entry_ptr = Some(ptr);
+        }
         Ok(ptr)
+    }
+
+    fn free_dir_entry(&mut self, slot: usize) -> Result<(), EvalError> {
+        let previous = self
+            .dirs
+            .get_mut(slot)
+            .and_then(Option::as_mut)
+            .and_then(|dir| dir.entry_ptr.take());
+        if let Some(previous) = previous {
+            self.free_memory(previous)?;
+        }
+        Ok(())
     }
 
     pub(in crate::runtime) fn close_dir(&mut self, ptr: i64) -> Result<(), EvalError> {
         let slot_index = self.decode_dir_pointer(ptr)?;
+        self.free_dir_entry(slot_index)?;
         let slot = self
             .dirs
             .get_mut(slot_index)
