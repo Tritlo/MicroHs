@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-readonly EXPECTED_COMPILER_SHA="94dcf3ba6d8d5f39e98daced1f799c6d4bbbbaffe039d1c272c71752b0e01e88"
+readonly EXPECTED_COMPILER_SHA="4c5adefd0b0afef06d77867448405336ed470ab7ffffe5571b32a01aec4e9cb2"
 readonly GC_INTERVAL="78643200"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

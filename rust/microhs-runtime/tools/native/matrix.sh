@@ -17,7 +17,7 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)
 cd "$repo_root"
 OS=$(uname -s)
 SELF="${MHS_SELFHOST_COMB:-/tmp/mhs-selfhost.comb}"
-NORTH=0bfe5c5fc505b0b34aa6c90908dd0cdd967bfea535ed3221ad6a842133bc0884
+NORTH=4c5adefd0b0afef06d77867448405336ed470ab7ffffe5571b32a01aec4e9cb2
 CHEAP="${CHEAP:-}"            # C RTS heap flag; empty = C default (~787MB)
 RINT="${RINT:-78643200}"     # Rust GC interval; 75M cells ~= 796MB (matches C default ~787MB)
 MLABEL="${MLABEL:-~790MB (C default heap)}"
