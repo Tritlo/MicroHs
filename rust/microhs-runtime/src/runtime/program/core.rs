@@ -65,6 +65,8 @@ impl Program {
             gc_total_sweep_nanos: 0,
             gc_marked: Vec::new(),
             gc_mark_work: Vec::new(),
+            active_reducers: Vec::new(),
+            gc_shortcut: true,
             gc_foreign_finalizer_marked: Vec::new(),
             gc_events: Vec::new(),
             stable_ptrs: vec![None],

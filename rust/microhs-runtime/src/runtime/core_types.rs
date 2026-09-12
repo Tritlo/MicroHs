@@ -29,6 +29,25 @@ pub enum Node {
     Tick(Box<Vec<u8>>),
 }
 
+/// Roots of one active `reduce_whnf_from` invocation.
+///
+/// Reductions nest: a delegated primitive (FFI, `catch`, forcing an
+/// argument) starts a nested reducer on top of the one that called it. Each
+/// invocation registers its entry node and its machine stack here for its
+/// whole lifetime, so a collection inside a nested reduction can mark the
+/// stacks of every outer level.
+///
+/// `stack` points at a local of the reducer invocation. The pointer is valid
+/// because that local outlives every nested reduction (they all happen
+/// inside calls made from the invocation), and the invocation pops its entry
+/// before the local is dropped. Outer levels only reach a nested reduction
+/// through a delegated call, at which point their stack is consistent.
+#[derive(Clone, Debug)]
+pub(in crate::runtime) struct ActiveReducer {
+    pub(in crate::runtime) entry: NodeId,
+    pub(in crate::runtime) stack: *const EvalStack,
+}
+
 /// Side table for cold node payloads, indexed by `Cell::cold_index`.
 ///
 /// Slots of freed payloads go on a free list and are reused by `alloc`, so
@@ -1169,6 +1188,12 @@ pub struct Program {
     pub(in crate::runtime) gc_total_sweep_nanos: u128,
     pub(in crate::runtime) gc_marked: Vec<bool>,
     pub(in crate::runtime) gc_mark_work: Vec<NodeId>,
+    /// Every active reduction, outermost first (see `ActiveReducer`).
+    pub(in crate::runtime) active_reducers: Vec<ActiveReducer>,
+    /// True while the current collection may shortcut indirections and
+    /// canonicalize small ints. False for a nested collection, where Rust
+    /// locals in outer callers still name the original nodes.
+    pub(in crate::runtime) gc_shortcut: bool,
     pub(in crate::runtime) gc_foreign_finalizer_marked: Vec<bool>,
     pub(in crate::runtime) gc_events: Vec<GcEventStats>,
     pub(in crate::runtime) stable_ptrs: Vec<Option<NodeId>>,
