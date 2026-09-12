@@ -59,9 +59,15 @@ impl Program {
         if !self.can_refill_utf8_ascii(ptr, inner)? {
             return Ok(());
         }
-        let bytes = self.read_bfile_bytes(inner, UTF8_ASCII_REFILL)?;
+        // Probe a few bytes first: on text that is mostly non-ASCII, a full
+        // block read would be pushed back byte by byte at every ASCII char.
+        let mut bytes = self.read_bfile_bytes(inner, UTF8_ASCII_PROBE)?;
         if bytes.is_empty() {
             return Ok(());
+        }
+        if bytes.len() == UTF8_ASCII_PROBE && bytes.iter().all(|byte| (byte & 0x80) == 0) {
+            let rest = self.read_bfile_bytes(inner, UTF8_ASCII_REFILL - UTF8_ASCII_PROBE)?;
+            bytes.extend_from_slice(&rest);
         }
         let ascii_len = bytes
             .iter()

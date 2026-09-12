@@ -24,7 +24,7 @@ impl Program {
         let rewrite = match name {
             "fp+" => {
                 let foreign_ptr = self.eval_foreign_ptr_id(args[0])?;
-                let offset = int_to_usize(self.eval_int(args[1])?)?;
+                let offset = self.eval_int(args[1])?;
                 Some((2, self.offset_foreign_ptr(foreign_ptr, offset)?))
             }
             "fp2bs" => {

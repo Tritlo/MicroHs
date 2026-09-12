@@ -250,7 +250,7 @@ impl Program {
             Some(U) if args_len >= 2 => {
                 app_step!(2, arg!(1), arg!(0));
             }
-            Some(IoPerformIo) if args_len >= 1 => {
+            Some(IoPerformIo) if args_len >= 1 && !self.doing_rnf => {
                 let world = self.world();
                 let k = self.prim("K");
                 let action = self.app(arg!(0), world);
@@ -367,7 +367,7 @@ impl Program {
             }
             Some(IoYield) if args_len >= 1 => {
                 self.check_pending_async_exception(false)?;
-                self.run_pending_weak_finalizers()?;
+                self.yield_current_thread();
                 let unit = self.prim("I");
                 Some((1, self.pair(unit, arg!(0))))
             }
@@ -378,21 +378,7 @@ impl Program {
                 let action = arg!(0);
                 let world = self.world();
                 let child_root = self.app(action, world);
-                let id = self.next_thread_id;
-                self.next_thread_id += 1;
-                let slot = self.threads.len();
-                self.threads.push(Some(ThreadControl {
-                    id,
-                    root: child_root,
-                    delivered_value: None,
-                    pending_exception: None,
-                    delay_ready: false,
-                    masking_state: self.masking_state,
-                }));
-                self.thread_ids.push(id);
-                self.thread_states.push(ThreadState::Runnable);
-                self.live_thread_count += 1;
-                self.run_queue.push_back(slot);
+                let id = self.spawn_thread(child_root);
                 // Leave the (previously single-thread, unbounded) slice so the scheduler
                 // switches to preemptive slicing now that a second thread exists.
                 self.reschedule_now = true;
@@ -404,11 +390,8 @@ impl Program {
                 Some((1, self.pair(state, arg!(0))))
             }
             Some(IoSetMaskingState) if args_len >= 2 => {
-                self.masking_state = self.eval_int(arg!(0))?;
-                let masking_state = self.masking_state;
-                if let Some(thread) = self.current_thread_mut() {
-                    thread.masking_state = masking_state;
-                }
+                let masking_state = self.eval_int(arg!(0))?;
+                self.set_masking_state(masking_state);
                 let unit = self.prim("I");
                 Some((2, self.pair(unit, arg!(1))))
             }
@@ -428,6 +411,7 @@ impl Program {
                     ThreadState::BlockedMVar => 1,
                     ThreadState::BlockedOther => 2,
                     ThreadState::Finished => 3,
+                    ThreadState::Died => 4,
                 });
                 Some((2, self.pair(status, arg!(1))))
             }
@@ -443,7 +427,7 @@ impl Program {
                     Ok(Some(value)) => value,
                     Ok(None) => return Err(EvalError::InvalidMVar),
                     Err(EvalError::Blocked(reason)) => {
-                        return Err(self.block_current_thread_at(reason, root));
+                        return Err(self.block_current_thread(reason));
                     }
                     Err(err) => return Err(err),
                 };
@@ -456,7 +440,7 @@ impl Program {
                     Ok(Some(value)) => value,
                     Ok(None) => return Err(EvalError::InvalidMVar),
                     Err(EvalError::Blocked(reason)) => {
-                        return Err(self.block_current_thread_at(reason, root));
+                        return Err(self.block_current_thread(reason));
                     }
                     Err(err) => return Err(err),
                 };
@@ -467,7 +451,7 @@ impl Program {
                 let mvar = self.eval_mvar_id(arg!(0))?;
                 if let Err(err) = self.put_mvar(mvar, arg!(1), true) {
                     return Err(match err {
-                        EvalError::Blocked(reason) => self.block_current_thread_at(reason, root),
+                        EvalError::Blocked(reason) => self.block_current_thread(reason),
                         err => err,
                     });
                 }
@@ -512,25 +496,34 @@ impl Program {
                     let usecs = self.eval_int(arg!(0))?;
                     let usecs = u128::try_from(usecs).map_err(|_| EvalError::Overflow)?;
                     let wake = self.scheduler_now_micros().saturating_add(usecs);
-                    return Err(self.block_current_thread_at(BlockReason::Delay(wake), root));
+                    return Err(self.block_current_thread(BlockReason::Delay(wake)));
                 }
             }
             Some(IoThrowTo) if args_len >= 3 => {
                 self.check_pending_async_exception(true)?;
                 let thread = self.eval_thread_id(arg!(0))?;
-                self.throw_to_thread(thread, arg!(1))?;
+                if let Err(err) = self.throw_to_thread(thread, arg!(1)) {
+                    return Err(match err {
+                        EvalError::Blocked(reason) => self.block_current_thread(reason),
+                        err => err,
+                    });
+                }
                 let unit = self.prim("I");
                 Some((3, self.pair(unit, arg!(2))))
             }
             Some(Catch) if args_len >= 3 => {
+                // CATCH x y z --> CATCHR (x z) y z. Materialize `(x z)` in the
+                // graph first so that a resumed thread re-enters the same action.
                 let action = self.app(arg!(0), arg!(2));
-                Some((3, self.catch_result(action, arg!(1), arg!(2))?))
+                Some((3, self.catchr_redex(action, arg!(1), arg!(2))))
             }
             Some(CatchR) if args_len >= 3 => {
                 Some((3, self.catch_result(arg!(0), arg!(1), arg!(2))?))
             }
-            Some(Raise) if args_len >= 1 => return Err(EvalError::Raised(arg!(0))),
-            Some(Rnf) if args_len >= 2 => {
+            Some(Raise) if args_len >= 1 && !self.doing_rnf => {
+                return Err(EvalError::Raised(arg!(0)));
+            }
+            Some(Rnf) if args_len >= 2 && !self.doing_rnf => {
                 let noerr = self.eval_int(arg!(0))? != 0;
                 self.rnf(noerr, arg!(1))?;
                 Some((2, self.prim("I")))

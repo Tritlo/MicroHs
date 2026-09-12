@@ -280,23 +280,14 @@ impl Program {
                                 work.push(SerializeTask::Label(id));
                             }
                         }
-                        Node::ThreadId(_) | Node::Weak(_) | Node::MVar(_) => {
+                        // A process-local address is meaningless in a stream;
+                        // C's printrec raises exn_serialize for these too.
+                        Node::ThreadId(_)
+                        | Node::Weak(_)
+                        | Node::MVar(_)
+                        | Node::Ptr(_)
+                        | Node::RawFunPtr(_) => {
                             return Err(EvalError::UnsupportedSerialization(id));
-                        }
-                        Node::Ptr(ptr) => {
-                            serialize_ptr(ptr, out);
-                            out.push(b' ');
-                            if share {
-                                work.push(SerializeTask::Label(id));
-                            }
-                        }
-                        Node::RawFunPtr(ptr) => {
-                            out.extend_from_slice(b"toFunPtr #");
-                            push_display(out, ptr);
-                            out.extend_from_slice(b" @ ");
-                            if share {
-                                work.push(SerializeTask::Label(id));
-                            }
                         }
                         Node::ForeignPtr(foreign_ptr) => {
                             if let Some(mpz) = self.mpz_decimal_bytes_for_ptr(foreign_ptr.ptr) {

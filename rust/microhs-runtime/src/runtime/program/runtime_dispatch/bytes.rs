@@ -208,11 +208,17 @@ impl Program {
                 self.push_node(node)
             }
             "bsunpack" => {
+                if self.doing_rnf {
+                    return Ok(None);
+                }
                 let bytes = self.eval_bytes(args[0])?;
                 let values = bytes.into_iter().map(i64::from);
                 self.int_list(values)
             }
             "fromUTF8" => {
+                if self.doing_rnf {
+                    return Ok(None);
+                }
                 let bytes = self.eval_bytes(args[0])?;
                 let values = decode_utf8_string_bytes(&bytes)?;
                 self.int_list(values.into_iter().map(i64::from))

@@ -297,6 +297,9 @@ impl MpzValue {
     }
 
     pub(in crate::runtime) fn shl_bits(mut self, bits: usize) -> Self {
+        if self.is_zero() {
+            return self;
+        }
         for _ in 0..bits {
             self.shl1_mut();
         }
@@ -307,6 +310,9 @@ impl MpzValue {
         let mut out = self.abs();
         let mut dropped = false;
         for _ in 0..bits {
+            if out.is_zero() {
+                break; // nothing left to shift; a huge count must not spin
+            }
             dropped |= out.div2_mut();
         }
         (out, dropped)
@@ -461,7 +467,11 @@ impl MpzValue {
     }
 
     pub(in crate::runtime) fn test_bit_abs(&self, bit: usize) -> bool {
-        self.to_bits_abs().get(bit).copied().unwrap_or(false)
+        if bit >= self.bit_len() {
+            return false;
+        }
+        let (mut shifted, _) = self.shr_abs_bits(bit);
+        shifted.div2_mut()
     }
 
     pub(in crate::runtime) fn test_bit_signed(&self, bit: usize) -> bool {
