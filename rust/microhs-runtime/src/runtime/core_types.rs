@@ -29,6 +29,76 @@ pub enum Node {
     Tick(Box<Vec<u8>>),
 }
 
+/// Roots of one active `reduce_whnf_from` invocation.
+///
+/// Reductions nest: a delegated primitive (FFI, `catch`, forcing an
+/// argument) starts a nested reducer on top of the one that called it. Each
+/// invocation registers its entry node and its machine stack here for its
+/// whole lifetime, so a collection inside a nested reduction can mark the
+/// stacks of every outer level.
+///
+/// `stack` points at a local of the reducer invocation. The pointer is valid
+/// because that local outlives every nested reduction (they all happen
+/// inside calls made from the invocation), and the invocation pops its entry
+/// before the local is dropped. Outer levels only reach a nested reduction
+/// through a delegated call, at which point their stack is consistent.
+#[derive(Clone, Debug)]
+pub(in crate::runtime) struct ActiveReducer {
+    pub(in crate::runtime) entry: NodeId,
+    pub(in crate::runtime) stack: *const EvalStack,
+}
+
+/// Side table for cold node payloads, indexed by `Cell::cold_index`.
+///
+/// Slots of freed payloads go on a free list and are reused by `alloc`, so
+/// the table stays bounded by the live cold count instead of growing with
+/// every cold allocation the program ever made.
+#[derive(Clone, Debug, Default)]
+pub(in crate::runtime) struct ColdNodes {
+    slots: Vec<Option<Node>>,
+    free: Vec<usize>,
+}
+
+impl ColdNodes {
+    pub(in crate::runtime) fn alloc(&mut self, node: Node) -> usize {
+        if let Some(index) = self.free.pop() {
+            debug_assert!(self.slots[index].is_none());
+            self.slots[index] = Some(node);
+            index
+        } else {
+            self.slots.push(Some(node));
+            self.slots.len() - 1
+        }
+    }
+
+    /// Drop the payload at `index` and make the slot reusable.
+    #[inline]
+    pub(in crate::runtime) fn release(&mut self, index: usize) {
+        debug_assert!(index < self.slots.len());
+        // SAFETY: cold indices come only from `alloc`, and each is referenced
+        // by exactly one cell, so a released slot is never read again until
+        // `alloc` hands it out.
+        unsafe {
+            *self.slots.get_unchecked_mut(index) = None;
+        }
+        self.free.push(index);
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn get(&self, index: usize) -> Option<&Node> {
+        debug_assert!(index < self.slots.len());
+        // SAFETY: cold indices come only from `alloc` and the table never shrinks.
+        unsafe { self.slots.get_unchecked(index).as_ref() }
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn get_mut(&mut self, index: usize) -> Option<&mut Node> {
+        debug_assert!(index < self.slots.len());
+        // SAFETY: same invariant as `get`.
+        unsafe { self.slots.get_unchecked_mut(index).as_mut() }
+    }
+}
+
 std::cfg_select! {
     feature = "wide-cell" => {
         /// One hot heap slot.
@@ -151,7 +221,7 @@ impl Cell {
         self.tag_bits() == tag.bits()
     }
 
-    pub(in crate::runtime) fn from_node(node: Node, cold_nodes: &mut Vec<Option<Node>>) -> Self {
+    pub(in crate::runtime) fn from_node(node: Node, cold_nodes: &mut ColdNodes) -> Self {
         match node {
             Node::App(fun, arg) => Self::app(fun, arg),
             Node::Indir(target) => Self::indir(target),
@@ -161,15 +231,11 @@ impl Cell {
             Node::Int(value) if can_inline_int(value) => Self::int(value),
             Node::Float32(value) => Self::float32(value),
             Node::ThreadId(value) if can_inline_int(value) => Self::thread_id(value),
-            cold => {
-                let index = cold_nodes.len();
-                cold_nodes.push(Some(cold));
-                Self::cold(index)
-            }
+            cold => Self::cold(cold_nodes.alloc(cold)),
         }
     }
 
-    pub(in crate::runtime) fn to_node(self, cold_nodes: &[Option<Node>]) -> Node {
+    pub(in crate::runtime) fn to_node(self, cold_nodes: &ColdNodes) -> Node {
         match self.tag() {
             CellTag::App => Node::App(self.id_payload(), self.id_word1()),
             CellTag::Indir => Node::Indir(self.option_id_word1()),
@@ -185,8 +251,8 @@ impl Cell {
             CellTag::ThreadId => {
                 Node::ThreadId(self.thread_id_value().expect("ThreadId cell must decode"))
             }
-            CellTag::Cold => cold_nodes[self.cold_index().expect("Cold cell must decode")]
-                .as_ref()
+            CellTag::Cold => cold_nodes
+                .get(self.cold_index().expect("Cold cell must decode"))
                 .expect("live cold cell pointed at freed cold node")
                 .clone(),
         }
@@ -1092,7 +1158,7 @@ impl std::error::Error for EvalError {}
 #[derive(Clone, Debug)]
 pub struct Program {
     pub(in crate::runtime) nodes: Vec<Cell>,
-    pub(in crate::runtime) cold_nodes: Vec<Option<Node>>,
+    pub(in crate::runtime) cold_nodes: ColdNodes,
     pub(in crate::runtime) root: NodeId,
     pub(in crate::runtime) labels: HashMap<usize, NodeId>,
     pub(in crate::runtime) node_pointers: Vec<NodeId>,
@@ -1122,6 +1188,12 @@ pub struct Program {
     pub(in crate::runtime) gc_total_sweep_nanos: u128,
     pub(in crate::runtime) gc_marked: Vec<bool>,
     pub(in crate::runtime) gc_mark_work: Vec<NodeId>,
+    /// Every active reduction, outermost first (see `ActiveReducer`).
+    pub(in crate::runtime) active_reducers: Vec<ActiveReducer>,
+    /// True while the current collection may shortcut indirections and
+    /// canonicalize small ints. False for a nested collection, where Rust
+    /// locals in outer callers still name the original nodes.
+    pub(in crate::runtime) gc_shortcut: bool,
     pub(in crate::runtime) gc_foreign_finalizer_marked: Vec<bool>,
     pub(in crate::runtime) gc_events: Vec<GcEventStats>,
     pub(in crate::runtime) stable_ptrs: Vec<Option<NodeId>>,

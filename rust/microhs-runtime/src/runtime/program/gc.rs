@@ -226,6 +226,19 @@ impl Program {
         if let Some(machine_stack) = machine_stack {
             self.mark_machine_stack(marked, work, machine_stack);
         }
+        // The innermost reducer's stack is `machine_stack`; a caller may
+        // still use its entry node after a nested slice returns (for example
+        // `catch` after a step limit), so every entry is a root.
+        let outer = self.active_reducers.len().saturating_sub(1);
+        for (depth, reducer) in self.active_reducers.iter().enumerate() {
+            Self::mark_node_id(marked, work, reducer.entry);
+            if depth < outer {
+                // SAFETY: see `ActiveReducer`; the outer reducer's local
+                // outlives this collection and is not accessed meanwhile.
+                let stack = unsafe { &*reducer.stack };
+                self.mark_machine_stack(marked, work, stack);
+            }
+        }
         Self::mark_eval_spine(marked, work, eval_spine);
         for id in scratch_args.iter().chain(scratch_apps) {
             Self::mark_node_id(marked, work, *id);
@@ -463,6 +476,9 @@ impl Program {
             };
             let tag = cell.tag_bits();
             if tag == CellTag::Indir.bits() {
+                // Compress the chain in both modes. Cells in the middle of a
+                // chain are reachable only through another indirection, so no
+                // suspended caller can hold a valid id for one of them.
                 if let Some(target) = self.compress_marked_indirection(id) {
                     Self::mark_node_id(marked, work, target);
                 }
@@ -471,6 +487,13 @@ impl Program {
             if tag == CellTag::App.bits() {
                 let fun = cell.id_payload();
                 let arg = cell.id_word1();
+                if !self.gc_shortcut {
+                    // Keep the children as they are: an outer caller may
+                    // hold the id of an indirection or non-canonical int here.
+                    Self::mark_node_id(marked, work, fun);
+                    Self::mark_node_id(marked, work, arg);
+                    continue;
+                }
                 let fun = self.canonical_gc_target(fun).unwrap_or(fun);
                 let arg = self.canonical_gc_target(arg).unwrap_or(arg);
                 if REDUCE_APPS {
@@ -499,7 +522,7 @@ impl Program {
             }
             if tag == CellTag::Cold.bits() {
                 let cold = cell.payload0() as usize;
-                match self.cold_nodes.get(cold).and_then(Option::as_ref) {
+                match self.cold_nodes.get(cold) {
                     Some(Node::Ptr(ptr) | Node::RawFunPtr(ptr)) => {
                         self.mark_pointer_target(marked, work, *ptr);
                     }
@@ -680,6 +703,9 @@ impl Program {
         machine_stack: Option<&EvalStack>,
     ) -> Result<usize, EvalError> {
         let started = Instant::now();
+        // A nested collection must leave every reachable node in place:
+        // outer callers hold plain `NodeId`s that are not roots.
+        self.gc_shortcut = self.reduce_depth <= 1;
         let allocations_since_collect = self.gc_allocations_since_collect;
         let mut marked = std::mem::take(&mut self.gc_marked);
         if marked.len() < self.nodes.len() {
@@ -823,9 +849,7 @@ impl Program {
         scratch_apps: &[NodeId],
         machine_stack: Option<&EvalStack>,
     ) -> Result<(), EvalError> {
-        if self.reduce_depth != 1 {
-            return Ok(());
-        }
+        debug_assert_eq!(self.active_reducers.len(), self.reduce_depth);
         if !self.force_gc {
             if self.gc_node_interval == 0 {
                 return Ok(());

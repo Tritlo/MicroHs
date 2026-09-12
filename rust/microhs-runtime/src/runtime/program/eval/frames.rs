@@ -648,8 +648,14 @@ impl Program {
         limit: usize,
         profile_resolve: bool,
     ) -> Result<(NodeId, usize), EvalError> {
+        let mut stack = EvalStack::default();
         self.reduce_depth += 1;
-        let result = self.reduce_whnf_from_stack(root, limit, profile_resolve);
+        self.active_reducers.push(ActiveReducer {
+            entry: root,
+            stack: &stack,
+        });
+        let result = self.reduce_whnf_from_stack(root, limit, profile_resolve, &mut stack);
+        self.active_reducers.pop();
         self.reduce_depth -= 1;
         result
     }
@@ -661,9 +667,9 @@ impl Program {
         mut current: NodeId,
         limit: usize,
         profile_resolve: bool,
+        stack: &mut EvalStack,
     ) -> Result<(NodeId, usize), EvalError> {
         let mut steps = 0;
-        let mut stack = EvalStack::default();
         let mut eval_spine = EvalSpine::default();
         let mut scratch_args = Vec::new();
         let mut scratch_apps = Vec::new();
@@ -684,15 +690,13 @@ impl Program {
                 &eval_spine,
                 &scratch_args,
                 &scratch_apps,
-                Some(&stack),
+                Some(stack),
             )?;
 
             current = self.resolve_for_whnf(current, profile_resolve)?;
 
             if stack.app_len() == 0 {
-                if let Some((next, reductions)) =
-                    self.finish_ready_stack_frame(&mut stack, current)?
-                {
+                if let Some((next, reductions)) = self.finish_ready_stack_frame(stack, current)? {
                     steps += reductions;
                     self.reductions += reductions;
                     if steps >= limit {
@@ -712,9 +716,7 @@ impl Program {
             }
 
             if stack.app_len() == 0 {
-                if let Some((next, reductions)) =
-                    self.finish_ready_stack_frame(&mut stack, current)?
-                {
+                if let Some((next, reductions)) = self.finish_ready_stack_frame(stack, current)? {
                     steps += reductions;
                     self.reductions += reductions;
                     if steps >= limit {
@@ -727,7 +729,7 @@ impl Program {
 
             let step = self.stack_eval_step(
                 current,
-                &mut stack,
+                stack,
                 &mut scratch_args,
                 limit - steps,
                 profile_resolve,
@@ -753,12 +755,11 @@ impl Program {
                         return Err(EvalError::StepLimit { limit });
                     }
                     let value = if stack.has_frame_below_apps() {
-                        self.rethread_stack_app_segment(&mut stack, head)?
+                        self.rethread_stack_app_segment(stack, head)?
                     } else {
                         node
                     };
-                    let Some((next, reductions)) =
-                        self.finish_whnf_stack_frame(&mut stack, value)?
+                    let Some((next, reductions)) = self.finish_whnf_stack_frame(stack, value)?
                     else {
                         return Ok((value, steps));
                     };
@@ -785,7 +786,7 @@ impl Program {
                     let root = if stack.app_len() == 0 {
                         root
                     } else {
-                        self.rethread_stack_app_segment(&mut stack, head)?
+                        self.rethread_stack_app_segment(stack, head)?
                     };
                     let Some(step) = self.eval_loop_step(
                         root,
@@ -797,7 +798,7 @@ impl Program {
                     else {
                         if stack.top_is_frame() {
                             let Some((next, reductions)) =
-                                self.finish_whnf_stack_frame(&mut stack, root)?
+                                self.finish_whnf_stack_frame(stack, root)?
                             else {
                                 return Ok((root, steps));
                             };

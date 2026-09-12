@@ -93,6 +93,30 @@ The GC root set must include:
 If a new subsystem stores `NodeId` outside the arena itself, it needs an explicit
 mark path or it must be proven temporary across GC safe points.
 
+### Nested reductions
+
+A delegated primitive (`catch`, FFI, forcing an argument, `rnf`) runs a nested
+`reduce_whnf_from` on top of the reducer that called it. Every invocation
+registers its entry node and a pointer to its machine stack in
+`Program::active_reducers` for its whole lifetime, so a collection at any
+depth can mark the stacks of all outer levels and every entry node. Outer
+levels only reach a nested reduction through a delegated call, at which point
+their stack is consistent; the registration is once per invocation, so the
+hot delegation sites pay nothing.
+
+A nested collection is conservative: it marks `App` children as they are
+(no indirection shortcut through app pointers, no small-int canonicalization),
+because an outer caller may still hold the id of such a child in a Rust
+local. Indirection chains are still compressed, since a cell in the middle of
+a chain is reachable only through another indirection and no valid local can
+name it. The next top-level collection restores the full shortcut policy.
+Without this, a long-running `catch` body (and so every `bracket`, `finally`,
+`withFile`) never collected at all.
+
+Cold payloads live in `ColdNodes`, a slot table with a free list: releasing a
+payload returns its slot for reuse, so the table is bounded by the live cold
+count rather than by every cold allocation the program ever made.
+
 ## Host Boundary
 
 Host operations are grouped under `runtime/host` and `runtime/program`:

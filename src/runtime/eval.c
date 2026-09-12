@@ -638,9 +638,14 @@ static INLINE tag_t GETTAG(NODEPTR p)
 static INLINE void SETTAG(NODEPTR p, tag_t t)
 {
   switch(t) {
-  case BIT_AP: break;           /* do nothing, bits are already 0 */
-  case BIT_IN: p->ufun.uutag |= BIT_IN; break;
-  default:     p->ufun.uutag = (t << TAG_SHIFT) | BIT_TG; break;
+  case T_AP:
+    break;           /* do nothing, bits are already 0 */
+  case T_IND:
+    p->ufun.uutag |= BIT_IN;
+    break;
+  default:
+    p->ufun.uutag = (t << TAG_SHIFT) | BIT_TG;
+    break;
   }
 }
 
@@ -678,6 +683,13 @@ static INLINE void SETTAG(NODEPTR p, tag_t t)
 #define ALLOC_HEAP(n) do { cells = mmalloc(n * sizeof(node)); } while(0)
 #define LABEL(n) ((heapoffs_t)((n) - cells))
 node *cells;                 /* All cells */
+
+/* Prefetch a node we know we'll need soon but haven't dereferenced yet. */
+#if defined(__GNUC__) || defined(__clang__)
+#define PREFETCH_READ(addr) __builtin_prefetch((addr), 0, 2)
+#else
+#define PREFETCH_READ(addr) do { } while(0)
+#endif
 
 /*
  * Byte arrays.
@@ -2988,6 +3000,7 @@ mark(NODEPTR *np)
 
   if (!is_marked_used(*to_push)) {
     //  mark_depth++;
+    PREFETCH_READ(*to_push);   /* won't be popped and dereferenced until later */
     PUSH((NODEPTR)to_push);
   }
   goto top;
@@ -4698,6 +4711,11 @@ headutf8(struct bytestring bs, void **ret)
   uint8_t *p = bs.bs_array;
   if (bs.bs_size == 0)
     ERR("headUTF8 0");
+#if !WANT_UTF8
+  if (ret)
+    *ret = p + 1;
+  return *p;
+#else
   int c1 = *p++;
   if ((c1 & 0x80) == 0) {
     if (ret)
@@ -4730,6 +4748,7 @@ headutf8(struct bytestring bs, void **ret)
   }
   ERR("headUTF8 4");
   NOTREACHED;
+#endif  /* WANT_UTF8 */
 }
 
 /* Evaluate to a Bool */
@@ -7797,7 +7816,9 @@ from_t mhs_mpz_cmp(int s) { return mhs_from_Int(s, 2, mpz_cmp(mhs_to_Ptr(s, 0), 
 #if WANT_FLOAT64
 from_t mhs_mpz_get_d(int s) { return mhs_from_Double(s, 1, mpz_get_d(mhs_to_Ptr(s, 0))); }
 #endif  /* WANT_FLOAT64 */
+#if WANT_FLOAT32
 from_t mhs_mpz_get_f(int s) { return mhs_from_Float(s, 1, (float)mpz_get_d(mhs_to_Ptr(s, 0))); }
+#endif  /* WANT_FLOAT32 */
 from_t mhs_mpz_get_si(int s) { return mhs_from_Int(s, 1, mpz_get_si_(mhs_to_Ptr(s, 0))); }
 from_t mhs_mpz_init_set_si(int s) { mpz_init_set_si(mhs_to_Ptr(s, 0), mhs_to_Int(s, 1)); return mhs_from_Unit(s, 2); }
 from_t mhs_mpz_init_set_ui(int s) { mpz_init_set_ui(mhs_to_Ptr(s, 0), mhs_to_Word(s, 1)); return mhs_from_Unit(s, 2); }
@@ -8065,7 +8086,9 @@ const struct ffi_entry ffi_table[] = {
   { "mpz_tdiv_qr", 4, mhs_mpz_tdiv_qr},
   { "mpz_tstbit", 2, mhs_mpz_tstbit},
   { "mpz_xor", 3, mhs_mpz_xor},
+#if WANT_FLOAT32
   { "mpz_get_f", 1, mhs_mpz_get_f},
+#endif  /* WANT_FLOAT32 */
 #if WANT_INT64
   { "mpz_init_set_si64", 2, mhs_mpz_init_set_si64},
   { "mpz_init_set_ui64", 2, mhs_mpz_init_set_ui64},

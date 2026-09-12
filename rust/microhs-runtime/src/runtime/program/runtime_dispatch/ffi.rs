@@ -769,7 +769,7 @@ impl Program {
             "scalbn" => {
                 let x = self.eval_float64(args[0])?;
                 let n = int_to_i32(self.eval_int(args[1])?)?;
-                Node::Float64(x * 2.0f64.powi(n))
+                Node::Float64(scalbn(x, n))
             }
             "atan2f" => {
                 let x = self.eval_float32(args[0])?;
@@ -784,7 +784,7 @@ impl Program {
             "scalbnf" => {
                 let x = self.eval_float32(args[0])?;
                 let n = int_to_i32(self.eval_int(args[1])?)?;
-                Node::Float32(x * 2.0f32.powi(n))
+                Node::Float32(scalbnf(x, n))
             }
             _ => unreachable!("checked FFI symbol"),
         };
@@ -931,4 +931,51 @@ impl Program {
         self.write_pointer_bytes(ptr, &value.to_ne_bytes())?;
         Ok(Node::prim("I"))
     }
+}
+
+/// Compute `x * 2^n` without an intermediate overflow or underflow, like
+/// libm `scalbn`. `2^n` as a float is 0 or infinity outside the exponent
+/// range even when the exact product is finite, so scale in steps instead.
+pub(in crate::runtime) fn scalbn(mut x: f64, mut n: i32) -> f64 {
+    let two_pow_1023 = f64::from_bits(0x7fe0_0000_0000_0000);
+    let two_pow_m1022_p53 =
+        f64::from_bits(0x0010_0000_0000_0000) * f64::from_bits(0x4340_0000_0000_0000);
+    if n > 1023 {
+        x *= two_pow_1023;
+        n -= 1023;
+        if n > 1023 {
+            x *= two_pow_1023;
+            n = (n - 1023).min(1023);
+        }
+    } else if n < -1022 {
+        x *= two_pow_m1022_p53;
+        n += 1022 - 53;
+        if n < -1022 {
+            x *= two_pow_m1022_p53;
+            n = (n + 1022 - 53).max(-1022);
+        }
+    }
+    x * f64::from_bits(((0x3ff + n) as u64) << 52)
+}
+
+/// Single-precision `scalbn`; see [`scalbn`].
+pub(in crate::runtime) fn scalbnf(mut x: f32, mut n: i32) -> f32 {
+    let two_pow_127 = f32::from_bits(0x7f00_0000);
+    let two_pow_m126_p24 = f32::from_bits(0x0080_0000) * f32::from_bits(0x4b80_0000);
+    if n > 127 {
+        x *= two_pow_127;
+        n -= 127;
+        if n > 127 {
+            x *= two_pow_127;
+            n = (n - 127).min(127);
+        }
+    } else if n < -126 {
+        x *= two_pow_m126_p24;
+        n += 126 - 24;
+        if n < -126 {
+            x *= two_pow_m126_p24;
+            n = (n + 126 - 24).max(-126);
+        }
+    }
+    x * f32::from_bits(((0x7f + n) as u32) << 23)
 }

@@ -24,21 +24,30 @@ cell that lifts the cap to ~4.29 B — a correctness escape hatch, not a perf op
 at equal memory (~787 MB) it holds half the cells and runs **+38%** slower. See
 `microhs-runtime/docs/cell-redesign-plan.md`.)
 
-**Equal memory — C's default heap (~790 MB), median of 3 interleaved runs, RSS
-matched within ~1% (Rust 796 MB vs C 787 MB), every Rust output byte-identical:**
+**Equal memory — C's default heap (~790 MB), median of 3 interleaved runs, Rust at
+the 75 M-cell GC interval (736 MB vs C 788 MB), every Rust output byte-identical:**
 
-| runtime (~790 MB RSS) | wall (median) | Rust ÷ C |
-|---|---:|---:|
-| C `eval.c` (`-O3`) | 48.2 s | — |
-| **Rust (shipped, `cargo build --release`)** | 48.0 s | **≈1.0x — ties (±0.5% across runs)** |
-| C `eval.c` (`-O3`, PGO) | 46.5 s | — |
-| **Rust (PGO)** | 43.0 s | **0.924x — 7.6% faster** |
+| runtime (~790 MB budget) | wall (median) | RSS | Rust ÷ C |
+|---|---:|---:|---:|
+| C `eval.c` (`-O3`) | 50.2 s | 788 MB | — |
+| **Rust (shipped, `cargo build --release`)** | 52.3 s | 736 MB | **1.041x** |
+| C `eval.c` (`-O3`, PGO) | 49.0 s | 788 MB | — |
+| **Rust (PGO)** | 44.2 s | 736 MB | **0.903x — 9.7% faster** |
 
-At C's out-of-the-box memory budget, **Rust ties C without PGO and is 7.6% faster
-with PGO.** A tight budget is GC-bound, and Rust's 2× cell density means far fewer
-collections — its packed representation, a liability on raw reduction speed,
-becomes the advantage. Absolute wall drifts a few percent between sessions, so the
-interleaved **ratio** is the stable metric.
+At C's out-of-the-box memory budget, **Rust is within 4% of C without PGO and 10%
+faster with PGO**, while using 52 MB less. A tight budget is GC-bound, and Rust's
+2× cell density means far fewer collections — its packed representation, a
+liability on raw reduction speed, becomes the advantage. Absolute wall drifts a few
+percent between sessions, so the interleaved **ratio** is the stable metric; the
+non-PGO ratio moved from ≈1.0x to 1.04x with the Rust 1.96+/LLVM 22 toolchain
+(see below), not with any runtime change.
+
+Two collector fixes landed 2026-09-12 (see `ARCHITECTURE.md`, "GC"): collections
+now also run inside nested reductions — before, nothing allocated under a `catch`
+(so `bracket`, `finally`, `withFile`) was ever collected — and the cold-payload
+table reuses freed slots instead of growing with every `Double`/`Int64`/`ByteString`
+allocation. Together they cost +0.9% instructions on the self-host and are within
+wall-clock noise in an interleaved A/B.
 
 **Loose memory (128 M cells each) inverts it**, and exposes the per-reduction gap
 underneath:
@@ -97,7 +106,7 @@ flag; see `microhs-runtime/docs/perf-gap-analysis.md` for the full analysis.
 Size: the Rust runtime is ~22k LOC (including tests, the wasm/JS-FFI boundary, and
 the bench harness) against ~8k for the C runtime.
 
-_Self-host compile, measured 2026-07-06._
+_Self-host compile, measured 2026-09-12 (rustc 1.97.1, upstream 45578216)._
 
 ## Layout
 
