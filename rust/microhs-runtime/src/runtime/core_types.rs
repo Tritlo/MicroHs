@@ -29,6 +29,57 @@ pub enum Node {
     Tick(Box<Vec<u8>>),
 }
 
+/// Side table for cold node payloads, indexed by `Cell::cold_index`.
+///
+/// Slots of freed payloads go on a free list and are reused by `alloc`, so
+/// the table stays bounded by the live cold count instead of growing with
+/// every cold allocation the program ever made.
+#[derive(Clone, Debug, Default)]
+pub(in crate::runtime) struct ColdNodes {
+    slots: Vec<Option<Node>>,
+    free: Vec<usize>,
+}
+
+impl ColdNodes {
+    pub(in crate::runtime) fn alloc(&mut self, node: Node) -> usize {
+        if let Some(index) = self.free.pop() {
+            debug_assert!(self.slots[index].is_none());
+            self.slots[index] = Some(node);
+            index
+        } else {
+            self.slots.push(Some(node));
+            self.slots.len() - 1
+        }
+    }
+
+    /// Drop the payload at `index` and make the slot reusable.
+    #[inline]
+    pub(in crate::runtime) fn release(&mut self, index: usize) {
+        debug_assert!(index < self.slots.len());
+        // SAFETY: cold indices come only from `alloc`, and each is referenced
+        // by exactly one cell, so a released slot is never read again until
+        // `alloc` hands it out.
+        unsafe {
+            *self.slots.get_unchecked_mut(index) = None;
+        }
+        self.free.push(index);
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn get(&self, index: usize) -> Option<&Node> {
+        debug_assert!(index < self.slots.len());
+        // SAFETY: cold indices come only from `alloc` and the table never shrinks.
+        unsafe { self.slots.get_unchecked(index).as_ref() }
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn get_mut(&mut self, index: usize) -> Option<&mut Node> {
+        debug_assert!(index < self.slots.len());
+        // SAFETY: same invariant as `get`.
+        unsafe { self.slots.get_unchecked_mut(index).as_mut() }
+    }
+}
+
 std::cfg_select! {
     feature = "wide-cell" => {
         /// One hot heap slot.
@@ -151,7 +202,7 @@ impl Cell {
         self.tag_bits() == tag.bits()
     }
 
-    pub(in crate::runtime) fn from_node(node: Node, cold_nodes: &mut Vec<Option<Node>>) -> Self {
+    pub(in crate::runtime) fn from_node(node: Node, cold_nodes: &mut ColdNodes) -> Self {
         match node {
             Node::App(fun, arg) => Self::app(fun, arg),
             Node::Indir(target) => Self::indir(target),
@@ -161,15 +212,11 @@ impl Cell {
             Node::Int(value) if can_inline_int(value) => Self::int(value),
             Node::Float32(value) => Self::float32(value),
             Node::ThreadId(value) if can_inline_int(value) => Self::thread_id(value),
-            cold => {
-                let index = cold_nodes.len();
-                cold_nodes.push(Some(cold));
-                Self::cold(index)
-            }
+            cold => Self::cold(cold_nodes.alloc(cold)),
         }
     }
 
-    pub(in crate::runtime) fn to_node(self, cold_nodes: &[Option<Node>]) -> Node {
+    pub(in crate::runtime) fn to_node(self, cold_nodes: &ColdNodes) -> Node {
         match self.tag() {
             CellTag::App => Node::App(self.id_payload(), self.id_word1()),
             CellTag::Indir => Node::Indir(self.option_id_word1()),
@@ -185,8 +232,8 @@ impl Cell {
             CellTag::ThreadId => {
                 Node::ThreadId(self.thread_id_value().expect("ThreadId cell must decode"))
             }
-            CellTag::Cold => cold_nodes[self.cold_index().expect("Cold cell must decode")]
-                .as_ref()
+            CellTag::Cold => cold_nodes
+                .get(self.cold_index().expect("Cold cell must decode"))
                 .expect("live cold cell pointed at freed cold node")
                 .clone(),
         }
@@ -1092,7 +1139,7 @@ impl std::error::Error for EvalError {}
 #[derive(Clone, Debug)]
 pub struct Program {
     pub(in crate::runtime) nodes: Vec<Cell>,
-    pub(in crate::runtime) cold_nodes: Vec<Option<Node>>,
+    pub(in crate::runtime) cold_nodes: ColdNodes,
     pub(in crate::runtime) root: NodeId,
     pub(in crate::runtime) labels: HashMap<usize, NodeId>,
     pub(in crate::runtime) node_pointers: Vec<NodeId>,

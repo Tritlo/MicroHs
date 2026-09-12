@@ -499,7 +499,7 @@ impl Program {
             }
             if tag == CellTag::Cold.bits() {
                 let cold = cell.payload0() as usize;
-                match self.cold_nodes.get(cold).and_then(Option::as_ref) {
+                match self.cold_nodes.get(cold) {
                     Some(Node::Ptr(ptr) | Node::RawFunPtr(ptr)) => {
                         self.mark_pointer_target(marked, work, *ptr);
                     }

@@ -13,7 +13,7 @@ impl Program {
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(default_gc_node_interval);
         let high_water_nodes = nodes.len();
-        let mut cold_nodes = Vec::new();
+        let mut cold_nodes = ColdNodes::default();
         let nodes = nodes
             .into_iter()
             .map(|node| Cell::from_node(node, &mut cold_nodes))
@@ -24,11 +24,8 @@ impl Program {
             .enumerate()
             .filter_map(|(index, cell)| {
                 let cold = cell.cold_index()?;
-                matches!(
-                    cold_nodes.get(cold).and_then(Option::as_ref),
-                    Some(Node::Weak(_))
-                )
-                .then(|| NodeId::from_index(index))
+                matches!(cold_nodes.get(cold), Some(Node::Weak(_)))
+                    .then(|| NodeId::from_index(index))
             })
             .collect();
         for (index, node) in nodes.iter().enumerate() {
@@ -285,17 +282,12 @@ impl Program {
 
     pub(in crate::runtime) fn cold_node(&self, id: NodeId) -> Option<&Node> {
         let cold = self.cell_trusted(id).cold_index()?;
-        debug_assert!(cold < self.cold_nodes.len());
-        // SAFETY: Cold cells are constructed with an index into cold_nodes and
-        // NodeIds passed around the reducer refer to heap slots in self.nodes.
-        unsafe { self.cold_nodes.get_unchecked(cold).as_ref() }
+        self.cold_nodes.get(cold)
     }
 
     pub(in crate::runtime) fn cold_node_mut(&mut self, id: NodeId) -> Option<&mut Node> {
         let cold = self.cell_trusted(id).cold_index()?;
-        debug_assert!(cold < self.cold_nodes.len());
-        // SAFETY: same invariant as cold_node; the mutable borrow is unique via &mut self.
-        unsafe { self.cold_nodes.get_unchecked_mut(cold).as_mut() }
+        self.cold_nodes.get_mut(cold)
     }
 
     pub(in crate::runtime) fn drop_cold_payload(&mut self, index: usize) {
@@ -303,11 +295,7 @@ impl Program {
         // SAFETY: callers pass existing heap slot indices.
         let cell = unsafe { *self.nodes.get_unchecked(index) };
         if let Some(cold) = cell.cold_index() {
-            debug_assert!(cold < self.cold_nodes.len());
-            // SAFETY: Cold cell payloads are indices into cold_nodes.
-            unsafe {
-                *self.cold_nodes.get_unchecked_mut(cold) = None;
-            }
+            self.cold_nodes.release(cold);
         }
     }
 
@@ -369,11 +357,7 @@ impl Program {
         // free existing heap slots.
         let old = unsafe { *self.nodes.get_unchecked(index) };
         if let Some(cold) = old.cold_index() {
-            debug_assert!(cold < self.cold_nodes.len());
-            // SAFETY: Cold cell payloads are indices into cold_nodes.
-            unsafe {
-                *self.cold_nodes.get_unchecked_mut(cold) = None;
-            }
+            self.cold_nodes.release(cold);
         }
         // SAFETY: same bounds invariant as above.
         unsafe {
