@@ -777,6 +777,8 @@ pub(in crate::runtime) const IGNORED_IO_SHORTCUT_RECURSION_LIMIT: usize = 256;
 pub(in crate::runtime) const UTF8_ASCII_REFILL: usize = 1024;
 pub(in crate::runtime) const READ_ONLY_MEMORY_VIEW_MIN_LEN: usize = 8;
 #[cfg(not(target_os = "wasi"))]
+/// `Program::current_thread` value while no thread is running.
+pub(in crate::runtime) const NO_THREAD: usize = usize::MAX;
 pub(in crate::runtime) const GC_NODE_INTERVAL: usize = 75 * 1024 * 1024;
 #[cfg(target_os = "wasi")]
 pub(in crate::runtime) const WASI_GC_NODE_INTERVAL: usize = 500_000;
@@ -1243,6 +1245,7 @@ pub struct Program {
     pub(in crate::runtime) delay_wakeups: HashMap<usize, u128>,
     pub(in crate::runtime) scheduler_epoch: Instant,
     /// Slot of the thread currently being reduced.
+    /// Slot of the running thread, or `NO_THREAD` between slices.
     pub(in crate::runtime) current_thread: usize,
     /// Monotonic thread-id counter; `main` is 1 (matching the C runtime).
     pub(in crate::runtime) next_thread_id: i64,
@@ -1250,7 +1253,4 @@ pub struct Program {
     /// boundary (e.g. right after a `forkIO` that makes the program multi-threaded),
     /// so the reducer can leave an otherwise-unbounded single-thread slice.
     pub(in crate::runtime) reschedule_now: bool,
-    /// Set when a nested reducer already installed the precise restart root for a
-    /// scheduler yield (currently `catchr` preserving a handler around a sliced action).
-    pub(in crate::runtime) preserve_thread_root_once: bool,
 }

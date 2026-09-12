@@ -377,12 +377,14 @@ impl Program {
         Ok(())
     }
 
-    pub(in crate::runtime) fn block_current_thread_at(
-        &mut self,
-        reason: BlockReason,
-        restart_root: NodeId,
-    ) -> EvalError {
-        self.save_current_thread_state(self.current_thread, restart_root);
+    /// Block the running thread. Its root is left as it is: every completed
+    /// reduction is in the graph, so re-reducing from that root resumes at
+    /// the blocking primitive, at any nesting depth.
+    pub(in crate::runtime) fn block_current_thread(&mut self, reason: BlockReason) -> EvalError {
+        let masking_state = self.masking_state;
+        if let Some(thread) = self.current_thread_mut() {
+            thread.masking_state = masking_state;
+        }
         EvalError::Blocked(reason)
     }
 
@@ -486,6 +488,8 @@ impl Program {
             *state = ThreadState::Runnable;
         }
         self.delay_wakeups.remove(&slot);
+        // The running thread is queued again by the scheduler when its slice
+        // ends; anything else goes on the queue once.
         if slot != self.current_thread && !self.run_queue.contains(&slot) {
             self.run_queue.push_back(slot);
         }

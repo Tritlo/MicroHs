@@ -110,7 +110,6 @@ impl Program {
             current_thread: 0,
             next_thread_id: 1,
             reschedule_now: false,
-            preserve_thread_root_once: false,
         }
     }
 

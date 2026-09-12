@@ -404,11 +404,8 @@ impl Program {
                 Some((1, self.pair(state, arg!(0))))
             }
             Some(IoSetMaskingState) if args_len >= 2 => {
-                self.masking_state = self.eval_int(arg!(0))?;
-                let masking_state = self.masking_state;
-                if let Some(thread) = self.current_thread_mut() {
-                    thread.masking_state = masking_state;
-                }
+                let masking_state = self.eval_int(arg!(0))?;
+                self.set_masking_state(masking_state);
                 let unit = self.prim("I");
                 Some((2, self.pair(unit, arg!(1))))
             }
@@ -443,7 +440,7 @@ impl Program {
                     Ok(Some(value)) => value,
                     Ok(None) => return Err(EvalError::InvalidMVar),
                     Err(EvalError::Blocked(reason)) => {
-                        return Err(self.block_current_thread_at(reason, root));
+                        return Err(self.block_current_thread(reason));
                     }
                     Err(err) => return Err(err),
                 };
@@ -456,7 +453,7 @@ impl Program {
                     Ok(Some(value)) => value,
                     Ok(None) => return Err(EvalError::InvalidMVar),
                     Err(EvalError::Blocked(reason)) => {
-                        return Err(self.block_current_thread_at(reason, root));
+                        return Err(self.block_current_thread(reason));
                     }
                     Err(err) => return Err(err),
                 };
@@ -467,7 +464,7 @@ impl Program {
                 let mvar = self.eval_mvar_id(arg!(0))?;
                 if let Err(err) = self.put_mvar(mvar, arg!(1), true) {
                     return Err(match err {
-                        EvalError::Blocked(reason) => self.block_current_thread_at(reason, root),
+                        EvalError::Blocked(reason) => self.block_current_thread(reason),
                         err => err,
                     });
                 }
@@ -512,7 +509,7 @@ impl Program {
                     let usecs = self.eval_int(arg!(0))?;
                     let usecs = u128::try_from(usecs).map_err(|_| EvalError::Overflow)?;
                     let wake = self.scheduler_now_micros().saturating_add(usecs);
-                    return Err(self.block_current_thread_at(BlockReason::Delay(wake), root));
+                    return Err(self.block_current_thread(BlockReason::Delay(wake)));
                 }
             }
             Some(IoThrowTo) if args_len >= 3 => {
@@ -523,8 +520,10 @@ impl Program {
                 Some((3, self.pair(unit, arg!(2))))
             }
             Some(Catch) if args_len >= 3 => {
+                // CATCH x y z --> CATCHR (x z) y z. Materialize `(x z)` in the
+                // graph first so that a resumed thread re-enters the same action.
                 let action = self.app(arg!(0), arg!(2));
-                Some((3, self.catch_result(action, arg!(1), arg!(2))?))
+                Some((3, self.catchr_redex(action, arg!(1), arg!(2))))
             }
             Some(CatchR) if args_len >= 3 => {
                 Some((3, self.catch_result(arg!(0), arg!(1), arg!(2))?))

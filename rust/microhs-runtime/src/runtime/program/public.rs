@@ -105,7 +105,6 @@ impl Program {
         self.delay_wakeups.clear();
         self.scheduler_epoch = Instant::now();
         self.current_thread = 0;
-        self.preserve_thread_root_once = false;
         self.root = main_root;
         let start = self.reductions;
         #[cfg(feature = "embedded")]
@@ -131,6 +130,9 @@ impl Program {
                     next_poll = advanced;
                 }
             }
+            // No thread runs between slices, so a wake-up for the thread that
+            // just parked (the only thread, say) can queue it again.
+            self.current_thread = NO_THREAD;
             self.wake_due_delays();
             let Some(tid) = self.run_queue.pop_front() else {
                 self.wait_for_runnable_thread()?;
@@ -177,9 +179,7 @@ impl Program {
                     self.finish_thread(tid, final_root);
                 }
                 Err(EvalError::StepLimit { .. }) => {
-                    if !std::mem::take(&mut self.preserve_thread_root_once) {
-                        self.save_current_thread_state(tid, root);
-                    }
+                    self.save_current_thread_state(tid, root);
                     if std::mem::take(&mut self.reschedule_now) {
                         // Yielded right after a fork: keep running this thread next so it
                         // makes progress before the new child (preserves output order).

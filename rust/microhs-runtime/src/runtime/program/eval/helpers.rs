@@ -521,6 +521,13 @@ impl Program {
         self.prim("K")
     }
 
+    /// Evaluate `action` under an exception handler, like eval.c's `T_CATCHR`.
+    ///
+    /// The action runs in a nested reducer. If it blocks or uses up its slice
+    /// the error simply propagates: the thread root is left alone, and because
+    /// every completed reduction is in the graph, re-reducing the thread from
+    /// that root re-enters this `catchr` redex and resumes `action` where it
+    /// stopped. Replacing the root here would drop the outer continuation.
     pub(in crate::runtime) fn catch_result(
         &mut self,
         action: NodeId,
@@ -536,7 +543,7 @@ impl Program {
         match self.reduce_node_whnf(action, limit) {
             Ok(result) => Ok(result),
             Err(EvalError::Raised(exn)) => {
-                self.masking_state = MASK_INTERRUPTIBLE;
+                self.set_masking_state(MASK_INTERRUPTIBLE);
                 let handled = self.app(handler, exn);
                 let bind = self.prim("IO.>>=");
                 let handled_bind = self.app(bind, handled);
@@ -552,28 +559,21 @@ impl Program {
                 let caught = self.app(handled_bind, continuation);
                 Ok(self.app(caught, world))
             }
-            Err(EvalError::Blocked(reason)) => {
-                let restart = self
-                    .threads
-                    .get(self.current_thread)
-                    .and_then(Option::as_ref)
-                    .map(|thread| thread.root)
-                    .unwrap_or(action);
-                let caught = self.catch_restart_root(restart, handler, world);
-                self.save_current_thread_state(self.current_thread, caught);
-                Err(EvalError::Blocked(reason))
-            }
-            Err(EvalError::StepLimit { limit }) => {
-                let caught = self.catch_restart_root(action, handler, world);
-                self.save_current_thread_state(self.current_thread, caught);
-                self.preserve_thread_root_once = true;
-                Err(EvalError::StepLimit { limit })
-            }
             Err(err) => Err(err),
         }
     }
 
-    pub(in crate::runtime) fn catch_restart_root(
+    /// Set the masking state of the running thread, in both the global and
+    /// the thread record (eval.c writes `mt_mask`).
+    pub(in crate::runtime) fn set_masking_state(&mut self, state: i64) {
+        self.masking_state = state;
+        if let Some(thread) = self.current_thread_mut() {
+            thread.masking_state = state;
+        }
+    }
+
+    /// Build `catchr action handler world`.
+    pub(in crate::runtime) fn catchr_redex(
         &mut self,
         restart: NodeId,
         handler: NodeId,
