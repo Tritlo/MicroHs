@@ -180,12 +180,13 @@ impl Program {
                 }
                 Err(EvalError::StepLimit { .. }) => {
                     self.save_current_thread_state(tid, root);
-                    if std::mem::take(&mut self.reschedule_now) {
+                    let to_back = std::mem::take(&mut self.reschedule_to_back);
+                    if std::mem::take(&mut self.reschedule_now) && !to_back {
                         // Yielded right after a fork: keep running this thread next so it
                         // makes progress before the new child (preserves output order).
                         self.run_queue.push_front(tid);
                     } else {
-                        self.run_queue.push_back(tid); // slice expired; resume later
+                        self.run_queue.push_back(tid); // slice expired or yielded
                     }
                 }
                 Err(EvalError::Blocked(reason)) => {
@@ -197,12 +198,9 @@ impl Program {
                         let _ = self.flush_open_bfiles();
                         return Err(err);
                     }
-                    if let EvalError::Raised(exn) = err {
-                        self.print_child_exception(exn)?;
-                    }
-                    // A child died with an uncaught exception; reap it. (Refined when
-                    // the throwTo tests land.)
-                    self.finish_thread(tid, root);
+                    // A child died with an uncaught exception. Like eval.c, the
+                    // runtime is silent: the Haskell forkIO wrapper prints.
+                    self.end_thread(tid, root, ThreadState::Died);
                 }
             }
         }
@@ -216,6 +214,10 @@ impl Program {
     }
 
     pub(in crate::runtime) fn finish_thread(&mut self, tid: usize, root: NodeId) {
+        self.end_thread(tid, root, ThreadState::Finished);
+    }
+
+    pub(in crate::runtime) fn end_thread(&mut self, tid: usize, root: NodeId, state: ThreadState) {
         self.save_current_thread_state(tid, root);
         self.live_thread_count -= 1;
         if self
@@ -227,15 +229,19 @@ impl Program {
         {
             self.pending_async_count -= 1;
         }
-        if let Some(state) = self.thread_states.get_mut(tid) {
-            *state = ThreadState::Finished;
+        if let Some(slot) = self.thread_states.get_mut(tid) {
+            *slot = state;
         }
         self.delay_wakeups.remove(&tid);
         for queues in self.mvar_waiters.values_mut() {
             queues.takeput.retain(|slot| *slot != tid);
             queues.read.retain(|slot| *slot != tid);
         }
+        for waiters in self.throwto_waiters.values_mut() {
+            waiters.retain(|slot| *slot != tid);
+        }
         self.threads[tid] = None;
+        self.wake_throwto_waiters(tid);
     }
 
     pub(in crate::runtime) fn park_thread(&mut self, tid: usize, reason: BlockReason) {
@@ -262,6 +268,15 @@ impl Program {
             }
             BlockReason::Delay(wake) => {
                 self.delay_wakeups.insert(tid, wake);
+                if let Some(state) = self.thread_states.get_mut(tid) {
+                    *state = ThreadState::BlockedOther;
+                }
+            }
+            BlockReason::ThrowTo(target) => {
+                self.throwto_waiters
+                    .entry(target)
+                    .or_default()
+                    .push_back(tid);
                 if let Some(state) = self.thread_states.get_mut(tid) {
                     *state = ThreadState::BlockedOther;
                 }
@@ -304,18 +319,6 @@ impl Program {
                 std::thread::sleep(std::time::Duration::from_micros(sleep_micros));
             }
         }
-    }
-
-    pub(in crate::runtime) fn print_child_exception(
-        &mut self,
-        exn: NodeId,
-    ) -> Result<(), EvalError> {
-        let message = self.uncaught_exception_message_bytes(exn)?;
-        let mut line = b"Uncaught child exception: ".to_vec();
-        line.extend_from_slice(&message);
-        line.push(b'\n');
-        self.write_io_handle_bytes(StdHandle::Stdout, &line)?;
-        Ok(())
     }
 
     pub fn reduction_count(&self) -> usize {

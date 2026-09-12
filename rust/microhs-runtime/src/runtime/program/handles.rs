@@ -372,9 +372,49 @@ impl Program {
             .and_then(|thread| thread.pending_exception.take())
         {
             self.pending_async_count -= 1;
+            self.wake_throwto_waiters(self.current_thread);
             return Err(EvalError::Raised(exn));
         }
         Ok(())
+    }
+
+    /// End the current slice at the next step and requeue the thread at the
+    /// back, like eval.c's `yield`. A lone thread just continues.
+    pub(in crate::runtime) fn yield_current_thread(&mut self) {
+        if self.live_thread_count > 1 {
+            self.reschedule_now = true;
+            self.reschedule_to_back = true;
+        }
+    }
+
+    /// Wake the threads blocked in `throwTo` on `slot`, once its pending
+    /// exception has been taken or the thread has ended.
+    pub(in crate::runtime) fn wake_throwto_waiters(&mut self, slot: usize) {
+        if let Some(waiters) = self.throwto_waiters.remove(&slot) {
+            for waiter in waiters {
+                self.make_runnable(waiter);
+            }
+        }
+    }
+
+    /// Create a runnable thread that reduces `root`, and return its id.
+    pub(in crate::runtime) fn spawn_thread(&mut self, root: NodeId) -> i64 {
+        let id = self.next_thread_id;
+        self.next_thread_id += 1;
+        let slot = self.threads.len();
+        self.threads.push(Some(ThreadControl {
+            id,
+            root,
+            delivered_value: None,
+            pending_exception: None,
+            delay_ready: false,
+            masking_state: self.masking_state,
+        }));
+        self.thread_ids.push(id);
+        self.thread_states.push(ThreadState::Runnable);
+        self.live_thread_count += 1;
+        self.run_queue.push_back(slot);
+        id
     }
 
     /// Block the running thread. Its root is left as it is: every completed
@@ -513,27 +553,43 @@ impl Program {
         let Some(thread) = self.threads.get_mut(slot).and_then(Option::as_mut) else {
             return Ok(());
         };
-        let was_empty = thread.pending_exception.is_none();
+        if thread.pending_exception.is_some() {
+            // The target has not taken the previous exception yet: block
+            // until it does (eval.c: a blocking put_mvar on mt_exn).
+            return Err(EvalError::Blocked(BlockReason::ThrowTo(slot)));
+        }
         thread.pending_exception = Some(exn);
         let should_unpark = thread.masking_state != MASK_UNINTERRUPTIBLE;
-        if was_empty {
-            self.pending_async_count += 1;
-        }
+        self.pending_async_count += 1;
         if should_unpark {
             self.unpark_thread(slot);
         }
         Ok(())
     }
 
+    /// Interrupt a blocked thread so it can take a pending exception
+    /// (eval.c `thread_intr`). A runnable thread is left as it is.
     pub(in crate::runtime) fn unpark_thread(&mut self, slot: usize) {
-        for queues in self.mvar_waiters.values_mut() {
-            queues.takeput.retain(|waiter| *waiter != slot);
-            queues.read.retain(|waiter| *waiter != slot);
+        match self.thread_states.get(slot).copied() {
+            Some(ThreadState::BlockedMVar) => {
+                for queues in self.mvar_waiters.values_mut() {
+                    queues.takeput.retain(|waiter| *waiter != slot);
+                    queues.read.retain(|waiter| *waiter != slot);
+                }
+                // No longer waiting on the MVar, so a value handed over by a
+                // put in the meantime is dropped, as in C.
+                if let Some(thread) = self.threads.get_mut(slot).and_then(Option::as_mut) {
+                    thread.delivered_value = None;
+                }
+            }
+            Some(ThreadState::BlockedOther) => {
+                self.delay_wakeups.remove(&slot);
+                for waiters in self.throwto_waiters.values_mut() {
+                    waiters.retain(|waiter| *waiter != slot);
+                }
+            }
+            _ => return,
         }
-        if let Some(thread) = self.threads.get_mut(slot).and_then(Option::as_mut) {
-            thread.delivered_value = None;
-        }
-        self.delay_wakeups.remove(&slot);
         self.make_runnable(slot);
     }
 

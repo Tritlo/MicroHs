@@ -367,7 +367,7 @@ impl Program {
             }
             Some(IoYield) if args_len >= 1 => {
                 self.check_pending_async_exception(false)?;
-                self.run_pending_weak_finalizers()?;
+                self.yield_current_thread();
                 let unit = self.prim("I");
                 Some((1, self.pair(unit, arg!(0))))
             }
@@ -378,21 +378,7 @@ impl Program {
                 let action = arg!(0);
                 let world = self.world();
                 let child_root = self.app(action, world);
-                let id = self.next_thread_id;
-                self.next_thread_id += 1;
-                let slot = self.threads.len();
-                self.threads.push(Some(ThreadControl {
-                    id,
-                    root: child_root,
-                    delivered_value: None,
-                    pending_exception: None,
-                    delay_ready: false,
-                    masking_state: self.masking_state,
-                }));
-                self.thread_ids.push(id);
-                self.thread_states.push(ThreadState::Runnable);
-                self.live_thread_count += 1;
-                self.run_queue.push_back(slot);
+                let id = self.spawn_thread(child_root);
                 // Leave the (previously single-thread, unbounded) slice so the scheduler
                 // switches to preemptive slicing now that a second thread exists.
                 self.reschedule_now = true;
@@ -425,6 +411,7 @@ impl Program {
                     ThreadState::BlockedMVar => 1,
                     ThreadState::BlockedOther => 2,
                     ThreadState::Finished => 3,
+                    ThreadState::Died => 4,
                 });
                 Some((2, self.pair(status, arg!(1))))
             }
@@ -515,7 +502,12 @@ impl Program {
             Some(IoThrowTo) if args_len >= 3 => {
                 self.check_pending_async_exception(true)?;
                 let thread = self.eval_thread_id(arg!(0))?;
-                self.throw_to_thread(thread, arg!(1))?;
+                if let Err(err) = self.throw_to_thread(thread, arg!(1)) {
+                    return Err(match err {
+                        EvalError::Blocked(reason) => self.block_current_thread(reason),
+                        err => err,
+                    });
+                }
                 let unit = self.prim("I");
                 Some((3, self.pair(unit, arg!(2))))
             }

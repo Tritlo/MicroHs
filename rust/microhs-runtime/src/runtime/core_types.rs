@@ -1078,6 +1078,10 @@ pub enum BlockReason {
     PutMVar(NodeId),
     ReadMVar(NodeId),
     Delay(u128),
+    /// Waiting for thread slot `.0` to take its pending exception, so that
+    /// a second `throwTo` does not overwrite the first (eval.c models the
+    /// pending exception as an MVar and `throwto` does a blocking put).
+    ThrowTo(usize),
 }
 
 impl fmt::Display for EvalError {
@@ -1141,6 +1145,8 @@ pub(in crate::runtime) enum ThreadState {
     BlockedMVar,
     BlockedOther,
     Finished,
+    /// Ended by an uncaught exception (eval.c `ts_died`).
+    Died,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1201,7 +1207,6 @@ pub struct Program {
     pub(in crate::runtime) stable_ptrs: Vec<Option<NodeId>>,
     pub(in crate::runtime) stable_ptr_first_free: usize,
     pub(in crate::runtime) weak_nodes: Vec<NodeId>,
-    pub(in crate::runtime) pending_weak_finalizers: Vec<NodeId>,
     pub(in crate::runtime) foreign_finalizers: Vec<Option<ForeignFinalizerState>>,
     pub(in crate::runtime) foreign_finalizer_free: Vec<usize>,
     pub(in crate::runtime) allocations: Vec<Option<Vec<u8>>>,
@@ -1243,6 +1248,8 @@ pub struct Program {
     pub(in crate::runtime) mvar_waiters: HashMap<NodeId, MVarWaitQueues>,
     /// Absolute scheduler times, in microseconds since `scheduler_epoch`.
     pub(in crate::runtime) delay_wakeups: HashMap<usize, u128>,
+    /// Threads blocked in `throwTo`, keyed by the target slot.
+    pub(in crate::runtime) throwto_waiters: HashMap<usize, std::collections::VecDeque<usize>>,
     pub(in crate::runtime) scheduler_epoch: Instant,
     /// Slot of the thread currently being reduced.
     /// Slot of the running thread, or `NO_THREAD` between slices.
@@ -1253,4 +1260,7 @@ pub struct Program {
     /// boundary (e.g. right after a `forkIO` that makes the program multi-threaded),
     /// so the reducer can leave an otherwise-unbounded single-thread slice.
     pub(in crate::runtime) reschedule_now: bool,
+    /// With `reschedule_now`: requeue the current thread at the back (a
+    /// `yield`, or a finalizer thread that must run first), not the front.
+    pub(in crate::runtime) reschedule_to_back: bool,
 }

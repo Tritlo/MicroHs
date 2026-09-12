@@ -150,7 +150,7 @@ impl Program {
             }
             Some(Prim::Known(IoYield)) if args.is_empty() => {
                 self.check_pending_async_exception(false)?;
-                self.run_pending_weak_finalizers()?;
+                self.yield_current_thread();
                 let result = self.prim("I");
                 Ok(Some((result, world)))
             }

@@ -72,7 +72,6 @@ impl Program {
             stable_ptrs: vec![None],
             stable_ptr_first_free: 1,
             weak_nodes,
-            pending_weak_finalizers: Vec::new(),
             foreign_finalizers: Vec::new(),
             foreign_finalizer_free: Vec::new(),
             allocations: Vec::new(),
@@ -106,10 +105,12 @@ impl Program {
             run_queue: std::collections::VecDeque::new(),
             mvar_waiters: HashMap::new(),
             delay_wakeups: HashMap::new(),
+            throwto_waiters: HashMap::new(),
             scheduler_epoch: Instant::now(),
             current_thread: 0,
             next_thread_id: 1,
             reschedule_now: false,
+            reschedule_to_back: false,
         }
     }
 

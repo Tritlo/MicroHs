@@ -181,9 +181,6 @@ impl Program {
         for id in self.stable_ptrs.iter().flatten() {
             Self::mark_node_id(marked, work, *id);
         }
-        for id in &self.pending_weak_finalizers {
-            Self::mark_node_id(marked, work, *id);
-        }
         for bfile in self.bfiles.iter().flatten() {
             if let BFileKind::ReadOnlyMemoryView { base, .. } = &bfile.kind {
                 Self::mark_node_id(marked, work, *base);
@@ -794,10 +791,18 @@ impl Program {
             freed_nodes: freed,
             allocations_since_collect,
         });
-        // Queue dead weaks' finalizers but do not run them here: like the C runtime,
-        // they run at the next cooperative scheduling point (`yield`) so that a weak
-        // observed dead by `deRefWeak` runs its finalizer only afterwards.
-        self.pending_weak_finalizers.extend(weak_finalizers);
+        // Like eval.c's sweep_weaks: each dead weak's finalizer becomes a thread
+        // of its own, so it runs at the next scheduling point, isolated from the
+        // thread that triggered the collection, and a weak observed dead by
+        // deRefWeak runs its finalizer only afterwards.
+        if !weak_finalizers.is_empty() && !self.threads.is_empty() {
+            for finalizer in weak_finalizers {
+                self.spawn_thread(finalizer);
+            }
+            // End a lone thread's unbounded slice so slicing starts; the
+            // finalizer then runs at the next slice boundary or yield, as in C.
+            self.reschedule_now = true;
+        }
         Ok(freed)
     }
 
@@ -830,15 +835,6 @@ impl Program {
             self.collect_garbage::<true>(root, &eval_spine, &[], &[], None)
                 .expect("a freshly parsed program has no fallible GC finalizers");
         }
-    }
-
-    /// Run and clear any finalizers queued by dead weak pointers. Invoked at
-    /// cooperative scheduling points (`IO.yield`).
-    pub(in crate::runtime) fn run_pending_weak_finalizers(&mut self) -> Result<(), EvalError> {
-        while let Some(finalizer) = self.pending_weak_finalizers.pop() {
-            self.reduce_node_whnf(finalizer, FORCE_REDUCTION_LIMIT)?;
-        }
-        Ok(())
     }
 
     pub(in crate::runtime) fn maybe_collect_garbage_between_steps(
