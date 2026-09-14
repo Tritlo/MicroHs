@@ -3,27 +3,86 @@ name: Linting
 on:
   pull_request:
   push:
+  workflow_dispatch:
 
 jobs:
-  rust-clippy:
+  rust-quality:
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.1
     steps:
-    - uses: actions/checkout@v4
-    - name: Install Rust 1.97.1 with Clippy and browser WASM
-      run: rustup toolchain install 1.97.1 --profile minimal --component clippy --target wasm32-unknown-unknown
+    - uses: actions/checkout@v6
+    - name: Install Rust 1.97.1
+      run: rustup toolchain install 1.97.1 --profile minimal --component clippy --component rustfmt
+    - name: Rustfmt
+      run: cargo fmt --manifest-path rust/microhs-runtime/Cargo.toml --check
+    - name: Test all features
+      run: cargo test --manifest-path rust/microhs-runtime/Cargo.toml --all-features --lib
     - name: Clippy
-      run: cargo +1.97.1 clippy --manifest-path rust/microhs-runtime/Cargo.toml --all-targets -- -D warnings
+      run: cargo clippy --manifest-path rust/microhs-runtime/Cargo.toml --all-targets --all-features -- -D warnings
+
+  rust-browser:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.1
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/setup-node@v6
+      with:
+        node-version: "24"
+    - name: Install Rust 1.97.1 with browser WASM
+      run: rustup toolchain install 1.97.1 --profile minimal --target wasm32-unknown-unknown
     - name: Build browser WASM
-      run: cargo +1.97.1 build --release --manifest-path rust/microhs-runtime/Cargo.toml --target wasm32-unknown-unknown --features embedded --lib
+      run: cargo build --release --manifest-path rust/microhs-runtime/Cargo.toml --target wasm32-unknown-unknown --features embedded --lib
+    - name: Browser compiler and JS lifecycle E2E
+      run: node rust/microhs-runtime/tools/wasm/browser/compiler-e2e.mjs
+    - name: Build and smoke-test web distribution
+      run: bash rust/microhs-runtime/tools/wasm/browser/build-web-dist.sh
+
+  rust-selfhost:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.1
+    steps:
+    - uses: actions/checkout@v6
+    - name: Install Rust 1.97.1
+      run: rustup toolchain install 1.97.1 --profile minimal
+    - name: Native GHC-free fixed point
+      run: bash rust/microhs-runtime/tools/native/bootstrap-ghcfree.sh
+    - name: Native Rust cache compatibility
+      run: bash rust/microhs-runtime/tools/native/test-mhscache.sh
+
+  rust-wasi:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.1
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/setup-node@v6
+      with:
+        node-version: "24"
+    - name: Install Rust 1.97.1 with WASI
+      run: rustup toolchain install 1.97.1 --profile minimal --target wasm32-wasip1
+    - name: Install locked WASI harness dependencies
+      working-directory: rust/microhs-runtime/tools/wasm
+      run: npm ci
+    - name: Build WASI runtime
+      run: cargo build --release --manifest-path rust/microhs-runtime/Cargo.toml --target wasm32-wasip1 --bin mhs-rust-bench
+    - name: WASI self-host fixed point
+      run: node rust/microhs-runtime/tools/wasm/wasi/wasi-selfhost.mjs generated/mhs.comb
 
   hlint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - uses: haskell-actions/hlint-setup@v2
-      with:
-        version: "3.10"
-    - uses: haskell-actions/hlint-run@v2
-      with:
-        path: "."
-        fail-on: suggestion
+    - uses: actions/checkout@v6
+    - name: Install HLint 3.10
+      env:
+        HLINT_URL: https://github.com/ndmitchell/hlint/releases/download/v3.10/hlint-3.10-x86_64-linux.tar.gz
+        HLINT_SHA256: ccabc8802a58154699a3583b8dddc5ea2e6d65753a62c45c0e80088ebb16b42b
+      run: |
+        curl --fail --location --silent --show-error "$HLINT_URL" --output "$RUNNER_TEMP/hlint.tar.gz"
+        echo "$HLINT_SHA256  $RUNNER_TEMP/hlint.tar.gz" | sha256sum --check
+        tar --extract --gzip --file "$RUNNER_TEMP/hlint.tar.gz" --directory "$RUNNER_TEMP"
+        echo "$RUNNER_TEMP/hlint-3.10" >> "$GITHUB_PATH"
+    - name: HLint
+      run: hlint .

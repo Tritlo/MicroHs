@@ -84,6 +84,15 @@ impl Program {
     pub fn reduce_main(&mut self, limit: usize) -> Result<(NodeId, usize), EvalError> {
         let world = self.world();
         let main_root = self.app(self.root, world);
+        self.reduce_scheduled_root(main_root, limit)
+    }
+
+    /// Run one entry with the cooperative scheduler.
+    fn reduce_scheduled_root(
+        &mut self,
+        main_root: NodeId,
+        limit: usize,
+    ) -> Result<(NodeId, usize), EvalError> {
         // `main` is thread slot 0 (id 1). Track it in `self.root` so the GC — which
         // always marks `self.root` — follows the running program rather than pinning
         // the original `main` template (weak pointers depend on that liveness).
@@ -103,6 +112,9 @@ impl Program {
         self.run_queue = std::collections::VecDeque::from([0usize]);
         self.mvar_waiters.clear();
         self.delay_wakeups.clear();
+        self.throwto_waiters.clear();
+        self.reschedule_now = false;
+        self.reschedule_to_back = false;
         self.scheduler_epoch = Instant::now();
         self.current_thread = 0;
         self.root = main_root;
@@ -342,12 +354,34 @@ impl Program {
     }
 
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-    fn apply_js_wrapper(
+    pub(crate) fn wasm_read_pointer_bytes(
+        &self,
+        ptr: i64,
+        len: usize,
+    ) -> Result<Vec<u8>, EvalError> {
+        self.read_pointer_bytes(ptr, len)
+    }
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    pub(crate) fn wasm_c_string_len(&self, ptr: i64) -> Result<usize, EvalError> {
+        self.c_string_len(ptr)
+    }
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    pub(crate) fn wasm_alloc_bytes(&mut self, bytes: &[u8]) -> Result<i64, EvalError> {
+        let ptr = self.alloc_memory(bytes.len())?;
+        self.write_pointer_bytes(ptr, bytes)?;
+        Ok(ptr)
+    }
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    fn apply_js_closure(
         &mut self,
         tags: &str,
         stable_ptr: usize,
         args: &[JsValue],
         limit: usize,
+        is_io: bool,
     ) -> Result<JsValue, EvalError> {
         let tags = tags.as_bytes();
         validate_js_tags(tags)?;
@@ -360,13 +394,83 @@ impl Program {
             let arg = self.js_value_node(tag, arg)?;
             root = self.app(root, arg);
         }
-        let perform_io = self.prim("IO.performIO");
-        let root = self.app(perform_io, root);
-        let root = self.reduce_node_whnf(root, limit)?;
-        self.js_value_from_node(tags[0], root)
+        if is_io {
+            let perform_io = self.prim("IO.performIO");
+            root = self.app(perform_io, root);
+        }
+        let root = self.reduce_node_whnf_host_polled(root, limit)?;
+        let deferred_reschedule = std::mem::take(&mut self.reschedule_now);
+        let deferred_to_back = std::mem::take(&mut self.reschedule_to_back);
+        let result = self.js_value_from_node(tags[0], root);
+        self.reschedule_now |= deferred_reschedule;
+        self.reschedule_to_back |= deferred_to_back;
+        result
+    }
+
+    /// Schedule a host entry and preserve the program's original root.
+    /// Nested callbacks defer scheduler switches until the importing primitive returns.
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    fn reduce_node_whnf_host_polled(
+        &mut self,
+        root: NodeId,
+        limit: usize,
+    ) -> Result<NodeId, EvalError> {
+        if self.reduce_depth == 0 {
+            let saved_root = self.root;
+            let stable_root = usize::try_from(self.new_stable_ptr_handle(saved_root)?)
+                .map_err(|_| EvalError::Overflow)?;
+            let result = self.reduce_scheduled_root(root, limit);
+            self.root = saved_root;
+            self.free_stable_ptr(stable_root)?;
+            return result.map(|(value, _)| value);
+        }
+
+        let mut deferred_reschedule = false;
+        let mut deferred_to_back = false;
+        let result = (|| {
+            let start = self.reductions;
+            #[cfg(feature = "embedded")]
+            let mut next_poll = start.saturating_add(EMBEDDED_POLL_INTERVAL);
+            loop {
+                deferred_reschedule |= std::mem::take(&mut self.reschedule_now);
+                deferred_to_back |= std::mem::take(&mut self.reschedule_to_back);
+                #[cfg(feature = "embedded")]
+                if self.reductions >= next_poll {
+                    std::hint::cold_path();
+                    if embedded_poll_cancelled(self.reductions) {
+                        return Err(EvalError::Cancelled);
+                    }
+                    while self.reductions >= next_poll {
+                        let advanced = next_poll.saturating_add(EMBEDDED_POLL_INTERVAL);
+                        if advanced == next_poll {
+                            break;
+                        }
+                        next_poll = advanced;
+                    }
+                }
+                let remaining = limit.saturating_sub(self.reductions - start);
+                if remaining == 0 {
+                    return Err(EvalError::StepLimit { limit });
+                }
+                let slice = remaining;
+                #[cfg(feature = "embedded")]
+                let slice = slice.min(next_poll.saturating_sub(self.reductions).max(1));
+                let before = self.reductions;
+                match self.reduce_node_whnf(root, slice) {
+                    Ok(final_root) => return Ok(final_root),
+                    Err(EvalError::StepLimit { .. })
+                        if self.reductions > before || self.reschedule_now => {}
+                    Err(err) => return Err(err),
+                }
+            }
+        })();
+        self.reschedule_now |= deferred_reschedule;
+        self.reschedule_to_back |= deferred_to_back;
+        result
     }
 
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    #[cold]
     pub(crate) fn apply_js_wrapper_index(
         &mut self,
         wrapper_index: u32,
@@ -374,8 +478,57 @@ impl Program {
         args: &[JsValue],
         limit: usize,
     ) -> Result<JsValue, EvalError> {
+        std::hint::cold_path();
         let tags = self.js_wrapper_tags(wrapper_index)?.to_owned();
-        self.apply_js_wrapper(&tags, stable_ptr, args, limit)
+        self.apply_js_closure(&tags, stable_ptr, args, limit, true)
+    }
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    #[cold]
+    pub(crate) fn apply_js_export_index(
+        &mut self,
+        export_index: u32,
+        args: &[JsValue],
+        limit: usize,
+    ) -> Result<JsValue, EvalError> {
+        std::hint::cold_path();
+        let export = self
+            .js_exports
+            .get(usize::try_from(export_index).map_err(|_| EvalError::Overflow)?)
+            .ok_or(EvalError::InvalidArray)?;
+        let stable_ptr = export.stable_ptr;
+        let wrapper_index = export.wrapper_index;
+        let is_io = export.is_io;
+        let tags = self.js_wrapper_tags(wrapper_index)?.to_owned();
+        self.apply_js_closure(&tags, stable_ptr, args, limit, is_io)
+    }
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    #[cold]
+    pub(crate) fn js_export_name(&self, export_index: u32) -> Result<&str, EvalError> {
+        std::hint::cold_path();
+        self.js_exports
+            .get(usize::try_from(export_index).map_err(|_| EvalError::Overflow)?)
+            .map(|export| export.name.as_str())
+            .ok_or(EvalError::InvalidArray)
+    }
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    #[cold]
+    pub(crate) fn js_export_tags(&self, export_index: u32) -> Result<&str, EvalError> {
+        std::hint::cold_path();
+        let export = self
+            .js_exports
+            .get(usize::try_from(export_index).map_err(|_| EvalError::Overflow)?)
+            .ok_or(EvalError::InvalidArray)?;
+        self.js_wrapper_tags(export.wrapper_index)
+    }
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    #[cold]
+    pub(crate) fn js_export_count(&self) -> usize {
+        std::hint::cold_path();
+        self.js_exports.len()
     }
 
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]

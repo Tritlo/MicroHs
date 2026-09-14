@@ -149,7 +149,6 @@ impl Program {
         current_root: NodeId,
         eval_spine: &EvalSpine,
         scratch_args: &[NodeId],
-        scratch_apps: &[NodeId],
         machine_stack: Option<&EvalStack>,
     ) {
         Self::mark_node_id(marked, work, self.root);
@@ -237,7 +236,7 @@ impl Program {
             }
         }
         Self::mark_eval_spine(marked, work, eval_spine);
-        for id in scratch_args.iter().chain(scratch_apps) {
+        for id in scratch_args {
             Self::mark_node_id(marked, work, *id);
         }
     }
@@ -668,6 +667,13 @@ impl Program {
         match finalizer {
             ForeignFinalizer::Free => self.free_memory(arg),
             ForeignFinalizer::CloseB => self.close_bfile(arg),
+            ForeignFinalizer::JsObjFree => {
+                std::hint::cold_path();
+                if let Ok(handle) = u32::try_from(arg) {
+                    host_js_obj_free(handle)?;
+                }
+                Ok(())
+            }
             ForeignFinalizer::RawZero => Ok(()),
         }
     }
@@ -696,7 +702,6 @@ impl Program {
         current_root: NodeId,
         eval_spine: &EvalSpine,
         scratch_args: &[NodeId],
-        scratch_apps: &[NodeId],
         machine_stack: Option<&EvalStack>,
     ) -> Result<usize, EvalError> {
         let started = Instant::now();
@@ -721,7 +726,6 @@ impl Program {
             current_root,
             eval_spine,
             scratch_args,
-            scratch_apps,
             machine_stack,
         );
         self.mark_reachable::<REDUCE_APPS>(&mut marked, &mut work, &mut foreign_finalizer_marked);
@@ -815,16 +819,9 @@ impl Program {
         current_root: NodeId,
         eval_spine: &EvalSpine,
         scratch_args: &[NodeId],
-        scratch_apps: &[NodeId],
         machine_stack: Option<&EvalStack>,
     ) -> Result<usize, EvalError> {
-        self.collect_garbage::<false>(
-            current_root,
-            eval_spine,
-            scratch_args,
-            scratch_apps,
-            machine_stack,
-        )
+        self.collect_garbage::<false>(current_root, eval_spine, scratch_args, machine_stack)
     }
 
     /// Match the C runtime's two post-parse, allocation-free GCRED passes.
@@ -832,7 +829,7 @@ impl Program {
         let root = self.root;
         let eval_spine = EvalSpine::default();
         for _ in 0..2 {
-            self.collect_garbage::<true>(root, &eval_spine, &[], &[], None)
+            self.collect_garbage::<true>(root, &eval_spine, &[], None)
                 .expect("a freshly parsed program has no fallible GC finalizers");
         }
     }
@@ -842,7 +839,6 @@ impl Program {
         current_root: NodeId,
         eval_spine: &EvalSpine,
         scratch_args: &[NodeId],
-        scratch_apps: &[NodeId],
         machine_stack: Option<&EvalStack>,
     ) -> Result<(), EvalError> {
         debug_assert_eq!(self.active_reducers.len(), self.reduce_depth);
@@ -855,13 +851,7 @@ impl Program {
             }
         }
         self.force_gc = false;
-        self.collect_garbage_between_steps(
-            current_root,
-            eval_spine,
-            scratch_args,
-            scratch_apps,
-            machine_stack,
-        )?;
+        self.collect_garbage_between_steps(current_root, eval_spine, scratch_args, machine_stack)?;
         Ok(())
     }
 }

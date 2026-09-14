@@ -1,4 +1,44 @@
 //! MicroHs primitive identifiers and name/code mappings.
+//!
+//! # Authoritative primitive-token list
+//!
+//! This module is the authoritative, machine-readable enumeration of the
+//! *primitive tokens* the runtime accepts in a compiled combinator graph — the
+//! atoms that appear in both the linked `.comb` wire format (version `v8.4`) and
+//! the `-ddump-combinator-out` debug dump. `Prim::from_name` is the single
+//! recognizer; a token is valid iff it resolves through one of:
+//!
+//! * `KnownPrim` — combinators the reducer dispatches directly: the SK(I) family
+//!   and its optimized variants (`S`, `K`, `I`, `B`, `C`, `B'`, `C'`, `C'B`,
+//!   `S'`, `A`, `J`, `K2`–`K4`, `KA`, `KK`, `L`, `O`, `P`, `R`, `U`, `Y`, `Z`),
+//!   the data-constructor tags (`Tag n`) and tuples (`Tn`), the
+//!   strictness/exception prims (`Chr`, `Ord`, `Catch`, `Raise`, `Seq`, `Rnf`,
+//!   …), and the `IO.*` operations.
+//! * `RUNTIME_PRIM_NAMES` — runtime and FFI primitives (arithmetic, arrays,
+//!   pointers, MVars, `mpz_*`, syscalls, …).
+//! * `TAG_PRIM_NAMES` / `TUPLE_PRIM_NAMES` — the `TAGn` / `Tn` spellings.
+//!
+//! ## These tokens are load-bearing ABI (do not rename casually)
+//!
+//! The set here must agree, token-for-token, with the MicroHs compiler's
+//! emitters — `lib/Primitives.hs` (`_primitive "…"`), `src/MicroHs/Abstract.hs`
+//! and `src/MicroHs/EncodeData.hs` (combinators, `TAGn`/`Tn`) — and with the C
+//! runtime's `primops[]` table in `src/runtime/eval.c`. That agreement is
+//! enforced by the self-host: the compiler compiles *itself* through this
+//! runtime, so any divergence either breaks the byte-identical fixed point or
+//! surfaces immediately as a hard "unknown primitive" parse error — never a
+//! silent miscompile. Existing tokens are therefore de-facto stable; the only
+//! expected churn is *additions* (a new prim) or *removals*, both visible in a
+//! diff.
+//!
+//! ## For embedders (e.g. Combinate)
+//!
+//! Treat this module as the source of truth for primitive tokens. Unlike the
+//! `.comb` format, the debug dump carries no version stamp, so a downstream
+//! `PRIM_OPS`-style map should be validated against this list rather than
+//! hand-maintained. The names are all reachable programmatically via
+//! `Prim::from_name` and the tables above, so an embedder can assert its map
+//! against them at build time instead of tracking token changes by hand.
 use super::*;
 
 /// Stable index into the cell arena.

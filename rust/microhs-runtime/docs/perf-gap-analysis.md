@@ -52,7 +52,7 @@ objdump -d --start-address=0x366a0 --stop-address=0x471bc \
 Both full self-host outputs from the default and PGO binaries produced:
 
 ```text
-8030b42d11ab0ad43118a2684fb4c51bd1787df0d0db10a5904b5f1f47fd3a27
+e0483c2fcb301e3d6f318603d3a394cfdf48b9c26f5d50f548845a12dba79968
 ```
 
 This NORTH moved with the compiler-only dump-file flag addition.

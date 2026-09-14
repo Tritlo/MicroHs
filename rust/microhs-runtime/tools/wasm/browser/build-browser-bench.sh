@@ -2,18 +2,22 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
-emcc="${EMCC:-/home/tritlo/emsdk/upstream/emscripten/emcc}"
+emcc="${EMCC:-emcc}"
 em_cache="${EM_CACHE:-/tmp/mhs-emcc-cache}"
 out="$repo/rust/microhs-runtime/tools/wasm/browser/browser-bench-c.mjs"
 
-if [[ ! -x "$emcc" ]]; then
-  echo "emcc not found at $emcc; set EMCC=/path/to/emcc" >&2
+if ! command -v "$emcc" >/dev/null 2>&1; then
+  echo "emcc not found ($emcc); install emscripten (activate emsdk) or set EMCC=/path/to/emcc" >&2
+  echo "note: emcc is only needed for the C-vs-Rust comparison bench, not for the browser dist" >&2
   exit 1
 fi
 
 mkdir -p "$em_cache"
 
-cargo build \
+# The browser cdylib's host bridge (mhs_host_*, mhs_js_*) are wasm imports
+# resolved by host.mjs at instantiation; --allow-undefined tells wasm-ld to emit
+# them as imports instead of erroring (required since the Rust 1.96 / wasm-ld bump).
+RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=--allow-undefined" cargo build \
   --release \
   --manifest-path "$repo/rust/microhs-runtime/Cargo.toml" \
   --target wasm32-unknown-unknown \

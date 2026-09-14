@@ -137,6 +137,12 @@ identPtr = mkIdentB "Primitives.Ptr"
 identFunPtr :: Ident
 identFunPtr = mkIdentB "Primitives.FunPtr"
 
+identForeignPtr :: Ident
+identForeignPtr = mkIdentB "Primitives.ForeignPtr"
+
+identBool :: Ident
+identBool = mkIdentB $ boolPrefix ++ "Bool"
+
 identStablePtr :: Ident
 identStablePtr = mkIdentB "Foreign.StablePtr.StablePtr"
 

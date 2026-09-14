@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
-module MicroHs.ExpPrint(toStringCMdl, toStringP, encodeString, combVersion, removeUnused, renumberCMdl, renumberCMdlM) where
+module MicroHs.ExpPrint(toStringCMdl, toStringP, toJsExportTrailer, encodeString, combVersion, removeUnused, renumberCMdl, renumberCMdlM, entryJSON) where
 import qualified Prelude(); import MHSPrelude
 import qualified Data.ByteString.Char8 as BS
 import Data.Char(ord, chr)
@@ -8,8 +8,11 @@ import Data.Maybe
 import MicroHs.Desugar(LDef)
 import MicroHs.EncodeData(encList)
 import MicroHs.Exp
-import MicroHs.Expr(Lit(..), showLit, errorMessage, HasLoc(..), CType)
-import MicroHs.Ident(Ident, showIdent, mkIdent, showSLoc)
+import MicroHs.Expr(Lit(..), showLit, errorMessage, HasLoc(..), CType(..), ImpEnt(..), ImpVal(..),
+                    Expr(EVar, EApp), EType, showEType, getArrows)
+import MicroHs.Ident(Ident, showIdent, mkIdent, showSLoc, unIdent)
+import MicroHs.Names(identIO, identPtr, identUnit, identInt, identWord, identDouble,
+                     identFloat, identBool, identByteString, identForeignPtr)
 import MicroHs.List(groupSort)
 import MicroHs.State
 import MicroHs.TypeCheck(isInstId)
@@ -35,6 +38,9 @@ removeUnused (ds, emain) = dfs roots M.empty
                     | otherwise = dfs (freeVars e ++ is) (M.insert i e done)
                                   where e = fromMaybe (error $ "removeUnused: undef " ++ show i) $ M.lookup i dMap
 
+-- Rename (to a numbers) top level definitions and remove unused ones.
+-- This is the "linking" of the program.
+-- Returns the renamed foreign exports and the "linked" CNdl
 renumberCMdl :: CMdl -> (ForExpTable, CMdl)
 renumberCMdl (ds, emain) =
   let fexps = [ (i, t, js) | (i, e) <- ds, Just (js, _, t) <- [getForExp e] ]
@@ -42,8 +48,7 @@ renumberCMdl (ds, emain) =
   in  renumberCMdlM fexps dMap emain
 
 -- Rename (to a numbers) top level definitions and remove unused ones.
--- This is the "linking" of the program.
--- Returns the renamed foreign exports and the "linked" CNdl
+-- This is also used by Translate with an existing definition map.
 renumberCMdlM :: [(Ident, CType, IsJavascript)] -> M.Map Exp -> Exp -> (ForExpTable, CMdl)
 renumberCMdlM fexps dMap emain =
   let
@@ -80,6 +85,103 @@ renumberCMdlM fexps dMap emain =
   in
     (fexps', (checkDupInstances res, substv emain))
 
+-- Structured JSON artifact for the --entry compiler flag (wishlist 1+4).
+-- Given the entry's qualified identifier and all top-level named definitions,
+-- prune to the reachable closure of the entry -- keeping the definitions NAMED,
+-- unlike renumberCMdl which flattens them to a linked _N graph -- and emit a
+-- strict-JSON object:
+--   {"status":"ok","root":"<entry>","defs":[{"name":"<id>","body":<expr>},..]}
+-- <expr> is a lossless structured encoding of the combinator Exp:
+--   Var i   -> {"var":"<ident>"}
+--   App f a -> {"app":[<f>,<a>]}
+--   Lam i e -> {"lam":["<ident>",<e>]}
+--   Lit l   -> a tagged literal object (see litJSON).
+-- This mirrors ppExp/showLit and is lossless vs prettyShow (the text dump).
+entryJSON :: Ident -> [LDef] -> String
+entryJSON root ds =
+  ( ("{\"status\":\"ok\",\"root\":" ++) . jsonString (showIdent root)
+  . (",\"defs\":[" ++) . jsonList (map defJSON (reachableDefs [root] ds))
+  . ("]}" ++) ) ""
+  where
+    defJSON (i, e) = ("{\"name\":" ++) . jsonString (showIdent i)
+                   . (",\"body\":" ++) . expJSON e . ('}' :)
+
+-- Reachable closure of the given roots over the named definitions, keeping the
+-- definitions named.  Same DFS as removeUnused, but the roots are exactly the
+-- given identifiers (no implicit foreign-export roots).
+reachableDefs :: [Ident] -> [LDef] -> [LDef]
+reachableDefs roots ds = dfs roots M.empty
+  where
+    dMap = M.fromList ds
+    dfs :: [Ident] -> M.Map Exp -> [LDef]
+    dfs [] done = M.toList done
+    dfs (i:is) done
+      | Just _ <- M.lookup i done = dfs is done
+      | otherwise =
+        case M.lookup i dMap of
+          Just e  -> dfs (freeVars e ++ is) (M.insert i e done)
+          Nothing -> errorMessage (getSLoc i) $ "--entry: no definition found for " ++ showIdent i
+
+-- Comma-separate a list of difference-list fragments (a JSON array body).
+jsonList :: [ShowS] -> ShowS
+jsonList []     = id
+jsonList [x]    = x
+jsonList (x:xs) = x . (',' :) . jsonList xs
+
+expJSON :: Exp -> ShowS
+expJSON ae =
+  case ae of
+    Var i   -> ("{\"var\":" ++) . jsonString (showIdent i) . ('}' :)
+    App f a -> ("{\"app\":[" ++) . expJSON f . (',' :) . expJSON a . ("]}" ++)
+    Lam i e -> ("{\"lam\":[" ++) . jsonString (showIdent i) . (',' :) . expJSON e . ("]}" ++)
+    Lit l   -> litJSON l
+
+-- Tagged JSON for every Lit constructor, lossless vs showLit/prettyShow.
+-- The tag encodes the literal's sigil; the payload is the bare value.
+-- int/int64/double/float are JSON numbers; everything else is a JSON string.
+litJSON :: Lit -> ShowS
+litJSON l =
+  case l of
+    LInt i           -> ("{\"int\":" ++) . shows i . ('}' :)
+    LInt64 i         -> ("{\"int64\":" ++) . shows i . ('}' :)
+    LInteger i       -> ("{\"integer\":" ++) . jsonString (show i) . ('}' :)
+    LRat r           -> ("{\"rat\":" ++) . jsonString (show r) . ('}' :)
+    LDouble d        -> ("{\"double\":" ++) . shows d . ('}' :)
+    LFloat d         -> ("{\"float\":" ++) . shows d . ('}' :)
+    LChar c          -> ("{\"char\":" ++) . jsonString [c] . ('}' :)
+    LStr s           -> ("{\"string\":" ++) . jsonString s . ('}' :)
+    LBStr s          -> ("{\"bstr\":" ++) . jsonString (BS.unpack s) . ('}' :)
+    LPrim s          -> ("{\"prim\":" ++) . jsonString s . ('}' :)
+    LExn s           -> ("{\"exn\":" ++) . jsonString s . ('}' :)
+    LForImp _ ie s _ -> ("{\"forimp\":" ++) . jsonString (if isPtr then '&':s else s) . ('}' :)
+      where isPtr = case ie of ImpStatic _ IPtr _ -> True; _ -> False
+    LCType (CType t) -> ("{\"ctype\":" ++) . jsonString (showEType t) . ('}' :)
+    LTick s          -> ("{\"tick\":" ++) . jsonString s . ('}' :)
+
+-- Encode a String as a strict-JSON string literal (RFC 8259).  Control
+-- characters and all non-ASCII code points are escaped (astral planes via
+-- surrogate pairs) so the output is pure ASCII and never mis-encoded.
+jsonString :: String -> ShowS
+jsonString s rest = '"' : foldr jsonChar ('"' : rest) s
+  where
+    jsonChar c r =
+      case c of
+        '"'  -> '\\' : '"' : r
+        '\\' -> '\\' : '\\' : r
+        '\n' -> '\\' : 'n' : r
+        '\r' -> '\\' : 'r' : r
+        '\t' -> '\\' : 't' : r
+        '\b' -> '\\' : 'b' : r
+        '\f' -> '\\' : 'f' : r
+        _ | c >= '\x20' && c <= '\x7e' -> c : r
+          | ord c <= 0xffff            -> uEsc (ord c) r
+          | otherwise                  ->
+              let n  = ord c - 0x10000
+              in  uEsc (0xd800 + n `div` 0x400) (uEsc (0xdc00 + n `rem` 0x400) r)
+    uEsc n r = '\\' : 'u' : hex4 n r
+    hex4 n r = hd 4096 : hd 256 : hd 16 : hd 1 : r
+      where hd d = "0123456789abcdef" !! ((n `div` d) `rem` 16)
+
 -- The argument is all definitions and the main expression.
 -- The result is the program as a string.
 toStringCMdl :: CMdl -> String
@@ -94,6 +196,21 @@ toStringCMdl (ds, emain) =
     res = foldr def (toStringP emain) ds
 
   in combVersion ++ show (length ds) ++ "\n" ++ res " }"
+
+toJsExportTrailer :: ForExpTable -> String
+toJsExportTrailer forExps =
+  case filter (\ (_, _, _, js) -> js) forExps of
+    [] -> ""
+    jsExps ->
+      "\n#####\nJS_EXPORTS 1\n" ++ concatMap jsExport jsExps ++ ".\n"
+  where
+    jsExport (i, n, CType ty, _) =
+      let (as, r) = getArrows ty
+          (rt, io) = dropIOFlag r
+          argTags = map jsArgTag as
+      in quoteString (utf8encode (unIdent n)) ++ " " ++ showIdent i ++ " " ++
+         (if null argTags then "-" else argTags) ++ " " ++ [jsRetTag rt] ++ " " ++
+         (if io then "IO" else "PURE") ++ "\n"
 
 checkDupInstances :: [LDef] -> [LDef]
 checkDupInstances ds =
@@ -126,6 +243,17 @@ toStringP ae =
     Lit (LInteger _) -> undefined
     Lit (LRat _) -> undefined
     Lit (LTick s) -> ('!':) . (quoteString s ++) . (' ' :)
+    -- A 'foreign import javascript' becomes a token ~<tags> "<jsbody>" that the
+    -- interpreter registers and dispatches dynamically.
+    -- The special body "wrapper" turns a Haskell closure into a JS function
+    -- ('(a -> .. -> IO r) -> IO JSVal'); it emits `<cbtags>, the callback's
+    -- tags, no body.
+    Lit (LForImp _ (ImpJS jsbody) _ (CType ty))
+      | jsbody == "wrapper" -> (('`' : jsWrapperTags ty ++ " ") ++)
+      | otherwise ->
+        let (as, rio) = getArrows ty
+            tags      = jsRetTag (dropIO rio) : map jsArgTag as
+        in  (('~' : tags ++ " ") ++) . (quoteString (utf8encode jsbody) ++) . (' ' :)
     Lit l -> (showLit l ++) . (' ' :)
     Lam _x _e -> undefined -- (("(\\" ++ showIdent x ++ " ") ++) . toStringP e . (")" ++)
     --App f a -> ("(" ++) . toStringP f . (" " ++) . toStringP a . (")" ++)
@@ -159,6 +287,55 @@ quoteString s =
       | c < '\xff'             = ['|', chr (ord c - 0x80)]
       | otherwise              = "\\_"
   in  '"' : concatMap (\c -> achar (chr (ord c `rem` 256))) s ++ ['"']
+
+-- The result type of a 'foreign import javascript' is 'IO t'; strip the 'IO'.
+dropIO :: EType -> EType
+dropIO (EApp (EVar io) t) | io == identIO = t
+dropIO t = t
+
+dropIOFlag :: EType -> (EType, Bool)
+dropIOFlag (EApp (EVar io) t) | io == identIO = (t, True)
+dropIOFlag t = (t, False)
+
+-- Single-character tags naming JS FFI marshalling types.
+-- I=Int U=Word/Char D=Double F=Float P=Ptr B=Bool J=JSVal
+-- S=ByteString(<->JS string), and V=() only as a return type.
+jsRetTag :: EType -> Char
+jsRetTag (EVar i) | i == identUnit = 'V'
+jsRetTag t = jsScalarTag t
+
+jsArgTag :: EType -> Char
+jsArgTag = jsScalarTag
+
+jsScalarTag :: EType -> Char
+jsScalarTag (EApp (EVar p) _) | p == identPtr = 'P'
+-- JSVal is a newtype over 'ForeignPtr JSValRep', and newtypes are transparent,
+-- so the type reaches us as its representation.  The JSValRep phantom marks it.
+jsScalarTag (EApp (EVar fp) (EVar m))
+  | fp == identForeignPtr && unIdent m == "Mhs.JavaScript.JSValRep" = 'J'
+jsScalarTag (EVar i)
+  | i == identInt        = 'I'
+  | i == identWord       = 'U'
+  | i == identDouble     = 'D'
+  | i == identFloat      = 'F'
+  | i == identBool       = 'B'
+  | i == identByteString = 'S'
+jsScalarTag t = jsTagErr t
+
+jsTagErr :: EType -> a
+jsTagErr t = errorMessage (getSLoc t) $ "unsupported JavaScript FFI type: " ++ showEType t
+
+-- A 'foreign import javascript "wrapper"' has type '(a -> .. -> IO r) -> IO JSVal'.
+-- The serialized tags describe the callback: its result, then its arguments.
+jsWrapperTags :: EType -> String
+jsWrapperTags ty =
+  case getArrows ty of
+    ([cbty], EApp (EVar io1) rv)
+      | io1 == identIO, jsScalarTag rv == 'J'
+      , (cas, EApp (EVar io2) cr) <- getArrows cbty, io2 == identIO ->
+          jsRetTag cr : map jsArgTag cas
+    _ -> errorMessage (getSLoc ty) $
+           "foreign import javascript \"wrapper\" must have type (.. -> IO r) -> IO JSVal: " ++ showEType ty
 
 -- BaseStrings are encoded without quotations,
 -- using a length and raw data instead.
