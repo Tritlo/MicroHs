@@ -1,15 +1,13 @@
-#ifndef MICROHS_RUNTIME_WASI_CONFIG_H
-#define MICROHS_RUNTIME_WASI_CONFIG_H
-
+/* WASI Preview 1 configuration. */
 #define WANT_STDIO 1
-#define WANT_FD 0
+#define WANT_FD 1
 #define WANT_FLOAT32 1
 #define WANT_FLOAT64 1
 #define WANT_MATH 1
 #define WANT_INT64 1
 #define WANT_MD5 1
 #define WANT_TICK 1
-#define WANT_DIR 0
+#define WANT_DIR 1
 #define WANT_TIME 1
 #define WANT_SIGINT 0
 #define WANT_TAGNAMES 1
@@ -21,4 +19,22 @@
 #define WANT_IMATH 1
 #define WANT_KPERF 0
 
-#endif
+#define GCRED 1
+#define INTTABLE 1
+#define SANITY 1
+#define STACKOVL 1
+
+#include <inttypes.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <string.h>
+#include <strings.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <time.h>
+#include <sys/time.h>
+#include <stdio.h>
+#include <locale.h>
+#include <limits.h>
+#include <stdbool.h>
