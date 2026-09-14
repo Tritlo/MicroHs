@@ -54,6 +54,75 @@ stringLength _ = do
   s <- withCString "-test" $ \\p -> prefix p >>= peekCString
   return (length s)
 `;
+const schedulerSource = `module JsScheduler where
+import Control.Concurrent (forkIO, yield)
+import Control.Concurrent.MVar
+import Data.IORef
+import Mhs.JavaScript (JSVal)
+import System.Mem (performGC)
+import System.Mem.Weak
+
+foreign import javascript "wrapper" mkCallback :: (Int -> IO Int) -> IO JSVal
+foreign import javascript "return $0($1)" callCallback :: JSVal -> Int -> IO Int
+foreign import javascript "wrapper" mkUnitCallback :: (Int -> IO ()) -> IO JSVal
+foreign import javascript "$0($1); return $1" callUnitCallback :: JSVal -> Int -> IO Int
+
+foreign export javascript "finalizerCount" finalizerCount :: Int -> IO Int
+foreign export javascript "suspended" suspended :: Int -> IO Int
+foreign export javascript "nested" nested :: Int -> IO Int
+foreign export javascript "nestedUnit" nestedUnit :: Int -> IO Int
+foreign export javascript "busy" busy :: Int -> Int
+
+makeWeak :: IORef Int -> IO (Weak ())
+makeWeak counter = do
+  key <- newIORef (0 :: Int)
+  mkWeak key () (Just (modifyIORef' counter (+ 1)))
+
+finalizerCount :: Int -> IO Int
+finalizerCount n = do
+  counter <- newIORef n
+  weak <- makeWeak counter
+  performGC
+  yield
+  _ <- deRefWeak weak
+  performGC
+  yield
+  readIORef counter
+
+suspended :: Int -> IO Int
+suspended n = do
+  value <- newEmptyMVar
+  _ <- forkIO (putMVar value n)
+  takeMVar value
+
+nested :: Int -> IO Int
+nested n = do
+  counter <- newIORef n
+  weak <- makeWeak counter
+  callback <- mkCallback (\\x -> performGC >> yield >> return x)
+  result <- callCallback callback n
+  _ <- deRefWeak weak
+  yield
+  count <- readIORef counter
+  return (result + count - n)
+
+nestedUnit :: Int -> IO Int
+nestedUnit n = do
+  counter <- newIORef n
+  weak <- makeWeak counter
+  callback <- mkUnitCallback (\\_ -> performGC >> yield)
+  result <- callUnitCallback callback n
+  _ <- deRefWeak weak
+  yield
+  count <- readIORef counter
+  return (result + count - n)
+
+busy :: Int -> Int
+busy n = sum [1 .. n]
+
+main :: IO ()
+main = putStrLn "scheduler main"
+`;
 
 async function main() {
   await ensureWasm();
@@ -116,6 +185,9 @@ async function main() {
       "JS lifecycle browser dump differed from native dump"
     );
     await testJsLifecycle(nativeLifecycle.comb);
+    const scheduler = await compileNative(tmp, schedulerSource, "JsScheduler");
+    const schedulerMain = await compileNative(tmp, schedulerSource, "JsScheduler", []);
+    await testJsScheduler(scheduler.comb, schedulerMain.comb);
 
     console.log("PASS compiler-e2e");
     console.log(`status: ${first.status}`);
@@ -125,6 +197,7 @@ async function main() {
     console.log("diagnostic_paths: ok");
     console.log("program_lifetimes: ok");
     console.log("js_registry_and_finalizers: ok");
+    console.log("js_export_scheduler: ok");
   } finally {
     compiler.close();
     compiler.close();
@@ -245,6 +318,49 @@ async function testJsLifecycle(comb) {
   );
 }
 
+async function testJsScheduler(exportComb, mainComb) {
+  for (const withMain of [false, true]) {
+    let cancel = false;
+    let polls = 0;
+    let stdout = "";
+    const runtime = await instantiateMicroHsRuntime(wasmPath, {
+      stdout(bytes) {
+        stdout += new TextDecoder().decode(bytes);
+      },
+      onPoll() {
+        polls += 1;
+        return cancel;
+      },
+    });
+    const handle = runtime.newProgram(withMain ? mainComb : exportComb);
+    try {
+      const exports = runtime.exportObject(handle);
+      assert(exports.busy(2) === 3, "pure export returned the wrong value");
+      if (withMain) {
+        assert(runtime.reduceMain(handle, 0xffffffff) === 0, "export replaced the main root");
+        assert(stdout === "scheduler main\n", "export lost the original main action");
+      }
+      assert(exports.finalizerCount(10) === 11, "export lost a weak finalizer");
+      assert(exports.finalizerCount(20) === 21, "weak finalizer did not run exactly once");
+      assert(exports.suspended(42) === 42, "export did not resume after blocking");
+      assert(exports.nested(30) === 31, "callback lost the outer scheduler or finalizer");
+      assert(exports.nestedUnit(35) === 36, "unit callback lost a deferred scheduler switch");
+
+      cancel = true;
+      assertThrows(
+        () => exports.busy(10_000_000),
+        /reduction cancelled by host/,
+        "export did not report cooperative cancellation"
+      );
+      assert(polls > 0, "export did not poll the host");
+      cancel = false;
+      assert(exports.finalizerCount(40) === 41, "cancelled export corrupted the next call");
+    } finally {
+      runtime.freeProgram(handle);
+    }
+  }
+}
+
 function liveObjectCount(state) {
   return Object.keys(state.obj).filter((key) => key !== "0").length;
 }
@@ -271,7 +387,7 @@ async function ensureWasm() {
   ]);
 }
 
-async function compileNative(tmp, sourceText, module) {
+async function compileNative(tmp, sourceText, module, flags = ["--no-main"]) {
   const sourcePath = path.join(tmp, `${module}.hs`);
   const dumpPath = path.join(tmp, `${module}.dump`);
   const combOutputPath = path.join(tmp, `${module}.comb`);
@@ -294,7 +410,7 @@ async function compileNative(tmp, sourceText, module) {
       "-imhs",
       "-isrc",
       "-ilib",
-      "--no-main",
+      ...flags,
       `-ddump-combinator-out=${dumpPath}`,
       `-o${combOutputPath}`,
       module,

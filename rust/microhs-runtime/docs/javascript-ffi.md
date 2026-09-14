@@ -661,7 +661,7 @@ For this branch, the merged compiler with JS FFI and
 `-ddump-combinator-out=FILE` self-hosts to fixed point:
 
 ```text
-3ce6a7202441ad1e125c5ebb7d032b3ae0eb93b119b8345f4f42876764499278
+c04d4d96995ed8a135c32fbc6adf8c799285c8335f7349f1fdb0c5acc67c0dc5
 ```
 
 Runtime-ABI changes do not move that hash.  Compiler-source growth does.
