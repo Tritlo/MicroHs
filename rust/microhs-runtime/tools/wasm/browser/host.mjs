@@ -1,0 +1,823 @@
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+const ERRNO = {
+  EPERM: 1,
+  ENOENT: 2,
+  EBADF: 9,
+  EACCES: 13,
+  EEXIST: 17,
+  ENOTDIR: 20,
+  EISDIR: 21,
+  EINVAL: 22,
+  ENOSYS: 38,
+  ENOTEMPTY: 39,
+};
+
+export async function instantiateMicroHsRuntime(wasm, options = {}) {
+  const state = {
+    reg: [],
+    argbuf: [],
+    wargs: [],
+    obj: [null],
+    objfree: [],
+    err: null,
+    slen: 0,
+    wres: undefined,
+    exports: null,
+    memory: null,
+    hostResult: new Uint8Array(),
+    hostFs: makeHostFs(options.host),
+  };
+  state.intern = (value) => {
+    const handle = state.objfree.length ? state.objfree.pop() : state.obj.length;
+    state.obj[handle] = value;
+    return handle;
+  };
+
+  const imports = { env: makeImports(state) };
+  const source = await loadWasmSource(wasm);
+  const { instance, module } =
+    source instanceof WebAssembly.Module
+      ? { instance: await WebAssembly.instantiate(source, imports), module: source }
+      : await WebAssembly.instantiate(source, imports);
+  state.exports = instance.exports;
+  state.memory = instance.exports.memory;
+
+  return {
+    instance,
+    module,
+    state,
+    newProgram(input) {
+      const bytes = typeof input === "string" ? encoder.encode(input) : input;
+      const ptr = allocBytes(state, bytes);
+      try {
+        const handle = state.exports.mhs_rust_program_new(ptr, bytes.length);
+        if (handle === 0) {
+          throw new Error("MicroHs program parse failed");
+        }
+        return handle;
+      } finally {
+        state.exports.mhs_rust_dealloc(ptr, bytes.length);
+      }
+    },
+    reduce(handle, limit = 100000) {
+      return state.exports.mhs_rust_program_reduce(handle, limit) === 0;
+    },
+    setArgs(handle, args) {
+      const bytes = nulSeparated(args);
+      const ptr = allocBytes(state, bytes);
+      try {
+        const status = state.exports.mhs_rust_program_set_args(handle, ptr, bytes.length);
+        if (status !== 0) {
+          throw new Error("MicroHs set args failed");
+        }
+      } finally {
+        state.exports.mhs_rust_dealloc(ptr, bytes.length);
+      }
+    },
+    setExecutablePath(handle, path) {
+      const bytes = path == null ? new Uint8Array() : encoder.encode(path);
+      const ptr = allocBytes(state, bytes);
+      try {
+        const status = state.exports.mhs_rust_program_set_executable_path(
+          handle,
+          ptr,
+          bytes.length
+        );
+        if (status !== 0) {
+          throw new Error("MicroHs set executable path failed");
+        }
+      } finally {
+        state.exports.mhs_rust_dealloc(ptr, bytes.length);
+      }
+    },
+    reduceMain(handle, limit = Number.MAX_SAFE_INTEGER) {
+      return state.exports.mhs_rust_program_reduce_main(handle, limit);
+    },
+    render(handle) {
+      const ptr = state.exports.mhs_rust_program_render(handle);
+      const len = state.exports.mhs_rust_result_len();
+      if (ptr === 0) {
+        throw new Error("MicroHs render failed");
+      }
+      return readUtf8(state, ptr, len);
+    },
+    serialize(handle) {
+      const ptr = state.exports.mhs_rust_program_serialize(handle);
+      const len = state.exports.mhs_rust_result_len();
+      if (ptr === 0) {
+        throw new Error("MicroHs serialize failed");
+      }
+      return readBytes(state, ptr, len);
+    },
+    resultBytes() {
+      const ptr = state.exports.mhs_rust_result_ptr();
+      const len = state.exports.mhs_rust_result_len();
+      if (ptr === 0) {
+        return new Uint8Array();
+      }
+      return readBytes(state, ptr, len);
+    },
+    resultText() {
+      return decoder.decode(this.resultBytes());
+    },
+    hostWriteFile(path, bytes) {
+      state.hostFs.writeFile(path, bytes);
+    },
+    hostReadFile(path) {
+      return state.hostFs.readFile(path);
+    },
+    hostMkdirp(path) {
+      state.hostFs.mkdirp(path);
+    },
+    freeProgram(handle) {
+      state.exports.mhs_rust_program_free(handle);
+    },
+  };
+}
+
+async function loadWasmSource(wasm) {
+  if (wasm instanceof WebAssembly.Module) {
+    return wasm;
+  }
+  if (wasm instanceof ArrayBuffer) {
+    return wasm;
+  }
+  if (ArrayBuffer.isView(wasm)) {
+    return wasm;
+  }
+  if (typeof Response !== "undefined" && wasm instanceof Response) {
+    return wasm.arrayBuffer();
+  }
+  if (typeof wasm === "string" || wasm instanceof URL) {
+    if (typeof fetch === "function" && shouldFetch(wasm)) {
+      try {
+        const response = await fetch(wasm);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        return response.arrayBuffer();
+      } catch (error) {
+        if (!isNodeFileSource(wasm)) {
+          throw error;
+        }
+      }
+    }
+    const { readFile } = await import("node:fs/promises");
+    return readFile(wasm);
+  }
+  throw new TypeError("unsupported MicroHs wasm source");
+}
+
+function shouldFetch(wasm) {
+  if (wasm instanceof URL) {
+    return wasm.protocol !== "file:";
+  }
+  return isProbablyBrowser() || /^[a-z][a-z0-9+.-]*:/i.test(wasm);
+}
+
+function isProbablyBrowser() {
+  return typeof window !== "undefined" && typeof window.document !== "undefined";
+}
+
+function isProbablyNode() {
+  return typeof process !== "undefined" && process.versions?.node;
+}
+
+function isNodeFileSource(wasm) {
+  if (!isProbablyNode()) {
+    return false;
+  }
+  if (wasm instanceof URL) {
+    return wasm.protocol === "file:";
+  }
+  return typeof wasm === "string" && !/^[a-z][a-z0-9+.-]*:/i.test(wasm);
+}
+
+function makeImports(state) {
+  return {
+    mhs_host_result_copy(dst, len) {
+      const bytes = state.hostResult.subarray(0, len);
+      new Uint8Array(state.memory.buffer, dst, bytes.length).set(bytes);
+      return bytes.length;
+    },
+    mhs_host_getenv(namePtr, nameLen) {
+      const value = state.hostFs.getenv(readUtf8(state, namePtr, nameLen));
+      if (value == null) return -1;
+      state.hostResult = encoder.encode(value);
+      return state.hostResult.length;
+    },
+    mhs_host_setenv(namePtr, nameLen, valuePtr, valueLen, overwrite) {
+      return hostCallI64(() =>
+        state.hostFs.setenv(
+          readUtf8(state, namePtr, nameLen),
+          readUtf8(state, valuePtr, valueLen),
+          overwrite
+        )
+      );
+    },
+    mhs_host_unsetenv(namePtr, nameLen) {
+      return hostCallI64(() => state.hostFs.unsetenv(readUtf8(state, namePtr, nameLen)));
+    },
+    mhs_host_environ() {
+      state.hostResult = nulSeparatedBytes(state.hostFs.environ());
+      return state.hostResult.length;
+    },
+    mhs_host_remove(pathPtr, pathLen) {
+      return hostCallI64(() => state.hostFs.remove(readUtf8(state, pathPtr, pathLen)));
+    },
+    mhs_host_chdir(pathPtr, pathLen) {
+      return hostCallI64(() => state.hostFs.chdir(readUtf8(state, pathPtr, pathLen)));
+    },
+    mhs_host_mkdir(pathPtr, pathLen, mode) {
+      return hostCallI64(() => state.hostFs.mkdir(readUtf8(state, pathPtr, pathLen), mode));
+    },
+    mhs_host_getcwd() {
+      state.hostResult = encoder.encode(state.hostFs.getcwd());
+      return state.hostResult.length;
+    },
+    mhs_host_tmpname(prePtr, preLen, sufPtr, sufLen) {
+      state.hostResult = encoder.encode(
+        state.hostFs.tmpname(readUtf8(state, prePtr, preLen), readUtf8(state, sufPtr, sufLen))
+      );
+      return state.hostResult.length;
+    },
+    mhs_host_get_permissions(pathPtr, pathLen) {
+      return hostCallI64(() => state.hostFs.getPermissions(readUtf8(state, pathPtr, pathLen)));
+    },
+    mhs_host_set_permissions(pathPtr, pathLen, permissions) {
+      return hostCallI64(() =>
+        state.hostFs.setPermissions(readUtf8(state, pathPtr, pathLen), permissions)
+      );
+    },
+    mhs_host_dir_entries(pathPtr, pathLen) {
+      return hostBytes(state, () =>
+        nulSeparatedBytes(state.hostFs.dirEntries(readUtf8(state, pathPtr, pathLen)))
+      );
+    },
+    mhs_host_file_open(pathPtr, pathLen, modePtr, modeLen) {
+      return hostCallI64(() =>
+        state.hostFs.open(readUtf8(state, pathPtr, pathLen), readUtf8(state, modePtr, modeLen))
+      );
+    },
+    mhs_host_file_read(handle, dst, len) {
+      return hostCall(() => {
+        const bytes = state.hostFs.read(handle, len);
+        new Uint8Array(state.memory.buffer, dst, bytes.length).set(bytes);
+        return bytes.length;
+      });
+    },
+    mhs_host_file_write(handle, src, len) {
+      return hostCall(() =>
+        state.hostFs.write(handle, new Uint8Array(state.memory.buffer, src, len))
+      );
+    },
+    mhs_host_file_flush(handle) {
+      return hostCallI64(() => state.hostFs.flush(handle));
+    },
+    mhs_host_file_close(handle) {
+      return hostCallI64(() => state.hostFs.close(handle));
+    },
+    mhs_js_debug(ptr) {
+      console.log(readCString(state, ptr));
+    },
+    mhs_js_eval_run(ptr) {
+      globalThis.eval(readCString(state, ptr));
+    },
+    mhs_js_eval_call(ptr) {
+      return writeHostString(state, JSON.stringify(globalThis.eval(readCString(state, ptr))), true);
+    },
+    mhs_js_set_haskellCallback(callback) {
+      globalThis._haskellCallback = callback;
+    },
+    mhs_js_setup() {},
+    mhs_js_register(bodyp, arity) {
+      const body = readCString(state, bodyp);
+      const names = [];
+      for (let idx = 0; idx < arity; idx += 1) names.push(`$${idx}`);
+      names.push(body);
+      let fn;
+      try {
+        fn = Function.apply(null, names);
+      } catch (error) {
+        const message = String(error);
+        fn = () => {
+          throw new Error(message);
+        };
+      }
+      return state.reg.push(fn) - 1;
+    },
+    mhs_js_argreset() {
+      state.argbuf.length = 0;
+      state.err = null;
+    },
+    mhs_js_push_int(value) {
+      state.argbuf.push(value | 0);
+    },
+    mhs_js_push_uint(value) {
+      state.argbuf.push(value >>> 0);
+    },
+    mhs_js_push_dbl(value) {
+      state.argbuf.push(value);
+    },
+    mhs_js_push_obj(handle) {
+      state.argbuf.push(state.obj[handle]);
+    },
+    mhs_js_push_str(ptr, len) {
+      state.argbuf.push(readUtf8(state, ptr, len));
+    },
+    mhs_js_call_int(idx) {
+      return callJs(state, idx, 0, (value) => value | 0);
+    },
+    mhs_js_call_uint(idx) {
+      return callJs(state, idx, 0, (value) => value >>> 0);
+    },
+    mhs_js_call_dbl(idx) {
+      return callJs(state, idx, 0, (value) => +value);
+    },
+    mhs_js_call_ptr(idx) {
+      return callJs(state, idx, 0, (value) => value >>> 0);
+    },
+    mhs_js_call_obj(idx) {
+      return callJs(state, idx, 0, (value) => state.intern(value));
+    },
+    mhs_js_call_bool(idx) {
+      return callJs(state, idx, 0, (value) => (value ? 1 : 0));
+    },
+    mhs_js_call_str(idx) {
+      try {
+        return writeHostString(state, String(state.reg[idx].apply(null, state.argbuf)), false);
+      } catch (error) {
+        state.err = String(error);
+        return writeHostString(state, "", false);
+      }
+    },
+    mhs_js_call_void(idx) {
+      callJs(state, idx, undefined, () => undefined);
+    },
+    mhs_js_make_wrapper(programHandle, stablePtr, wrapperIndex) {
+      const fn = (...args) => {
+        state.wargs.push(args);
+        try {
+          const status = state.exports.mhs_rust_wrapper_invoke(
+            programHandle,
+            stablePtr,
+            wrapperIndex
+          );
+          if (status !== 0) {
+            throw new Error("MicroHs wrapper callback failed");
+          }
+          return state.wres;
+        } finally {
+          state.wargs.pop();
+        }
+      };
+      return state.intern(fn);
+    },
+    mhs_js_arg_int(index) {
+      try {
+        return state.wargs[state.wargs.length - 1][index] | 0;
+      } catch {
+        return 0;
+      }
+    },
+    mhs_js_arg_uint(index) {
+      try {
+        return state.wargs[state.wargs.length - 1][index] >>> 0;
+      } catch {
+        return 0;
+      }
+    },
+    mhs_js_arg_dbl(index) {
+      try {
+        return +state.wargs[state.wargs.length - 1][index];
+      } catch {
+        return 0;
+      }
+    },
+    mhs_js_arg_obj(index) {
+      try {
+        return state.intern(state.wargs[state.wargs.length - 1][index]);
+      } catch {
+        return 0;
+      }
+    },
+    mhs_js_arg_str(index) {
+      try {
+        return writeHostString(state, String(state.wargs[state.wargs.length - 1][index]), false);
+      } catch {
+        return writeHostString(state, "", false);
+      }
+    },
+    mhs_js_set_res_num(value) {
+      state.wres = value;
+    },
+    mhs_js_set_res_obj(handle) {
+      state.wres = state.obj[handle];
+    },
+    mhs_js_set_res_str(ptr, len) {
+      state.wres = readUtf8(state, ptr, len);
+    },
+    mhs_js_set_res_undef() {
+      state.wres = undefined;
+    },
+    mhs_js_slen() {
+      return state.slen;
+    },
+    mhs_js_haserr() {
+      return state.err === null ? 0 : 1;
+    },
+    mhs_js_logerr() {
+      console.error("MicroHs JavaScript FFI exception:", state.err);
+    },
+  };
+}
+
+function callJs(state, idx, fallback, convert) {
+  try {
+    return convert(state.reg[idx].apply(null, state.argbuf));
+  } catch (error) {
+    state.err = String(error);
+    return fallback;
+  }
+}
+
+function hostCall(fn) {
+  try {
+    return fn();
+  } catch (error) {
+    return -errnoFromError(error);
+  }
+}
+
+function hostCallI64(fn) {
+  return BigInt(hostCall(fn));
+}
+
+function hostBytes(state, fn) {
+  try {
+    const bytes = fn();
+    state.hostResult = bytes;
+    return bytes.length;
+  } catch (error) {
+    return -errnoFromError(error);
+  }
+}
+
+function errnoFromError(error) {
+  if (error instanceof HostError) return error.errno;
+  return ERRNO.EINVAL;
+}
+
+class HostError extends Error {
+  constructor(errno, message = `host errno ${errno}`) {
+    super(message);
+    this.errno = errno;
+  }
+}
+
+function makeHostFs(options = {}) {
+  const files = new Map();
+  const dirs = new Set(["/", "/tmp"]);
+  const env = new Map(Object.entries(options.env ?? {}));
+  const handles = new Map();
+  let cwd = "/";
+  let nextHandle = 1;
+  let tmpCounter = 0;
+
+  function normalize(rawPath) {
+    let input = String(rawPath || ".");
+    if (!input.startsWith("/")) {
+      input = `${cwd}/${input}`;
+    }
+    const parts = [];
+    for (const part of input.split("/")) {
+      if (!part || part === ".") continue;
+      if (part === "..") {
+        parts.pop();
+      } else {
+        parts.push(part);
+      }
+    }
+    return `/${parts.join("/")}`;
+  }
+
+  function parentDir(path) {
+    const idx = path.lastIndexOf("/");
+    return idx <= 0 ? "/" : path.slice(0, idx);
+  }
+
+  function basename(path) {
+    const idx = path.lastIndexOf("/");
+    return idx < 0 ? path : path.slice(idx + 1);
+  }
+
+  function assertParent(path) {
+    if (!dirs.has(parentDir(path))) {
+      throw new HostError(ERRNO.ENOENT);
+    }
+  }
+
+  function mkdirp(rawPath) {
+    const path = normalize(rawPath);
+    let current = "";
+    for (const part of path.split("/").filter(Boolean)) {
+      current += `/${part}`;
+      if (files.has(current)) {
+        throw new HostError(ERRNO.ENOTDIR);
+      }
+      dirs.add(current);
+    }
+  }
+
+  function writeFile(rawPath, bytes) {
+    const path = normalize(rawPath);
+    assertParent(path);
+    if (dirs.has(path)) {
+      throw new HostError(ERRNO.EISDIR);
+    }
+    files.set(path, toBytes(bytes));
+  }
+
+  function readFile(rawPath) {
+    const path = normalize(rawPath);
+    const bytes = files.get(path);
+    if (!bytes) {
+      throw new HostError(dirs.has(path) ? ERRNO.EISDIR : ERRNO.ENOENT);
+    }
+    return bytes.slice();
+  }
+
+  function modeFlags(rawMode) {
+    const mode = String(rawMode).replaceAll("b", "");
+    switch (mode) {
+      case "r":
+        return { readable: true, writable: false, append: false, truncate: false, create: false };
+      case "w":
+        return { readable: false, writable: true, append: false, truncate: true, create: true };
+      case "a":
+        return { readable: false, writable: true, append: true, truncate: false, create: true };
+      case "r+":
+        return { readable: true, writable: true, append: false, truncate: false, create: false };
+      case "w+":
+        return { readable: true, writable: true, append: false, truncate: true, create: true };
+      case "a+":
+        return { readable: true, writable: true, append: true, truncate: false, create: true };
+      default:
+        throw new HostError(ERRNO.EINVAL);
+    }
+  }
+
+  function open(rawPath, rawMode) {
+    const path = normalize(rawPath);
+    const flags = modeFlags(rawMode);
+    assertParent(path);
+    if (dirs.has(path)) {
+      throw new HostError(ERRNO.EISDIR);
+    }
+    if (!files.has(path)) {
+      if (!flags.create) {
+        throw new HostError(ERRNO.ENOENT);
+      }
+      files.set(path, new Uint8Array());
+    }
+    if (flags.truncate) {
+      files.set(path, new Uint8Array());
+    }
+    const handle = nextHandle++;
+    handles.set(handle, {
+      path,
+      pos: flags.append ? files.get(path).length : 0,
+      ...flags,
+    });
+    return handle;
+  }
+
+  function fileHandle(handle, op) {
+    const file = handles.get(Number(handle));
+    if (!file) {
+      throw new HostError(ERRNO.EBADF);
+    }
+    if (op === "read" && !file.readable) {
+      throw new HostError(ERRNO.EBADF);
+    }
+    if (op === "write" && !file.writable) {
+      throw new HostError(ERRNO.EBADF);
+    }
+    return file;
+  }
+
+  function read(handle, len) {
+    const file = fileHandle(handle, "read");
+    const bytes = files.get(file.path) ?? new Uint8Array();
+    const end = Math.min(bytes.length, file.pos + Number(len));
+    const out = bytes.slice(file.pos, end);
+    file.pos = end;
+    return out;
+  }
+
+  function write(handle, input) {
+    const file = fileHandle(handle, "write");
+    const bytes = files.get(file.path) ?? new Uint8Array();
+    const src = toBytes(input);
+    if (file.append) {
+      file.pos = bytes.length;
+    }
+    const end = file.pos + src.length;
+    let out = bytes;
+    if (end > out.length) {
+      const grown = new Uint8Array(end);
+      grown.set(out);
+      out = grown;
+    }
+    out.set(src, file.pos);
+    file.pos = end;
+    files.set(file.path, out);
+    return src.length;
+  }
+
+  function flush(handle) {
+    fileHandle(handle);
+    return 0;
+  }
+
+  function close(handle) {
+    if (!handles.delete(Number(handle))) {
+      throw new HostError(ERRNO.EBADF);
+    }
+    return 0;
+  }
+
+  function remove(rawPath) {
+    const path = normalize(rawPath);
+    if (files.delete(path)) return 0;
+    if (dirs.has(path)) {
+      for (const dir of dirs) {
+        if (dir !== path && parentDir(dir) === path) {
+          throw new HostError(ERRNO.ENOTEMPTY);
+        }
+      }
+      for (const file of files.keys()) {
+        if (parentDir(file) === path) {
+          throw new HostError(ERRNO.ENOTEMPTY);
+        }
+      }
+      if (path === "/") {
+        throw new HostError(ERRNO.EPERM);
+      }
+      dirs.delete(path);
+      return 0;
+    }
+    throw new HostError(ERRNO.ENOENT);
+  }
+
+  function mkdir(rawPath) {
+    const path = normalize(rawPath);
+    if (files.has(path)) {
+      throw new HostError(ERRNO.ENOTDIR);
+    }
+    if (dirs.has(path)) {
+      throw new HostError(ERRNO.EEXIST);
+    }
+    assertParent(path);
+    dirs.add(path);
+    return 0;
+  }
+
+  function chdir(rawPath) {
+    const path = normalize(rawPath);
+    if (!dirs.has(path)) {
+      throw new HostError(files.has(path) ? ERRNO.ENOTDIR : ERRNO.ENOENT);
+    }
+    cwd = path;
+    return 0;
+  }
+
+  function getPermissions(rawPath) {
+    const path = normalize(rawPath);
+    if (dirs.has(path)) return 14;
+    if (files.has(path)) return 6;
+    throw new HostError(ERRNO.ENOENT);
+  }
+
+  function setPermissions(rawPath) {
+    const path = normalize(rawPath);
+    if (!dirs.has(path) && !files.has(path)) {
+      throw new HostError(ERRNO.ENOENT);
+    }
+    return 0;
+  }
+
+  function dirEntries(rawPath) {
+    const path = normalize(rawPath);
+    if (!dirs.has(path)) {
+      throw new HostError(files.has(path) ? ERRNO.ENOTDIR : ERRNO.ENOENT);
+    }
+    const names = [".", ".."];
+    for (const dir of dirs) {
+      if (dir !== path && parentDir(dir) === path) names.push(basename(dir));
+    }
+    for (const file of files.keys()) {
+      if (parentDir(file) === path) names.push(basename(file));
+    }
+    return names;
+  }
+
+  return {
+    getenv(name) {
+      return env.get(name) ?? null;
+    },
+    setenv(name, value, overwrite) {
+      if (!name || name.includes("=")) throw new HostError(ERRNO.EINVAL);
+      if (overwrite || !env.has(name)) env.set(name, value);
+      return 0;
+    },
+    unsetenv(name) {
+      if (!name || name.includes("=")) throw new HostError(ERRNO.EINVAL);
+      env.delete(name);
+      return 0;
+    },
+    environ() {
+      return Array.from(env, ([name, value]) => `${name}=${value}`);
+    },
+    remove,
+    chdir,
+    mkdir,
+    mkdirp,
+    getcwd() {
+      return cwd;
+    },
+    tmpname(pre, suf) {
+      tmpCounter += 1;
+      return `/tmp/${pre}${String(tmpCounter).padStart(6, "0")}${suf}`;
+    },
+    getPermissions,
+    setPermissions,
+    dirEntries,
+    open,
+    read,
+    write,
+    flush,
+    close,
+    writeFile,
+    readFile,
+  };
+}
+
+function toBytes(bytes) {
+  if (bytes instanceof Uint8Array) return bytes.slice();
+  if (ArrayBuffer.isView(bytes)) {
+    return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength).slice();
+  }
+  if (bytes instanceof ArrayBuffer) return new Uint8Array(bytes).slice();
+  if (typeof bytes === "string") return encoder.encode(bytes);
+  return Uint8Array.from(bytes);
+}
+
+function allocBytes(state, bytes) {
+  const ptr = state.exports.mhs_rust_alloc(bytes.length);
+  if (ptr === 0 && bytes.length !== 0) {
+    throw new Error("MicroHs wasm allocation failed");
+  }
+  new Uint8Array(state.memory.buffer, ptr, bytes.length).set(bytes);
+  return ptr;
+}
+
+function nulSeparated(values) {
+  const encoded = values.map((value) => encoder.encode(String(value)));
+  const total = encoded.reduce((acc, bytes) => acc + bytes.length + 1, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const bytes of encoded) {
+    out.set(bytes, offset);
+    offset += bytes.length + 1;
+  }
+  return out;
+}
+
+function nulSeparatedBytes(values) {
+  return nulSeparated(values);
+}
+
+function writeHostString(state, value, nulTerminated) {
+  const bytes = encoder.encode(value);
+  state.slen = bytes.length;
+  const out = nulTerminated ? new Uint8Array(bytes.length + 1) : bytes;
+  if (nulTerminated) out.set(bytes);
+  return allocBytes(state, out);
+}
+
+function readCString(state, ptr) {
+  const memory = new Uint8Array(state.memory.buffer);
+  let end = ptr;
+  while (memory[end] !== 0) end += 1;
+  return decoder.decode(memory.subarray(ptr, end));
+}
+
+function readUtf8(state, ptr, len) {
+  return decoder.decode(readBytes(state, ptr, len));
+}
+
+function readBytes(state, ptr, len) {
+  return new Uint8Array(state.memory.buffer, ptr, len).slice();
+}

@@ -5,6 +5,17 @@ on:
   push:
 
 jobs:
+  rust-clippy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust 1.97.1 with Clippy and browser WASM
+      run: rustup toolchain install 1.97.1 --profile minimal --component clippy --target wasm32-unknown-unknown
+    - name: Clippy
+      run: cargo +1.97.1 clippy --manifest-path rust/microhs-runtime/Cargo.toml --all-targets -- -D warnings
+    - name: Build browser WASM
+      run: cargo +1.97.1 build --release --manifest-path rust/microhs-runtime/Cargo.toml --target wasm32-unknown-unknown --features embedded --lib
+
   hlint:
     runs-on: ubuntu-latest
     steps:

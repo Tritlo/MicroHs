@@ -1,0 +1,26 @@
+[package]
+name = "microhs-runtime"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+license = "BSD-3-Clause"
+
+[features]
+default = []
+embedded = []
+profile = []
+gc-phase-profile = []
+wide-cell = []
+
+[dependencies]
+libc = "0.2.186"
+lzma-sdk-rs = "0.2301.1"
+
+[lib]
+name = "microhs_runtime"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "mhs-rust"
+path = "src/main.rs"
