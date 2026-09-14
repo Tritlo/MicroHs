@@ -2468,7 +2468,7 @@ static mp_result s_udiv_knuth(mp_int u, mp_int v) {
     mp_digit d, rem;
     d = v->digits[0];
     rem = s_ddiv(u, d);
-    mp_int_set_value(v, rem);
+    mp_int_set_uvalue(v, rem);
     return MP_OK;
   }
 
