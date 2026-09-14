@@ -133,7 +133,7 @@ data ImpType = ImpNormal | ImpBoot
 
 instance NFData ImpType where rnf x = x `seq` ()
 
-data CallConv = Cccall | Ccapi | Cjavascript
+data CallConv = Cccall | Ccapi | Cjavascript | Cwasm
   deriving (Eq, Show)
 
 instance NFData CallConv where rnf x = x `seq` ()
@@ -387,6 +387,7 @@ data ImpEnt
   | ImpDynamic
   | ImpWrapper
   | ImpJS String
+  | ImpWasm String String
   deriving (Eq, Show)
 
 instance NFData ImpEnt where
@@ -394,6 +395,7 @@ instance NFData ImpEnt where
   rnf ImpDynamic = ()
   rnf ImpWrapper = ()
   rnf (ImpJS s) = rnf s
+  rnf (ImpWasm m n) = rnf m `seq` rnf n
 
 data ImpVal = IPtr | IValue | IFunc
   deriving (Eq, Show)

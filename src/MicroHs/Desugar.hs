@@ -55,6 +55,7 @@ dsDef flags mn ffiNo adef =
     --   foo = FE bar' ty'
     -- where bar' is the desugared expression for bar, and ty' is the C type
     -- (currently just a newtype of an EType).
+    ForExp Cwasm _ e _ -> errorMessage (getSLoc e) "foreign export wasm is not supported"
     ForExp cc (Just s) e t ->  [(mkIdentSLoc l s, mkForExp (cc == Cjavascript) e' (CType t))]
       where l = getSLoc e
             e' = dsExpr e
@@ -612,6 +613,11 @@ lazier def = def
 -- with capi it can be any C expression.
 parseImpEnt :: SLoc -> CallConv -> String -> String -> ImpEnt
 parseImpEnt _ Cjavascript _ s = ImpJS s
+parseImpEnt loc Cwasm _ s =
+  case words s of
+    [m, n] | all validChar m && all validChar n -> ImpWasm m n
+    _ -> errorMessage loc "foreign import wasm requires \"module export\" with ASCII names"
+  where validChar c = isAscii c && (isAlphaNum c || c `elem` "_.-/:")
 parseImpEnt loc _cc ui s =
   case words s of
     ["dynamic"] -> ImpDynamic
@@ -645,5 +651,7 @@ mkForImp mn no cc ms i ty =
         case impent of
           ImpStatic _ _ n ->
             if isValidC n then n else fno
+          ImpWasm _ _ -> "wasm_" ++ concatMap (\ c -> show (ord c) ++ "_") (unIdent mn) ++ fno
+          ImpJS _ -> "js_" ++ concatMap (\ c -> show (ord c) ++ "_") (unIdent mn) ++ fno
           _ -> fno
   in  LForImp mn impent cid cty

@@ -431,7 +431,7 @@ pDef =
     pSafety = pKeyword "unsafe" <|> pKeyword "safe" <|> pKeyword "interruptible"
 
 pCallConv :: P CallConv
-pCallConv = (Cccall <$ pKeyword "ccall") <|> (Ccapi <$ pKeyword "capi") <|> (Cjavascript <$ pKeyword "javascript")
+pCallConv = (Cccall <$ pKeyword "ccall") <|> (Ccapi <$ pKeyword "capi") <|> (Cjavascript <$ pKeyword "javascript") <|> (Cwasm <$ pKeyword "wasm")
 
 pPatSyn :: P (LHS, EPat, Maybe [Eqn])
 pPatSyn = do

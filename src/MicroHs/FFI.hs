@@ -1,4 +1,4 @@
-module MicroHs.FFI(makeFFI) where
+module MicroHs.FFI(makeFFI, makeWasmFFI, hasWasmImports) where
 import qualified Prelude(); import MHSPrelude
 import Data.Char
 import Data.List
@@ -13,10 +13,9 @@ import MicroHs.Names
 -- The export table has (internal-name, external-name, external-type)
 makeFFI :: Flags -> [(Ident, Ident, CType, IsJavascript)] -> [IdentModule ]-> [[LDef]] -> (String, String)
 makeFFI _ forExps exclude dss =
-  let ffiImports = nubBy eq [ (ie, n, t, mn) | ds <- dss, (_, d) <- ds, Lit (LForImp mn ie n (CType t)) <- [get d] ]
-                 where get (App _ a) = a   -- if there is no IO type, we have (App primPerform (LForImp ...))
-                       get a = a
-                       eq (_, n, _, _) (_, n', _, _) = n == n'
+  let allImports = collectImports dss
+      ffiImports = nubBy eq allImports
+                 where eq (_, n, _, _) (_, n', _, _) = n == n'
       wrappers = [ t | (ImpWrapper, _, t, _) <- ffiImports]
       dynamics = [ t | (ImpDynamic, _, t, _) <- ffiImports]
       imps     = filter ((`notElem` exclude) . impModule) $ filter ((`notElem` runtimeFFI) . impName) ffiImports
@@ -37,6 +36,7 @@ makeFFI _ forExps exclude dss =
          "#endif"
         ]
   in
+    checkWasmImports forExps allImports `seq`
     if not (null wrappers) || not (null dynamics) then mhsError "Unimplemented FFI feature" else
     (unlines $
       map (\ fn -> "#include \"" ++ fn ++ "\"") includes ++
@@ -62,6 +62,178 @@ makeFFI _ forExps exclude dss =
        "\n"
       ] ++ zipWith mkExportWrapper [0..] forExps
     , header)
+
+-- | Collect foreign imports from linked definitions.
+collectImports :: [[LDef]] -> [(ImpEnt, String, EType, IdentModule)]
+collectImports dss =
+  [ (ie, n, t, mn) | ds <- dss, (_, d) <- ds, Lit (LForImp mn ie n (CType t)) <- [get d] ]
+  where get (App _ a) = a
+        get a = a
+
+-- | Check whether definitions require WebAssembly imports.
+hasWasmImports :: [[LDef]] -> Bool
+hasWasmImports dss = any isWasm (collectImports dss)
+  where isWasm (ImpWasm _ _, _, _, _) = True
+        isWasm _ = False
+
+-- | Reject conflicting import signatures and generated C names.
+checkWasmImports :: [(Ident, Ident, CType, IsJavascript)] -> [(ImpEnt, String, EType, IdentModule)] -> ()
+checkWasmImports exps imps =
+  let signature t = let (as, r) = wasmTypes t in (map valueType as, valueType r)
+      valueType "intptr_t" = "i32"
+      valueType "uintptr_t" = "i32"
+      valueType "int64_t" = "i64"
+      valueType "uint64_t" = "i64"
+      valueType s = s
+      ws = [ (m, n, f, signature t) | (ImpWasm m n, f, t, _) <- imps ]
+      conflicts = [ m ++ " " ++ n | (m, n, _, t) <- ws, (m', n', _, t') <- ws, m == m', n == n', t /= t' ]
+      names = [ unIdent n | (_, n, _, _) <- exps ] ++
+              concat [ [n, f, "mhs_" ++ f] | (ImpStatic _ _ n, f, _, _) <- imps ] ++
+              [ "mhs_" ++ f | (ImpJS _, f, _, _) <- imps ]
+      collisions = [ s | (_, _, f, _) <- ws, s <- [f, "mhs_" ++ f, "mhs_wasm_import_" ++ f], s `elem` names ]
+  in case conflicts of
+       n : _ -> mhsError $ "Conflicting foreign import wasm signatures: " ++ n
+       [] -> case collisions of
+               n : _ -> mhsError $ "foreign import wasm C name collision: " ++ n
+               [] -> ()
+
+-- | Return C scalar types for a WebAssembly function signature.
+wasmTypes :: EType -> ([String], String)
+wasmTypes t =
+  let (as, ior) = getArrows t
+      r = checkIO ior
+      scalar a =
+        case a of
+          EVar i | unIdent i `elem` map ("Primitives." ++) ["Int", "Word", "Int64", "Word64", "Float", "Double"] -> cTypeName a
+          _ -> errorMessage (getSLoc a) $ "Not a valid wasm scalar type: " ++ showEType a
+      result = if isUnit r && not (eqEType r ior) then "void" else scalar r
+  in (map scalar as, result)
+
+-- | Emit standalone WAT dispatch, typed imports, and JavaScript metadata.
+-- The linked combinator program retains its foreign names. Runtime service
+-- indices start at 65536; the functions below receive relative indices.
+-- Calls box scalar results but do not invoke the evaluator or collector.
+makeWasmFFI :: [(Ident, Ident, CType, IsJavascript)] -> [[LDef]] -> (String, String, String)
+makeWasmFFI exps dss =
+  let allImports = collectImports dss
+      imps = nubBy (\ a b -> impName a == impName b) $ filter direct allImports
+      direct (ImpWasm _ _, _, _, _) = True
+      direct (ImpJS _, _, _, _) = True
+      direct _ = False
+      invalid = [ n | (ie, n, _, _) <- allImports, not (allowed ie n) ]
+      allowed (ImpWasm _ _) _ = True
+      allowed (ImpJS _) _ = True
+      allowed (ImpStatic _ _ _) n = n `elem` runtimeFFI
+      allowed _ _ = False
+      names = map impName imps
+      addresses = scanl (\ p n -> p + length n + 1) 25165824 names
+      entries = zip3 [0::Int ..] addresses imps
+      number = show
+      iconst n = "(i32.const " ++ number n ++ ")"
+      same i = "(i32.eq (local.get $index) " ++ iconst i ++ ")"
+      ffiName i = "$foreign_import_" ++ number i
+      signature (_, _, ty, _) = wasmTypes ty
+      importLine (i, _, imp@(ie, n, _, _)) =
+        let (as, r) = signature imp
+            (m, f) = case ie of
+              ImpWasm modName field -> (modName, field)
+              _ -> ("javascript", n)
+        in "(import " ++ show m ++ " " ++ show f ++ " (func " ++ ffiName i ++
+           concatMap (\ t -> " (param " ++ wasmValueType t ++ ")") as ++
+           (if r == "void" then "" else " (result " ++ wasmValueType r ++ ")") ++ "))"
+      nameData (_, p, (_, n, _, _)) =
+        "(data " ++ iconst p ++ " \"" ++ n ++ "\\00\")"
+      lookupCase (i, p, (_, n, _, _)) =
+        "  (if (i32.eq (local.get $length) " ++ iconst (length n) ++ ")\n" ++
+        "    (then (if (call $names_equal (local.get $name) " ++ iconst p ++ " (local.get $length))\n" ++
+        "      (then (return " ++ iconst i ++ ")))))"
+      arityCase (i, _, imp) =
+        "  (if " ++ same i ++ " (then (return " ++ iconst (length (fst (signature imp))) ++ ")))"
+      nameCase (i, p, _) = "  (if " ++ same i ++ " (then (return " ++ iconst p ++ ")))"
+      invokeCase (i, _, imp) =
+        let (as, r) = signature imp
+            arg k t = " (call $" ++ wasmUnbox t ++ " (call $value_arg (local.get $args) " ++ iconst k ++ "))"
+            call = "(call " ++ ffiName i ++ concat (zipWith arg [0::Int ..] as) ++ ")"
+            result = if r == "void" then call ++ " (return (call $prim (global.get $T_I)))"
+                     else "(return (call $" ++ wasmBox r ++ " " ++ call ++ "))"
+        in "  (if " ++ same i ++ " (then " ++ result ++ "))"
+      jsEntry (_, _, (ImpJS source, n, ty, _)) =
+        let (as, r) = wasmTypes ty
+        in ["{\"module\":\"javascript\",\"name\":" ++ jsonString n ++
+            ",\"source\":" ++ jsonString source ++ ",\"parameters\":[" ++
+            intercalate "," (map (jsonString . wasmScalarName) as) ++
+            "],\"result\":" ++ jsonString (wasmScalarName r) ++ "}"]
+      jsEntry _ = []
+      arities = [ impName imp | imp <- imps, length (fst (signature imp)) > 6 ]
+      code = unlines $
+        [";; Generated scalar foreign calls. This is a WAT module fragment.",
+         ";; Arguments are boxed values in weak head normal form. Calls do not collect."] ++
+        map nameData entries ++
+        ["(func $foreign_lookup (param $name i32) (param $length i32) (result i32)"] ++
+        map lookupCase entries ++ ["  (i32.const -1))",
+        "(func $foreign_arity (param $index i32) (result i32)"] ++
+        map arityCase entries ++ ["  (call $fail (i32.const 38)) (unreachable))",
+        "(func $foreign_name (param $index i32) (result i32)"] ++
+        map nameCase entries ++ ["  (call $fail (i32.const 38)) (unreachable))",
+        "(func $foreign_invoke (param $index i32) (param $args i32) (result i32)"] ++
+        map invokeCase entries ++ ["  (call $fail (i32.const 38)) (unreachable))"]
+      metadata = "{\"version\":1,\"bindings\":[" ++ intercalate "," (concatMap jsEntry entries) ++ "]}\n"
+  in checkWasmImports exps allImports `seq`
+     if not (null exps) then mhsError "foreign export is not supported by standalone WAT output" else
+     case invalid of
+       n : _ -> mhsError $ "standalone WAT output cannot call C foreign import: " ++ n
+       [] -> case arities of
+         n : _ -> mhsError $ "standalone WAT foreign import has more than 6 arguments: " ++ n
+         [] -> if last addresses > 33554432 then mhsError "standalone WAT foreign names exceed 8 MiB" else
+               (code, unlines (map importLine entries), metadata)
+
+-- | Map scalar C spellings to the WebAssembly value types used by both backends.
+wasmValueType :: String -> String
+wasmValueType t = case t of
+  "intptr_t" -> "i32"
+  "uintptr_t" -> "i32"
+  "int64_t" -> "i64"
+  "uint64_t" -> "i64"
+  "float" -> "f32"
+  "double" -> "f64"
+  _ -> mhsError $ "Not a WebAssembly value type: " ++ t
+
+-- | Select the checked scalar accessor for a foreign argument.
+wasmUnbox :: String -> String
+wasmUnbox t = case wasmValueType t of
+  "i32" -> "ival"
+  "i64" -> "i64val"
+  "f32" -> "fval"
+  _ -> "dval"
+
+-- | Select the graph constructor for a foreign result.
+wasmBox :: String -> String
+wasmBox t = case wasmValueType t of
+  "i32" -> "int"
+  "i64" -> "int64"
+  "f32" -> "float"
+  _ -> "double"
+
+-- | Preserve signedness in JavaScript metadata. WebAssembly itself has no unsigned value types.
+wasmScalarName :: String -> String
+wasmScalarName t = case t of
+  "intptr_t" -> "Int"
+  "uintptr_t" -> "Word"
+  "int64_t" -> "Int64"
+  "uint64_t" -> "Word64"
+  "float" -> "Float"
+  "double" -> "Double"
+  "void" -> "Unit"
+  _ -> mhsError $ "Not a WebAssembly scalar type: " ++ t
+
+-- | Quote JSON source text without Haskell-specific string escapes.
+jsonString :: String -> String
+jsonString s = '"' : concatMap escape s ++ "\""
+  where
+    escape '"' = "\\\""
+    escape '\\' = "\\\\"
+    escape c | ord c < 32 = "\\u00" ++ [intToDigit (ord c `div` 16), intToDigit (ord c `mod` 16)]
+             | otherwise = [c]
 
 mkExportSig :: IsJavascript -> Ident -> [EType] -> EType -> String
 mkExportSig js n as ior =
@@ -106,6 +278,7 @@ mkEntry (ImpStatic _ IFunc  _, f, t, _) = "{ \"" ++ f ++ "\", " ++ show (arity t
 mkEntry (ImpStatic _ IPtr   _, f, _, _) = "{ \"&" ++ f ++ "\", 0, mhs_addr_" ++ f ++ "},"
 mkEntry (ImpStatic _ IValue _, f, _, _) = "{ \"" ++ f ++ "\", 0, mhs_" ++ f ++ "},"
 mkEntry (ImpJS _,              f, t, _) = "{ \"" ++ f ++ "\", " ++ show (arity t) ++ ", mhs_" ++ f ++ "},"
+mkEntry (ImpWasm _ _,          f, t, _) = "{ \"" ++ f ++ "\", " ++ show (arity t) ++ ", mhs_" ++ f ++ "},"
 mkEntry _ = undefined
 
 mkMhsFun :: String -> String -> String
@@ -189,6 +362,18 @@ mkHdr (ImpJS s, f, ty, _) =
         else
           "return " ++ mkRet rt n call
   in  mkMhsFun f fcall
+mkHdr (ImpWasm m n, f, ty, mn) =
+  let (as, r) = wasmTypes ty
+      fn = "mhs_wasm_import_" ++ f
+      args = if null as then "void" else intercalate ", " as
+      declaration = "extern " ++ r ++ " " ++ fn ++ "(" ++ args ++ ") " ++
+                    "__attribute__((import_module(" ++ show m ++ "), import_name(" ++ show n ++ ")));"
+  in unlines [ "#if !defined(__wasm32__)",
+               "#error foreign import wasm requires a wasm32 target",
+               "#endif",
+               declaration,
+               mkHdr (ImpStatic [] IFunc fn, f, ty, mn)
+             ]
 mkHdr _ = undefined
 
 arity :: EType -> Int

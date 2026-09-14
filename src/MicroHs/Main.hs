@@ -118,6 +118,7 @@ longUsage = usage ++ "\nOptions:\n" ++ details
       \-oFILE             Output to FILE\n\
       \                   If FILE ends in .comb produce a combinator file\n\
       \                   If FILE ends in .c produce a C file\n\
+      \                   If FILE ends in .wat produce standalone WAT foreign calls and companion files\n\
       \                   Otherwise compile the combinators together with the runtime system to produce a regular executable\n\
       \-optF FLAG         Pass the FLAG to the -F preprocessor\n\
       \-optc OPTION       Options for the C compiler\n\
@@ -372,6 +373,9 @@ mainCompile flags mn = do
     putStrLn "linked:"; printLDefs (removeUnused cmdl)
   dumpIf flags Dtoplevel $ do
     putStrLn "toplevel:"; printLDefs allDefs
+  when (hasWasmImports [outDefs] &&
+        (runIt flags || output flags `hasTheExtension` ".comb" || output flags `hasTheExtension` ".combffi")) $
+    mhsError "foreign import wasm requires -oPROGRAM.wat or C output compiled for wasm32; use -oPROGRAM.c"
   if runIt flags then do
     translateAndRun cmdl
    else do
@@ -395,7 +399,7 @@ mainCompile flags mn = do
 
     let outFile = output flags
     -- Generate stub file for 'foreign export'
-    unless (null forExps) $ do
+    unless (null forExps || outFile `hasTheExtension` ".wat") $ do
       let stubName = takeDirectory outFile </> dropExtension (showIdent mn) ++ "_stub.h"
       when (verbosityGT flags 0) $
         putStrLn $ "generate stub: " ++ stubName
@@ -404,7 +408,22 @@ mainCompile flags mn = do
     --  * file ends in .comb: write combinator file
     --  * file ends in .c: write C version of combinator
     --  * otherwise, write C file and compile to a binary with cc
-    if outFile `hasTheExtension` ".comb" || outFile `hasTheExtension` ".combffi" then do
+    if outFile `hasTheExtension` ".wat" then do
+      when (compress flags || base64 flags) $
+        mhsError "standalone WAT output requires uncompressed combinators; omit -z and -b64"
+      let (wat, imports, metadata) = makeWasmFFI forExps
+            (outDefs : map (packageDefs . snd) embedPkg)
+          prefix = dropExtension outFile
+      -- Validate all fragments before writing the output set.
+      seq (length wat + length imports + length metadata) (return ())
+      writeFile outFile wat
+      writeFile (prefix ++ ".imports.wat") imports
+      writeFile (prefix ++ ".imports.json") metadata
+      -- Raw byte strings in the serialized program must not pass through UTF-8.
+      h <- openBinaryFile (prefix ++ ".comb") WriteMode
+      hPutStr h outData
+      hClose h
+     else if outFile `hasTheExtension` ".comb" || outFile `hasTheExtension` ".combffi" then do
       h <- openBinaryFile outFile WriteMode
       h' <- if base64 flags then do addBase64 h else return h
       h'' <- if compress flags then do hPutChar h' 'z'; addLZ77 h' else return h'
