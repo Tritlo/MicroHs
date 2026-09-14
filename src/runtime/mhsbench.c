@@ -269,6 +269,9 @@ main(int argc, char **argv)
   printf("c_parse_eval_serialize_total_ms: %.3f\n", (double)elapsed / 1000000.0);
   printf("c_parse_eval_serialize_ns_per_iter: %.1f\n", (double)elapsed / (double)iters);
   printf("c_bench_sink: %zu\n", (size_t)bench_sink);
+#if defined(MHS_WAT_PROFILE)
+  mhs_wat_profile_dump();
+#endif
   free(input);
   return 0;
 }

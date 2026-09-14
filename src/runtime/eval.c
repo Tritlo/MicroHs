@@ -5049,6 +5049,37 @@ rnf(value_t noerr, NODEPTR n)
 }
 
 /* Evaluate a node, returns when the node is in WHNF. */
+#if defined(MHS_WAT_REDUCER)
+_Static_assert(sizeof(node) == 12 && offsetof(node, uarg) == 4,
+               "WAT reducer requires the wasm32 12-byte node layout");
+_Static_assert(sizeof(stackptr_t) == 4 && sizeof(bits_t) == 4,
+               "WAT reducer requires 32-bit stack indices and bitmaps");
+_Static_assert(T_S == 15 && T_K == 16 && T_I == 17 && T_B == 18 &&
+               T_C == 19 && T_A == 20 && T_Y == 21 && T_SS == 22 &&
+               T_BB == 23 && T_CC == 24 && T_P == 25 && T_R == 26 &&
+               T_O == 27 && T_U == 28 && T_Z == 29 && T_J == 30 &&
+               T_K2 == 31 && T_K3 == 32 && T_K4 == 33 && T_CCB == 34 &&
+               T_L == 35 && T_KK == 36 && T_KA == 37 && T_T3 == 38 &&
+               T_T16 == 51 && T_TAG0 == 52 && T_TAG32 == 84 &&
+               INTTABLE && LOW_INT == -10 && HIGH_INT > 32,
+               "WAT reducer combinator tags must match eval.c");
+__attribute__((import_module("reducer"), import_name("reduce")))
+extern NODEPTR mhs_wat_reduce(NODEPTR n, stackptr_t base);
+#if defined(MHS_WAT_PROFILE)
+static uint64_t wat_calls, wat_steps;
+static uint64_t wat_exits[T_LAST_TAG + 1];
+
+void
+mhs_wat_profile_dump(void)
+{
+  printf("wat_calls: %" PRIu64 "\nwat_steps: %" PRIu64 "\n", wat_calls, wat_steps);
+  for (int t = 0; t <= T_LAST_TAG; t++)
+    if (wat_exits[t])
+      printf("wat_exit_%s: %" PRIu64 "\n", TAGNAME(t), wat_exits[t]);
+}
+#endif
+#endif
+
 NODEPTR
 evali(NODEPTR an)
 {
@@ -5064,6 +5095,9 @@ evali(NODEPTR an)
   enum node_tag tag;
   struct ioarray *arr;
   struct bytestring xbs, ybs, rbs;
+#if defined(MHS_WAT_PROFILE)
+  int wat_slice_before;
+#endif
 #if WANT_STDIO
   void *bfile;
   int hdr;
@@ -5123,6 +5157,19 @@ evali(NODEPTR an)
 #define CMPP(op)       do { OPPTR2(r = xp op yp); GOIND(r ? combTrue : combFalse); } while(0)
 
  top:
+#if defined(MHS_WAT_REDUCER)
+#if defined(MHS_WAT_PROFILE)
+  wat_slice_before = glob_slice;
+#endif
+  n = mhs_wat_reduce(n, stk);
+#if defined(MHS_WAT_PROFILE)
+  wat_calls++;
+  wat_steps += (uint64_t)(wat_slice_before - glob_slice);
+  tag_t wat_tag = GETTAG(n);
+  if (wat_tag <= T_LAST_TAG)
+    wat_exits[wat_tag]++;
+#endif
+#endif
   /*pp(stdout, an);*/
   if (--glob_slice <= 0)
     yield();
