@@ -47,6 +47,8 @@ the command writes it. The captured output also includes text without a final
 newline.
 
 The adapter corrects the UTF-8 argument size calculation in shim version 0.4.2.
+It checks the complete buffer list for `fd_read` and `fd_write` before transfer.
+An invalid interval returns `FAULT` without partial input or output.
 It also supplies Preview 1 `poll_oneoff` with multiple clock and file events,
 48-byte subscriptions, 32-byte events, and the returned event count. Relative
 and absolute realtime and monotonic timers are supported. Memory files and

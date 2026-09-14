@@ -504,14 +504,21 @@
   (i32.store offset=4 (local.get $h) (i32.or (i32.and (local.get $flags) (i32.const 3)) (i32.const 4)))
   (local.get $h))
 
+;; Preserve errno when a service has no Haskell error return. Errno values are
+;; not runtime exception codes. Failure 94 stops without entering Haskell catch.
+(func $io_fail (param $error i32) (result i32)
+  (drop (call $io_errno (local.get $error)))
+  (call $fail (i32.const 94))
+  (unreachable))
+
 (func $io_stream_result (param $h i32) (param $result i32) (result i32)
   (local $error i32)
   (local.set $error (call $bfile_error (local.get $h)))
-  (if (local.get $error) (then (return (call $raise_rts (local.get $error)))))
+  (if (local.get $error) (then (return (call $io_fail (local.get $error)))))
   (local.get $result))
 
 ;; Return a scalar result, without the IO pair. The evaluator supplies World.
-;; Zero means either an unknown service or a pending exception at 0x3004.
+;; Zero means an unknown service. Reads retain their error sentinel or count.
 ;; Keep character operations first: the compiler calls them for source text.
 (func $service_io (param $id i32) (param $args i32) (result i32)
   (local $a i32) (local $b i32) (local $c i32) (local $h i32) (local $p i32) (local $n i32)
@@ -521,7 +528,7 @@
   (if (i32.eq (local.get $id) (global.get $svc_getb))
     (then
       (local.set $h (call $pval (local.get $a)))
-      (return (call $io_stream_result (local.get $h) (call $int (call $bfile_get (local.get $h)))))))
+      (return (call $int (call $bfile_get (local.get $h))))))
   (if (i32.eq (local.get $id) (global.get $svc_putb))
     (then
       (local.set $h (call $pval (local.get $b)))
@@ -536,14 +543,13 @@
     (then
       (local.set $h (call $pval (local.get $c)))
       (local.set $n (call $ival (local.get $b)))
-      (if (i32.lt_s (local.get $n) (i32.const 0)) (then (return (call $raise_rts (i32.const 28)))))
-      (return (call $io_stream_result (local.get $h)
-        (call $int (call $bfile_read (call $pval (local.get $a)) (local.get $n) (local.get $h)))))))
+      (if (i32.lt_s (local.get $n) (i32.const 0)) (then (return (call $io_fail (i32.const 28)))))
+      (return (call $int (call $bfile_read (call $pval (local.get $a)) (local.get $n) (local.get $h))))))
   (if (i32.eq (local.get $id) (global.get $svc_writeb))
     (then
       (local.set $h (call $pval (local.get $c)))
       (local.set $n (call $ival (local.get $b)))
-      (if (i32.lt_s (local.get $n) (i32.const 0)) (then (return (call $raise_rts (i32.const 28)))))
+      (if (i32.lt_s (local.get $n) (i32.const 0)) (then (return (call $io_fail (i32.const 28)))))
       (return (call $io_stream_result (local.get $h)
         (call $int (call $bfile_write (call $pval (local.get $a)) (local.get $n) (local.get $h)))))))
   (if (i32.eq (local.get $id) (global.get $svc_fopen))
@@ -573,12 +579,12 @@
   (if (i32.eq (local.get $id) (global.get $svc_openb_rd_mem))
     (then
       (local.set $n (call $ival (local.get $b)))
-      (if (i32.lt_s (local.get $n) (i32.const 0)) (then (return (call $raise_rts (i32.const 28)))))
+      (if (i32.lt_s (local.get $n) (i32.const 0)) (then (return (call $io_fail (i32.const 28)))))
       (return (call $ptr (call $bfile_rd_mem (call $pval (local.get $a)) (local.get $n))))))
   (if (i32.eq (local.get $id) (global.get $svc_get_mem))
     (then
       (local.set $h (call $pval (local.get $a)))
-      (if (i32.ne (i32.load (local.get $h)) (i32.const 3)) (then (return (call $raise_rts (i32.const 28)))))
+      (if (i32.ne (i32.load (local.get $h)) (i32.const 3)) (then (return (call $io_fail (i32.const 28)))))
       (i32.store (call $pval (local.get $b)) (i32.load offset=12 (local.get $h)))
       (i32.store (call $pval (local.get $c)) (i32.load offset=20 (local.get $h)))
       (return (call $prim (global.get $T_I)))))
@@ -618,21 +624,21 @@
       (return (call $int (call $io_errno (i32.const 52))))))
   (if (i32.eq (local.get $id) (global.get $svc_tmpname))
     (then (drop (call $io_errno (i32.const 52))) (return (call $ptr (i32.const 0)))))
-  ;; Compressed caches require real codecs. A missing codec is an explicit
-  ;; exception; returning the original stream would corrupt the file format.
+  ;; Compressed caches require real codecs. A missing codec is a fatal error.
+  ;; Returning the original stream would corrupt the file format.
   (if (i32.or (i32.eq (local.get $id) (global.get $svc_add_lz77_compressor))
                (i32.eq (local.get $id) (global.get $svc_add_lz77_decompressor)))
-    (then (return (call $raise_rts (i32.const 52)))))
+    (then (return (call $io_fail (i32.const 52)))))
   (if (i32.or (i32.eq (local.get $id) (global.get $svc_add_lzma_compressor))
                (i32.eq (local.get $id) (global.get $svc_add_lzma_decompressor)))
-    (then (return (call $raise_rts (i32.const 52)))))
+    (then (return (call $io_fail (i32.const 52)))))
   (if (i32.or (i32.eq (local.get $id) (global.get $svc_add_rle_compressor))
                (i32.eq (local.get $id) (global.get $svc_add_rle_decompressor)))
-    (then (return (call $raise_rts (i32.const 52)))))
+    (then (return (call $io_fail (i32.const 52)))))
   (if (i32.or (i32.eq (local.get $id) (global.get $svc_add_bwt_compressor))
                (i32.eq (local.get $id) (global.get $svc_add_bwt_decompressor)))
-    (then (return (call $raise_rts (i32.const 52)))))
+    (then (return (call $io_fail (i32.const 52)))))
   (if (i32.or (i32.eq (local.get $id) (global.get $svc_add_base64_encoder))
                (i32.eq (local.get $id) (global.get $svc_add_base64_decoder)))
-    (then (return (call $raise_rts (i32.const 52)))))
+    (then (return (call $io_fail (i32.const 52)))))
   (i32.const 0))

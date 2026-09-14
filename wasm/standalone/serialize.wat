@@ -397,11 +397,15 @@
       (local.set $child (i32.load offset=4 (local.get $frame)))
       (if (i32.eq (local.get $child) (i32.const -1))
         (then
-          (local.set $node (call $resolve (local.get $node)))
+          ;; A divergent field can contain an IND cycle after evaluation.
+          ;; Detect that cycle without evaluating the field.
+          (local.set $node (call $heap_gc_target (local.get $node)))
           (if (i32.or
                 (i32.or (i32.lt_u (local.get $node) (i32.const 0x02000000))
                   (i32.ge_u (local.get $node) (i32.const 0x25c34600)))
                 (i32.ne (i32.rem_u (i32.sub (local.get $node) (i32.const 0x02000000)) (i32.const 8)) (i32.const 0)))
+            (then (global.set $ser_error (i32.const 1)) (br $done)))
+          (if (i32.eq (i32.and (i32.load (local.get $node)) (i32.const 3)) (i32.const 2))
             (then (global.set $ser_error (i32.const 1)) (br $done)))
           (i32.store (local.get $frame) (local.get $node))
           (local.set $kind (call $ser_kind (local.get $node)))

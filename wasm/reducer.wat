@@ -97,13 +97,16 @@
               (local.get $n))
             (local.set $n (local.get $ut))
             (br $descend)))
-        ;; Compress an indirection chain. The collector does not run here.
+        ;; Charge indirection traversal to the scheduling slice. A cycle must
+        ;; return control to the scheduler. Compress only a completed chain.
         (if (i32.eq (i32.and (local.get $ut) (i32.const 3)) (i32.const 2))
           (then
             (local.set $old (local.get $n))
             (loop $ind
               (local.set $n (i32.and (local.get $ut) (i32.const -4)))
               (local.set $ut (i32.load (local.get $n)))
+              (local.set $slice (i32.sub (local.get $slice) (i32.const 1)))
+              (br_if $exit (i32.le_s (local.get $slice) (i32.const 1)))
               (br_if $ind
                 (i32.eq (i32.and (local.get $ut) (i32.const 3)) (i32.const 2))))
             (i32.store (local.get $old) (i32.or (local.get $n) (i32.const 2)))))

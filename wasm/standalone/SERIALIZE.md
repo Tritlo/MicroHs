@@ -12,6 +12,8 @@ graph. Both walks use an explicit stack. Each array frame retains one child
 index, so a large array does not add all its elements to the stack at once.
 Labels use node indices in the arena. The printer marks a shared node before it
 visits that node's children. This permits cyclic graphs and forward references.
+The first walk detects pure indirection cycles and raises exception 8.
+Such cycles represent divergent fields. Cyclic applications remain supported.
 
 Two temporary bitmaps cover the node arena. The output and walk stack grow in
 managed payload allocations. The serializer releases all temporary allocations.

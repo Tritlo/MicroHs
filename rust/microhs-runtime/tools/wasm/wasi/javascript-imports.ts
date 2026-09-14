@@ -49,7 +49,9 @@ export function createJavascriptImports(manifest: JavascriptImportManifest): Web
         }
       });
       const result = body(...values);
-      if (result instanceof Promise) {
+      if (result !== null && (typeof result === "object" || typeof result === "function") &&
+          "then" in result && typeof result.then === "function") {
+        void Promise.resolve(result).catch(() => {});
         throw new TypeError(`JavaScript import must be synchronous: ${binding.name}`);
       }
       if (binding.result === "Unit") return undefined;

@@ -21,8 +21,9 @@ its exact evaluator state, including strict arguments and exception handlers.
 It does not repeat evaluation from its original root. A single runnable thread
 does not allocate snapshots when its slice expires.
 
-The scheduling slice has 100,000 steps. Reducer steps, runtime primitive
-entries, and RNF visits consume the slice. Charging RNF visits permits another
+The scheduling slice has 100,000 steps. Reducer steps, indirection links,
+runtime primitive entries, and RNF visits consume the slice. An indirection
+cycle returns control when the slice ends. Charging RNF visits permits another
 thread to run when a large graph contains only partial applications.
 Explicit yield also requests a switch. Atomic evaluation delays automatic and
 explicit yields until its result reaches WHNF. A blocking operation still

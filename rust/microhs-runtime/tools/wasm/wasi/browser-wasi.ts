@@ -99,6 +99,24 @@ export async function runWasi(
     view.setUint32(size, wasi.args.reduce((n, arg) => n + encoder.encode(arg).length + 1, 0), true);
     return 0;
   };
+  // Check every buffer before the shim changes a file or writes guest memory.
+  const checkedVectorIo = (operation: typeof wasi.wasiImport.fd_write): typeof operation =>
+    (fd, iovecs, count, result) => {
+      iovecs >>>= 0; count >>>= 0; result >>>= 0;
+      const memory = wasi.inst.exports.memory.buffer;
+      const fits = (address: number, size: number): boolean => address + size <= memory.byteLength;
+      if (!fits(result, 4) || !fits(iovecs, count * 8)) return wasiDefs.ERRNO_FAULT;
+      const view = new DataView(memory);
+      for (let index = 0; index < count; index++) {
+        const pointer = iovecs + index * 8;
+        if (!fits(view.getUint32(pointer, true), view.getUint32(pointer + 4, true))) {
+          return wasiDefs.ERRNO_FAULT;
+        }
+      }
+      return operation(fd, iovecs, count, result);
+    };
+  wasi.wasiImport.fd_read = checkedVectorIo(wasi.wasiImport.fd_read);
+  wasi.wasiImport.fd_write = checkedVectorIo(wasi.wasiImport.fd_write);
   // Preview 1 subscriptions occupy 48 bytes. Clock flags are at offset 40.
   // Events occupy 32 bytes, and the fourth argument receives the event count.
   // Reference: WebAssembly/WASI a2b96e81, legacy/preview1/docs.md, poll_oneoff.

@@ -17,6 +17,13 @@ The buffer already contains its final LF. `IO.pp` prints to stderr and preserves
 the argument's current graph without evaluation. Unsupported graph values raise
 the catchable Serialize exception, runtime code 8.
 
+Stream reads return the BFILE end-of-input sentinel or completed byte count.
+The Haskell library converts the character sentinel into an `IOError`.
+Stream failures without a Haskell error-return path use fatal diagnostic 94.
+This includes output failures, invalid stream arguments, and unavailable codecs.
+The WASI errno remains at `0x240`. Errno values are not runtime exception codes
+and must not enter Haskell exception handlers as integers.
+
 `IO.deserialize` calls `$bfile_read_record` to read exactly one record. The record
 reader accounts for names, numeric tokens, quoted escapes, and raw byte counts.
 A brace inside a byte string does not end the record. The original BFILE retains
