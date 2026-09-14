@@ -1,0 +1,21 @@
+;; WASI Preview 1 is the only host interface used by the standalone command.
+;; Each import uses the canonical wasm32 ABI from the Preview 1 specification.
+;; Keep this fragment before the module's function and memory definitions.
+(import "wasi_snapshot_preview1" "args_sizes_get" (func $wasi_args_sizes_get (param i32 i32) (result i32)))
+(import "wasi_snapshot_preview1" "args_get" (func $wasi_args_get (param i32 i32) (result i32)))
+(import "wasi_snapshot_preview1" "environ_sizes_get" (func $wasi_environ_sizes_get (param i32 i32) (result i32)))
+(import "wasi_snapshot_preview1" "environ_get" (func $wasi_environ_get (param i32 i32) (result i32)))
+(import "wasi_snapshot_preview1" "fd_prestat_get" (func $wasi_fd_prestat_get (param i32 i32) (result i32)))
+(import "wasi_snapshot_preview1" "fd_prestat_dir_name" (func $wasi_fd_prestat_dir_name (param i32 i32 i32) (result i32)))
+(import "wasi_snapshot_preview1" "fd_read" (func $wasi_fd_read (param i32 i32 i32 i32) (result i32)))
+(import "wasi_snapshot_preview1" "fd_write" (func $wasi_fd_write (param i32 i32 i32 i32) (result i32)))
+(import "wasi_snapshot_preview1" "fd_close" (func $wasi_fd_close (param i32) (result i32)))
+(import "wasi_snapshot_preview1" "fd_seek" (func $wasi_fd_seek (param i32 i64 i32 i32) (result i32)))
+(import "wasi_snapshot_preview1" "fd_readdir" (func $wasi_fd_readdir (param i32 i32 i32 i64 i32) (result i32)))
+(import "wasi_snapshot_preview1" "path_open" (func $wasi_path_open (param i32 i32 i32 i32 i32 i64 i64 i32 i32) (result i32)))
+(import "wasi_snapshot_preview1" "path_create_directory" (func $wasi_path_create_directory (param i32 i32 i32) (result i32)))
+(import "wasi_snapshot_preview1" "path_unlink_file" (func $wasi_path_unlink_file (param i32 i32 i32) (result i32)))
+(import "wasi_snapshot_preview1" "path_remove_directory" (func $wasi_path_remove_directory (param i32 i32 i32) (result i32)))
+(import "wasi_snapshot_preview1" "clock_time_get" (func $wasi_clock_time_get (param i32 i64 i32) (result i32)))
+(import "wasi_snapshot_preview1" "poll_oneoff" (func $wasi_poll_oneoff (param i32 i32 i32 i32) (result i32)))
+(import "wasi_snapshot_preview1" "proc_exit" (func $wasi_proc_exit (param i32)))

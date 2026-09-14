@@ -41,6 +41,10 @@ To compile on Windows make sure `cl` is in the path, and then use `nmake` with `
 
 The compiler can also be used with emscripten to produce JavaScript/WASM.
 
+The [handwritten WebAssembly runtime](wasm/README.md) runs in WASI and browsers
+without compiling C or Rust to WASM. It includes compiler self-hosting and
+scalar JS/WASM foreign imports.
+
 ### Using GMP for `Integer`
 The default implementation of the `Integer` type is written in Haskell and is quite slow.
 It is possible to use the [GMP](https://gmplib.org/) library instead.
